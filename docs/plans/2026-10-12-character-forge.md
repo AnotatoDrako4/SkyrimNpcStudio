@@ -41,7 +41,7 @@ Riesgos que no pueden obviarse: crear un NPC_ nuevo no equivale a ponerlo en el 
 ### Fase 0 — Auditoría y plan [EN CURSO]
 Archivos: este documento. Confirmar módulos actuales, arquitectura, rutas de extensión, riesgos, dependencias y pruebas. No prometer compilación sin ejecución real.
 
-### Fase 1 — Base independiente y proyecto .sncf [EN IMPLEMENTACIÓN]
+### Fase 1 — Base independiente y proyecto .sncf [CÓDIGO PROPUESTO; PRUEBAS WINDOWS PENDIENTES]
 Archivos esperados: engines/creation/, apps/desktop/viewmodels/character_forge_viewmodel.*, qml/characterforge/CharacterForge.qml; registrar CMake y tercera pestaña en Main.qml; tests/unit/engines/test_character_forge.cpp.
 Criterios: crear proyecto sin NPC seleccionado; modificar nombre/identidad con deshacer/rehacer independientes; guardar, cerrar/reabrir .sncf; rechazar versiones incompatibles y JSON corrupto; ni un byte alterado en un .snps existente. Los controles de Blender, 3D importado o Exportar NPC permanecen deshabilitados hasta tener implementación real.
 
@@ -75,3 +75,8 @@ MCP e IA de pago se integrarán al final, no condicionan las capacidades básica
 ## Evidencia y criterio de cierre
 
 Cada fase exige: archivos cambiados, pruebas realizadas con sus comandos y resultados, errores y limitaciones. **No confundir código revisado con compilación verificada, ni plugin releído con prueba dentro de Skyrim.** Los casos de integración real dependen de Windows con Qt, MSVC, .NET, MO2 y juego instalados.
+## Estado de esta rama de trabajo
+
+En la rama feature/character-forge-phase-0-1 se añadió el motor sin Qt, un ViewModel propio, el tercer workspace QML y pruebas Catch2 de .sncf, historial, entradas inválidas y protección frente a sobrescritura. El código **no ha sido compilado todavía en Windows** desde esta sesión. La Fase 1 solo puede cerrarse tras ejecutar build.ps1, CTest, xUnit y una prueba de interfaz con creación/guardado/apertura, incluyendo regresiones .snps y Outfit Studio.
+
+La rama se basa en main @ 9fb4d5b; commits posteriores de README y packaging no modifican los archivos de esta fase y deben preservarse al integrar.
