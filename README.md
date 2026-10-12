@@ -18,7 +18,7 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 
 ## Ejecutar Sin Compilar
 
-Abre `SkyrimNpcStudio.bat`. La copia preparada en `dist/SkyrimNpcStudio` contiene Qt y el worker .NET autocontenido. `SkyrimNpcStudio.bat --rebuild` recompila y actualiza esa copia.
+Abre `SkyrimNpcStudio.bat`. La copia preparada en `dist/SkyrimNpcStudio` contiene Qt y el worker .NET autocontenido. El lanzador actualiza esa copia si falta o si corresponde a un commit anterior; `SkyrimNpcStudio.bat --rebuild` fuerza la recompilación.
 
 En el selector de instancia puedes elegir **Carpeta de Skyrim** si el juego fue movido. La elección se guarda en las preferencias del estudio, nunca en `ModOrganizer.ini`.
 
