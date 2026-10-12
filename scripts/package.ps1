@@ -22,6 +22,10 @@ if ([string]::IsNullOrWhiteSpace($Destination)) {
 
 Push-Location $root
 try {
+    # Evitar bloqueos de DLLs por demonios en segundo plano de .NET
+    dotnet build-server shutdown | Out-Null
+    Stop-Process -Name VBCSCompiler -Force -ErrorAction SilentlyContinue
+
     Write-Host '[1/4] Compilando (Release)...'
     cmake --preset package | Out-Null
     if ($LASTEXITCODE) { throw "cmake configure failed ($LASTEXITCODE)" }
