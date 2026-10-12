@@ -299,3 +299,50 @@ AlphaStats measure_alpha(const DdsImage& image, std::uint8_t cutoff) {
 }
 
 }  // namespace sns::textures
+
+namespace sns::textures {
+
+std::string encode_dds(const DdsImage& rgba, TextureFormat format, bool generate_mips) {
+  if (rgba.format != TextureFormat::RGBA8 || !rgba.width || !rgba.height ||
+      rgba.data.size() != level_size(TextureFormat::RGBA8, rgba.width, rgba.height))
+    throw Error(ErrorKind::InvalidArgument, "encode_dds needs a complete RGBA8 image");
+  DXGI_FORMAT target = DXGI_FORMAT_UNKNOWN;
+  switch (format) {
+    case TextureFormat::RGBA8: target = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+    case TextureFormat::BC1: target = DXGI_FORMAT_BC1_UNORM; break;
+    case TextureFormat::BC3: target = DXGI_FORMAT_BC3_UNORM; break;
+    case TextureFormat::BC7: target = DXGI_FORMAT_BC7_UNORM; break;
+    default: throw Error(ErrorKind::InvalidArgument, "encode_dds: unsupported target format");
+  }
+  DirectX::ScratchImage source;
+  if (FAILED(source.Initialize2D(DXGI_FORMAT_R8G8B8A8_UNORM, rgba.width, rgba.height, 1, 1)))
+    throw Error(ErrorKind::Io, "encode_dds: cannot allocate the source image");
+  const auto* image = source.GetImage(0, 0, 0);
+  const auto row = static_cast<std::size_t>(rgba.width) * 4;
+  for (std::size_t y = 0; y < rgba.height; ++y)
+    std::memcpy(image->pixels + y * image->rowPitch, rgba.data.data() + y * row, row);
+
+  DirectX::ScratchImage mipped;
+  const DirectX::ScratchImage* chain = &source;
+  if (generate_mips && (rgba.width > 1 || rgba.height > 1)) {
+    // Non-WIC filters: WIC needs COM on the calling thread, which worker threads do not have.
+    if (FAILED(DirectX::GenerateMipMaps(*image, DirectX::TEX_FILTER_BOX | DirectX::TEX_FILTER_FORCE_NON_WIC, 0, mipped)) &&
+        FAILED(DirectX::GenerateMipMaps(*image, DirectX::TEX_FILTER_LINEAR | DirectX::TEX_FILTER_FORCE_NON_WIC, 0, mipped)))
+      throw Error(ErrorKind::Io, "encode_dds: mip generation failed");
+    chain = &mipped;
+  }
+  DirectX::ScratchImage compressed;
+  if (target != DXGI_FORMAT_R8G8B8A8_UNORM) {
+    if (FAILED(DirectX::Compress(chain->GetImages(), chain->GetImageCount(), chain->GetMetadata(), target,
+                                 DirectX::TEX_COMPRESS_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, compressed)))
+      throw Error(ErrorKind::Io, "encode_dds: block compression failed");
+    chain = &compressed;
+  }
+  DirectX::Blob blob;
+  if (FAILED(DirectX::SaveToDDSMemory(chain->GetImages(), chain->GetImageCount(), chain->GetMetadata(),
+                                      DirectX::DDS_FLAGS_NONE, blob)))
+    throw Error(ErrorKind::Io, "encode_dds: DDS serialization failed");
+  return std::string(reinterpret_cast<const char*>(blob.GetBufferPointer()), blob.GetBufferSize());
+}
+
+}  // namespace sns::textures

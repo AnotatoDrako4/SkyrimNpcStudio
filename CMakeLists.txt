@@ -26,6 +26,7 @@ include(CompilerOptions)
 include(Dependencies)
 
 add_subdirectory(engines)
+add_subdirectory(tools/sns-probe)
 
 if(SNS_BUILD_WORKER)
   include(Worker)

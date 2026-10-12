@@ -2,27 +2,46 @@
 
 #include <QColor>
 #include <QObject>
+#include <QThreadPool>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 
 #include "console_model.hpp"
+#include "edit_history.hpp"
 #include "mo2_snapshot.hpp"
 #include "worker_client.hpp"
 #include "sns/appearance/appearance_draft.hpp"
-#include "sns/face/face_morphs.hpp"
-#include "sns/face/head_parts.hpp"
-#include "sns/presets/jslot_parser.hpp"
-#include "sns/presets/preset_model.hpp"
-#include "sns/projects/command_stack.hpp"
+#include "sns/face/face_recipe.hpp"
+#include "sns/face/facegen.hpp"
+#include "sns/rendering/scene.hpp"
 
 namespace sns::app {
 
 class OutfitEditor;
+struct ResourceContext;
 
+// What the 3D view needs from the face draft: the regenerated FaceGen files (as an in-memory
+// overlay of their Data paths) and the record values that change the body (weight, height, colors).
+struct FacePreview {
+  std::shared_ptr<const rendering::AssetOverlay> overlay;  // null: show the profile's own FaceGen
+  float weight = 50.0f;
+  float height = 1.0f;
+  std::optional<face::Rgb8> hair_color;
+  face::Rgb8 skin_tone{255, 255, 255};
+  bool active = false;  // the draft has face/body edits
+};
+
+// Face editing for the selected NPC on top of the FaceGen regenerator (engines/face):
+//  - the face is the NPC_ record (NAM9/NAMA/PNAM/tints/colors/weight) read with face.getRecipe;
+//  - every edit is a command of the shared EditHistory on the shared AppearanceDraft;
+//  - each change rebuilds the FaceGen NIF/tint off the UI thread; the 3D view shows those exact bytes;
+//  - export writes the record values AND the very same regenerated files into the mod.
 class AppearanceEditor : public QObject {
   Q_OBJECT
   QML_ELEMENT
@@ -30,15 +49,29 @@ class AppearanceEditor : public QObject {
 
   Q_PROPERTY(QString npcFormKey READ npc_form_key NOTIFY targetChanged)
   Q_PROPERTY(QString npcLabel READ npc_label NOTIFY targetChanged)
+  Q_PROPERTY(bool loaded READ loaded NOTIFY recipeChanged)
+  Q_PROPERTY(bool loading READ loading NOTIFY recipeChanged)
+  Q_PROPERTY(QString loadError READ load_error NOTIFY recipeChanged)
   Q_PROPERTY(QString presetName READ preset_name NOTIFY appearanceChanged)
-  Q_PROPERTY(QString donorNpcFormKey READ donor_npc_form_key NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantMap morphs READ morphs NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantList standardSliders READ standard_sliders CONSTANT)
+  Q_PROPERTY(QVariantList presetSlots READ preset_slots CONSTANT)
+  Q_PROPERTY(QVariantList facePresets READ face_presets NOTIFY appearanceChanged)
   Q_PROPERTY(QColor hairColor READ hair_color NOTIFY appearanceChanged)
+  Q_PROPERTY(bool hasHairColor READ has_hair_color NOTIFY appearanceChanged)
   Q_PROPERTY(QColor skinTone READ skin_tone NOTIFY appearanceChanged)
   Q_PROPERTY(float weight READ weight NOTIFY appearanceChanged)
   Q_PROPERTY(float height READ height NOTIFY appearanceChanged)
-  Q_PROPERTY(QVariantMap morphs READ morphs NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList headParts READ head_parts NOTIFY appearanceChanged)
-  Q_PROPERTY(QVariantList standardSliders READ standard_sliders CONSTANT)
+  Q_PROPERTY(QVariantList tints READ tints NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantMap customMorphs READ custom_morphs NOTIFY appearanceChanged)
+  Q_PROPERTY(int sculptTargets READ sculpt_targets NOTIFY appearanceChanged)
+  Q_PROPERTY(QString geometryMode READ geometry_mode NOTIFY appearanceChanged)
+  Q_PROPERTY(QString geometryModeReason READ geometry_mode_reason NOTIFY faceGenChanged)
+  Q_PROPERTY(QVariantMap faceGen READ facegen_report NOTIFY faceGenChanged)
+  Q_PROPERTY(QVariantList issues READ issues NOTIFY faceGenChanged)
+  Q_PROPERTY(bool building READ building NOTIFY faceGenChanged)
+  Q_PROPERTY(bool exportable READ exportable NOTIFY faceGenChanged)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY appearanceChanged)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY appearanceChanged)
   Q_PROPERTY(QString undoText READ undo_text NOTIFY appearanceChanged)
@@ -47,76 +80,140 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(bool hasFaceEdits READ has_face_edits NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList presetsList READ presets_list NOTIFY presetsChanged)
   Q_PROPERTY(bool exporting READ exporting NOTIFY exportingChanged)
+  Q_PROPERTY(QVariantMap lastExport READ last_export NOTIFY exportingChanged)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
 
-  AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot, QObject* parent = nullptr);
+  AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot,
+                   appearance::AppearanceDraft& draft, EditHistory* history, QObject* parent = nullptr);
+  ~AppearanceEditor() override;
 
-  void set_target(const projects::NpcTarget& target, const std::optional<projects::FaceConfig>& initial_face = std::nullopt);
+  // Called by the studio after it reset the shared draft for a newly selected NPC.
+  void set_target(const projects::NpcTarget& target);
+  // A face saved in a project for `form_key`: applied once that NPC's record has been read.
+  void queue_saved_face(const std::string& form_key, const std::optional<projects::FaceConfig>& face);
+  // The face to save in the project (nullopt when the face equals the record).
+  [[nodiscard]] std::optional<projects::FaceConfig> face_config_for_project() const;
+  [[nodiscard]] FacePreview preview() const;
   void clear();
 
-  [[nodiscard]] const projects::NpcTarget& target() const { return target_; }
   [[nodiscard]] QString npc_form_key() const;
   [[nodiscard]] QString npc_label() const;
+  [[nodiscard]] bool loaded() const { return draft_.face_loaded(); }
+  [[nodiscard]] bool loading() const { return loading_; }
+  [[nodiscard]] QString load_error() const { return load_error_; }
   [[nodiscard]] QString preset_name() const;
-  [[nodiscard]] QString donor_npc_form_key() const;
+  [[nodiscard]] QVariantMap morphs() const;
+  [[nodiscard]] QVariantList standard_sliders() const;
+  [[nodiscard]] QVariantList preset_slots() const;
+  [[nodiscard]] QVariantList face_presets() const;
   [[nodiscard]] QColor hair_color() const;
+  [[nodiscard]] bool has_hair_color() const;
   [[nodiscard]] QColor skin_tone() const;
   [[nodiscard]] float weight() const;
   [[nodiscard]] float height() const;
-  [[nodiscard]] QVariantMap morphs() const;
   [[nodiscard]] QVariantList head_parts() const;
-  [[nodiscard]] QVariantList standard_sliders() const;
-  [[nodiscard]] bool can_undo() const { return stack_.can_undo(); }
-  [[nodiscard]] bool can_redo() const { return stack_.can_redo(); }
-  [[nodiscard]] QString undo_text() const;
-  [[nodiscard]] QString redo_text() const;
-  [[nodiscard]] bool dirty() const { return !stack_.is_clean(); }
+  [[nodiscard]] QVariantList tints() const;
+  [[nodiscard]] QVariantMap custom_morphs() const;
+  [[nodiscard]] int sculpt_targets() const;
+  [[nodiscard]] QString geometry_mode() const;
+  [[nodiscard]] QString geometry_mode_reason() const { return geometry_reason_; }
+  [[nodiscard]] QVariantMap facegen_report() const { return facegen_report_; }
+  [[nodiscard]] QVariantList issues() const;
+  [[nodiscard]] bool building() const { return building_; }
+  [[nodiscard]] bool exportable() const;
+  [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
+  [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
+  [[nodiscard]] QString undo_text() const { return history_->undo_text(); }
+  [[nodiscard]] QString redo_text() const { return history_->redo_text(); }
+  [[nodiscard]] bool dirty() const { return draft_.is_face_dirty() || draft_.is_height_dirty(); }
   [[nodiscard]] bool has_face_edits() const { return draft_.is_face_dirty(); }
   [[nodiscard]] QVariantList presets_list() const { return presets_list_; }
   [[nodiscard]] bool exporting() const { return exporting_; }
+  [[nodiscard]] QVariantMap last_export() const { return last_export_; }
+  [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
 
-  [[nodiscard]] const appearance::AppearanceDraft& draft() const { return draft_; }
-  [[nodiscard]] nlohmann::json build_donor_override_json() const;
-
-  Q_INVOKABLE void applyDonor(const QString& donorFormKey, const QString& donorName = "");
-  Q_INVOKABLE void applyJslotPreset(const QString& filePath);
-  Q_INVOKABLE void setSlider(const QString& name, float value);
+  Q_INVOKABLE void setSlider(const QString& key, float value);
+  Q_INVOKABLE void setFacePreset(int slot, int value);
   Q_INVOKABLE void setHairColor(const QColor& color);
   Q_INVOKABLE void setSkinTone(const QColor& color);
   Q_INVOKABLE void setWeight(float weight);
   Q_INVOKABLE void setHeight(float height);
-  Q_INVOKABLE void setHeadPart(const QString& formKey, const QString& type, const QString& editorId = "", const QString& meshPath = "");
+  Q_INVOKABLE void setHeadPart(const QString& formKey, const QString& type);
   Q_INVOKABLE void removeHeadPart(const QString& type);
+  Q_INVOKABLE void setTint(int index, const QColor& color, float value);
+  Q_INVOKABLE void setGeometryMode(const QString& mode);
   Q_INVOKABLE void resetFace();
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
-  Q_INVOKABLE void loadPresetsFromVfs();
+  Q_INVOKABLE void applyDonor(const QString& donorFormKey, const QString& donorName = QString());
+  Q_INVOKABLE void applyJslotPreset(const QString& filePath);
   Q_INVOKABLE QVariantMap evaluatePresetCompatibility(const QString& filePath);
+  Q_INVOKABLE void loadPresetsFromVfs();
   Q_INVOKABLE void exportFaceOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true);
   Q_INVOKABLE void exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true);
 
  signals:
   void targetChanged();
+  void recipeChanged();
   void appearanceChanged();
+  void faceGenChanged();
   void presetsChanged();
   void exportingChanged();
   void exportFinished(bool success, const QString& message, const QString& modDirectory, const QString& zipPath);
 
  private:
-  void execute(std::unique_ptr<projects::Command> cmd);
-  void notify_changed();
+  struct Build;
+  void edit(appearance::FaceState next, const QString& description, const QString& merge_key = {});
+  void request_recipe(bool initial);
+  void on_recipe(const Json& json, bool initial, int serial);
+  void analyse_existing_facegen();
+  void schedule_build();
+  void start_build();
+  void export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip);
+  void finish_export(bool ok, const QString& message, const QString& mod_dir, const QString& zip, const QVariantMap& extra = {});
+  std::shared_ptr<ResourceContext> context() const;
+  std::vector<face::MorphExtension> morph_extensions(const ResourceContext& context) const;
+  QVariantMap jslot_compatibility(const QString& file_path, std::optional<appearance::FaceState>* mapped);
 
   WorkerClient* worker_;
   ConsoleModel* console_;
   OutfitEditor* outfit_;
   SnapshotProvider snapshot_;
+  appearance::AppearanceDraft& draft_;
+  EditHistory* history_;
   projects::NpcTarget target_;
-  appearance::AppearanceDraft draft_;
-  projects::CommandStack stack_;
+
+  // The record as read (base) and the structure for the draft's current head parts.
+  std::optional<face::FaceRecipe> base_recipe_;
+  std::optional<face::FaceRecipe> recipe_;
+  bool loading_ = false;
+  QString load_error_;
+  int recipe_serial_ = 0;
+  std::map<std::string, projects::FaceConfig> saved_faces_;  // per NPC, from an opened project
+  QVariantList recipe_issues_;
+
+  // Existing FaceGen of the profile, and how edits are applied to it.
+  std::shared_ptr<const std::string> existing_facegen_;
+  QString geometry_reason_;
+  QVariantList existing_issues_;
+  bool has_existing_tint_ = false;
+
+  // Latest regenerated FaceGen (preview == export bytes).
+  QThreadPool pool_;
+  QTimer build_timer_;
+  int build_serial_ = 0;
+  bool building_ = false;
+  std::shared_ptr<Build> build_;
+  QVariantMap facegen_report_;
+  std::shared_ptr<const rendering::AssetOverlay> overlay_;
+
   QVariantList presets_list_;
   bool exporting_ = false;
+  QVariantMap last_export_;
+  mutable std::optional<std::vector<face::MorphExtension>> extensions_cache_;
+  mutable SnapshotPtr extensions_snapshot_;
 };
 
 }  // namespace sns::app

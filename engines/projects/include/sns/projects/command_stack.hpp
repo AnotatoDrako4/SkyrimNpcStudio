@@ -14,6 +14,13 @@ class Command {
   virtual void apply() = 0;
   virtual void revert() = 0;
   [[nodiscard]] virtual std::string description() const = 0;
+  // Called with a command that was just applied right after this one. Returning true means this
+  // command now also covers `next` (its revert restores the state before both) and `next` is
+  // dropped. Default: never merge.
+  virtual bool absorb(const Command& next) {
+    (void)next;
+    return false;
+  }
 };
 
 class CommandStack {

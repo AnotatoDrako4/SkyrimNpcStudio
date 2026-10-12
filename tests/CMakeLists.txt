@@ -12,7 +12,10 @@ add_executable(sns_engine_tests
   unit/engines/test_projects_outfit.cpp
   unit/engines/test_appearance_draft.cpp
   unit/engines/test_presets.cpp
-  unit/engines/test_face_engine.cpp)
+  unit/engines/test_face_engine.cpp
+  unit/engines/test_facegen.cpp
+  unit/engines/test_outfit_presets.cpp
+  unit/engines/test_compatibility_guardian.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp)
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
@@ -37,13 +40,14 @@ if(SNS_BUILD_WORKER)
 
   add_executable(sns_integration_tests
     integration/test_worker_roundtrip.cpp
-    integration/test_local_mo2.cpp)
+    integration/test_local_mo2.cpp
+    integration/test_local_facegen.cpp)
   target_include_directories(sns_integration_tests PRIVATE support)
   target_compile_definitions(sns_integration_tests PRIVATE
     SNS_WORKER_EXE="${SNS_WORKER_EXE}"
     SNS_FIXTURE_GEN_EXE="${SNS_FIXTURE_GEN_EXE}")
   target_link_libraries(sns_integration_tests PRIVATE
-    sns::core sns::ipc sns::mo2 sns::rendering sns::compile_options Catch2::Catch2WithMain)
+    sns::core sns::ipc sns::mo2 sns::rendering sns::face sns::compile_options Catch2::Catch2WithMain)
   add_dependencies(sns_integration_tests bethesda_worker fixture_gen)
   catch_discover_tests(sns_integration_tests TEST_PREFIX "integration:" DISCOVERY_MODE PRE_TEST
     PROPERTIES TIMEOUT 600)

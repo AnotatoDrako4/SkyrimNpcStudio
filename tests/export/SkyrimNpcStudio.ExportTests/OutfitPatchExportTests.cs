@@ -229,6 +229,56 @@ public sealed class OutfitPatchExportTests : IDisposable
         Assert.Equal(ErrorCodes.InvalidArgument, traversal.Code);
     }
 
+    [Fact]
+    public void Export_WithMaterialOverride_GeneratesTxstArmaAndArmo()
+    {
+        var request = new ExportOutfitPatchRequest
+        {
+            PluginName = "SkyrimNpcStudio_Lydia_Recolor.esp",
+            OutputDirectory = _out,
+            Assignments =
+            [
+                new OutfitAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    ArmorFormKeys = [SyntheticLoadOrder.SteelCuirass.ToString()],
+                    MaterialOverrides =
+                    [
+                        new PieceMaterialDto
+                        {
+                            ArmorFormKey = SyntheticLoadOrder.SteelCuirass.ToString(),
+                            DiffusePath = "textures\\armor\\steel\\cuirass_recolor_d.dds",
+                            NormalPath = "textures\\armor\\steel\\cuirass_n.dds",
+                            MaterialName = "EbonyTint",
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var response = Export(request);
+        using var mod = ReadBack(response.PluginPath);
+
+        // Verify TXST was generated
+        var txst = Assert.Single(mod.TextureSets);
+        Assert.Equal("textures\\armor\\steel\\cuirass_recolor_d.dds", txst.Diffuse);
+        Assert.Equal("textures\\armor\\steel\\cuirass_n.dds", txst.NormalOrGloss);
+
+        // Verify ARMA was generated and references TXST
+        var arma = Assert.Single(mod.ArmorAddons);
+        Assert.NotNull(arma.WorldModel?.Female?.AlternateTextures);
+        Assert.Contains(arma.WorldModel.Female.AlternateTextures, at => at.NewTexture.FormKey == txst.FormKey);
+
+        // Verify ARMO was generated and references the new ARMA
+        var armo = Assert.Single(mod.Armors);
+        Assert.Contains(armo.Armature, a => a.FormKey == arma.FormKey);
+
+        // Verify OTFT contains the cloned ARMO instead of the original SteelCuirass
+        var outfit = Assert.Single(mod.Outfits);
+        Assert.Contains(outfit.Items!, item => item.FormKey == armo.FormKey);
+        Assert.DoesNotContain(outfit.Items!, item => item.FormKey == SyntheticLoadOrder.SteelCuirass);
+    }
+
     public void Dispose()
     {
         _state.Dispose();

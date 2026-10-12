@@ -4,6 +4,12 @@ namespace sns::projects {
 
 void CommandStack::push(std::unique_ptr<Command> command) {
   command->apply();  // if apply throws, the stack is unchanged
+  // A continuous gesture (dragging one slider) becomes a single undo step: the previous command
+  // absorbs the new one when it is the last applied one and the saved state is not in between.
+  if (index_ > 0 && index_ == commands_.size() && clean_index_ != static_cast<std::ptrdiff_t>(index_) &&
+      commands_[index_ - 1]->absorb(*command)) {
+    return;
+  }
   commands_.erase(commands_.begin() + static_cast<std::ptrdiff_t>(index_), commands_.end());
   if (clean_index_ > static_cast<std::ptrdiff_t>(index_)) clean_index_ = -1;  // saved state is no longer reachable
   commands_.push_back(std::move(command));

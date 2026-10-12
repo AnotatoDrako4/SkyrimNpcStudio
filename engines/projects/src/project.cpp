@@ -35,14 +35,42 @@ void from_json(const Json& j, NpcTarget& v) {
   v.winning_plugin = j.value("winningPlugin", "");
   v.override_count = j.value("overrideCount", 0);
 }
+void to_json(Json& j, const ColorRgb& v) {
+  j = {{"r", v.r}, {"g", v.g}, {"b", v.b}};
+}
+void from_json(const Json& j, ColorRgb& v) {
+  v.r = j.value("r", static_cast<std::uint8_t>(255));
+  v.g = j.value("g", static_cast<std::uint8_t>(255));
+  v.b = j.value("b", static_cast<std::uint8_t>(255));
+}
+void to_json(Json& j, const PieceMaterialOverride& v) {
+  j = {{"name", v.name}, {"glossiness", v.glossiness}, {"specularStrength", v.specular_strength}};
+  if (v.tint_color) j["tintColor"] = *v.tint_color;
+  if (!v.diffuse_override.empty()) j["diffuseOverride"] = v.diffuse_override;
+  if (!v.normal_override.empty()) j["normalOverride"] = v.normal_override;
+}
+void from_json(const Json& j, PieceMaterialOverride& v) {
+  v.name = j.value("name", "");
+  v.glossiness = j.value("glossiness", 1.0f);
+  v.specular_strength = j.value("specularStrength", 1.0f);
+  if (j.contains("tintColor") && !j["tintColor"].is_null()) {
+    v.tint_color = j["tintColor"].get<ColorRgb>();
+  }
+  v.diffuse_override = j.value("diffuseOverride", "");
+  v.normal_override = j.value("normalOverride", "");
+}
 void to_json(Json& j, const OutfitPieceRef& v) {
   j = {{"formKey", v.form_key}, {"name", v.name}, {"plugin", v.plugin}, {"slotMask", v.slot_mask}};
+  if (v.material) j["material"] = *v.material;
 }
 void from_json(const Json& j, OutfitPieceRef& v) {
   v.form_key = j.at("formKey").get<std::string>();
   v.name = j.value("name", "");
   v.plugin = j.value("plugin", "");
   v.slot_mask = j.value("slotMask", 0u);
+  if (j.contains("material") && !j["material"].is_null()) {
+    v.material = j["material"].get<PieceMaterialOverride>();
+  }
 }
 void to_json(Json& j, const OutfitConfig& v) {
   j = {{"outfitEditorId", v.outfit_editor_id}, {"pieces", v.pieces}, {"alsoSleeping", v.also_sleeping}};
@@ -70,14 +98,6 @@ void from_json(const Json& j, HeadPartRef& v) {
   v.type = j.value("type", "");
   v.mesh_path = j.value("meshPath", "");
 }
-void to_json(Json& j, const ColorRgb& v) {
-  j = {{"r", v.r}, {"g", v.g}, {"b", v.b}};
-}
-void from_json(const Json& j, ColorRgb& v) {
-  v.r = j.value("r", static_cast<std::uint8_t>(255));
-  v.g = j.value("g", static_cast<std::uint8_t>(255));
-  v.b = j.value("b", static_cast<std::uint8_t>(255));
-}
 void to_json(Json& j, const TintLayerConfig& v) {
   j = {{"index", v.index}, {"color", v.color}, {"alpha", v.alpha}, {"preset", v.preset}};
 }
@@ -86,6 +106,14 @@ void from_json(const Json& j, TintLayerConfig& v) {
   if (j.contains("color")) v.color = j["color"].get<ColorRgb>();
   v.alpha = j.value("alpha", 1.0f);
   v.preset = j.value("preset", 0u);
+}
+void to_json(Json& j, const SculptConfig& v) {
+  j = {{"host", v.host}, {"vertexCount", v.vertex_count}, {"deltas", v.deltas}};
+}
+void from_json(const Json& j, SculptConfig& v) {
+  v.host = j.value("host", "");
+  v.vertex_count = j.value("vertexCount", 0u);
+  v.deltas = j.value("deltas", std::vector<std::array<float, 4>>{});
 }
 void to_json(Json& j, const FaceConfig& v) {
   j = {{"presetId", v.preset_id},
@@ -99,7 +127,13 @@ void to_json(Json& j, const FaceConfig& v) {
        {"morphSliders", v.morph_sliders},
        {"tintLayers", v.tint_layers},
        {"weight", v.weight},
-       {"height", v.height}};
+       {"height", v.height},
+       {"complete", v.complete},
+       {"facePresets", v.face_presets},
+       {"customMorphs", v.custom_morphs},
+       {"sculpt", v.sculpt},
+       {"geometryMode", v.geometry_mode},
+       {"headTexture", v.head_texture}};
   if (v.hair_color) j["hairColor"] = *v.hair_color;
   if (v.skin_tone) j["skinTone"] = *v.skin_tone;
 }
@@ -118,6 +152,13 @@ void from_json(const Json& j, FaceConfig& v) {
   v.height = j.value("height", 1.0f);
   if (j.contains("hairColor")) v.hair_color = j["hairColor"].get<ColorRgb>();
   if (j.contains("skinTone")) v.skin_tone = j["skinTone"].get<ColorRgb>();
+  // Format 2 files have none of these: they hold partial edits (complete = false).
+  v.complete = j.value("complete", false);
+  v.face_presets = j.value("facePresets", std::vector<std::int32_t>{});
+  v.custom_morphs = j.value("customMorphs", std::map<std::string, float>{});
+  v.sculpt = j.value("sculpt", std::vector<SculptConfig>{});
+  v.geometry_mode = j.value("geometryMode", "");
+  v.head_texture = j.value("headTexture", "");
 }
 void to_json(Json& j, const HistoryEntry& v) { j = {{"utc", v.utc}, {"action", v.action}}; }
 void from_json(const Json& j, HistoryEntry& v) {
@@ -217,6 +258,10 @@ void ProjectStore::save(const fs::path& dir, Project& project) {
   write_json(dir / kOutfitFile, {{"formatVersion", kProjectFormatVersion}, {"outfits", outfits}});
   if (has_faces) {
     write_json(dir / kFaceFile, {{"formatVersion", kProjectFormatVersion}, {"faces", faces}});
+  } else {
+    // No face edits any more: a face.json left from an earlier save would bring them back on load.
+    std::error_code removed;
+    fs::remove(dir / kFaceFile, removed);
   }
   write_json(dir / kDependenciesFile, {{"formatVersion", kProjectFormatVersion}, {"plugins", deps}});
   // project.json last: it is the file that marks a complete save.

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include "appearance_editor.hpp"
+#include "resource_context.hpp"
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/ipc/protocol.hpp"
 
@@ -137,10 +138,18 @@ SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, Appea
   debounce_.setSingleShot(true);
   debounce_.setInterval(200);
   connect(&debounce_, &QTimer::timeout, this, &SceneViewModel::reload);
-  connect(outfit_, &OutfitEditor::changed, this, [this] { cancel(); debounce_.start(); });
+  // Outfit edits need the worker (ARMA/ARMO resolution); face edits arrive as regenerated FaceGen.
+  connect(outfit_, &OutfitEditor::changed, this, [this] { schedule(200); });
   if (appearance_) {
-    connect(appearance_, &AppearanceEditor::appearanceChanged, this, [this] { cancel(); debounce_.start(); });
+    connect(appearance_, &AppearanceEditor::faceGenChanged, this, [this] {
+      if (!appearance_->building()) schedule(30);
+    });
   }
+}
+void SceneViewModel::schedule(int delay_ms) {
+  cancel();
+  debounce_.setInterval(delay_ms);
+  debounce_.start();
 }
 SceneViewModel::~SceneViewModel() { cancel(); pool_.waitForDone(); }
 void SceneViewModel::cancel() {
@@ -155,8 +164,12 @@ void SceneViewModel::cancel() {
 void SceneViewModel::clear() {
   cancel(); parts_.clear(); issues_.clear(); stats_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear();
   status_.clear();
+  last_appearance_ = nullptr;
+  last_request_key_.clear();
   emit changed(); emit visibilityChanged(); emit selectionChanged();
   if (resources_) { resources_->deleteLater(); resources_ = nullptr; }
+  if (pool_owner_) { pool_owner_->deleteLater(); pool_owner_ = nullptr; }
+  geometry_pool_.clear(); uv_pool_.clear(); texture_pool_.clear();
 }
 void SceneViewModel::setOriginal(bool value) {
   if (original_ == value) return;
@@ -177,45 +190,63 @@ void SceneViewModel::reload() {
     params["armorFormKeys"] = Json::array();
     for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
   }
-  if (!original_ && appearance_ && appearance_->has_face_edits()) {
-    auto donor_json = appearance_->build_donor_override_json();
-    if (!donor_json.is_null()) {
-      params["donorOverride"] = std::move(donor_json);
-    }
+  // "Original" shows the profile as it is: no face overlay, record weight/height/colors.
+  const FacePreview preview = (!original_ && appearance_) ? appearance_->preview() : FacePreview{};
+  auto build = [this, snapshot, serial, preview, cancel = cancel_](const Json& data) {
+    QPointer<SceneViewModel> self(this);
+    pool_.start([self, snapshot, data, serial, cancel, preview] {
+      rendering::CharacterScene scene;
+      QString error;
+      QElapsedTimer timer; timer.start();
+      try {
+        auto appearance = rendering::appearance_from_json(data);
+        if (preview.active) {
+          appearance.weight = preview.weight;
+          appearance.height = preview.height;
+          if (preview.hair_color) appearance.hair_color = rendering::Rgb{preview.hair_color->r / 255.0f, preview.hair_color->g / 255.0f, preview.hair_color->b / 255.0f};
+          appearance.skin_tone = rendering::Rgb{preview.skin_tone.r / 255.0f, preview.skin_tone.g / 255.0f, preview.skin_tone.b / 255.0f};
+        }
+        const auto cancelled = [cancel] { return cancel->load(); };
+        const auto context = ResourceContext::for_snapshot(snapshot);
+        rendering::SceneOptions options;
+        options.apply_skinning = true;
+        options.cancelled = cancelled;
+        options.cache = context->scene_cache;
+        options.overlay = preview.overlay;
+        scene = rendering::build_character_scene(appearance, *context->resolver, options);
+      } catch (const std::exception& e) { error = qs(e.what()); }
+      if (cancel->load()) return;
+      const auto elapsed = timer.elapsed();
+      QMetaObject::invokeMethod(self, [self, scene = std::move(scene), error, serial, elapsed, generated = preview.overlay != nullptr] {
+        if (!self || serial != self->serial_) return;
+        self->loading_ = false;
+        if (error.isEmpty()) {
+          self->install(scene);
+          self->stats_["elapsedMs"] = elapsed;
+          self->stats_["generatedFaceGen"] = generated;
+          self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5").arg(scene.stats.meshes_loaded).arg(scene.stats.shapes)
+                              .arg(scene.stats.textures_loaded).arg(elapsed).arg(generated ? tr(" · cabeza regenerada del borrador") : QString());
+        } else {
+          self->clear();
+          self->issues_ = {QVariantMap{{"severity", "error"}, {"code", "SceneFailed"}, {"message", error}}};
+          self->status_ = error;
+          emit self->changed();
+        }
+        emit self->loadingChanged(); emit self->ready();
+      }, Qt::QueuedConnection);
+    });
+  };
+  const auto key = qs(params.dump());
+  if (key == last_request_key_ && !last_appearance_.is_null()) {
+    build(last_appearance_);
+    return;
   }
   request_cancel_ = worker_->call(ipc::protocol::method::kGetAppearance, params, std::chrono::seconds(30), this,
-    [this, snapshot, serial, cancel = cancel_](const Json& data) {
+    [this, serial, key, build](const Json& data) {
       if (serial != serial_) return;
-      QPointer<SceneViewModel> self(this);
-      pool_.start([self, snapshot, data, serial, cancel] {
-        rendering::CharacterScene scene;
-        QString error;
-        QElapsedTimer timer; timer.start();
-        try {
-          const auto appearance = rendering::appearance_from_json(data);
-          const auto cancelled = [cancel] { return cancel->load(); };
-          assets::AssetResolver resolver(snapshot->vfs, assets::archive_load_order(snapshot->profile, snapshot->load_order, snapshot->vfs), cancelled);
-          rendering::SceneOptions options; options.apply_skinning = true; options.cancelled = cancelled;
-          scene = rendering::build_character_scene(appearance, resolver, options);
-        } catch (const std::exception& e) { error = qs(e.what()); }
-        if (cancel->load()) return;
-        const auto elapsed = timer.elapsed();
-        QMetaObject::invokeMethod(self, [self, scene = std::move(scene), error, serial, elapsed] {
-          if (!self || serial != self->serial_) return;
-          self->loading_ = false;
-          if (error.isEmpty()) {
-            self->install(scene);
-            self->stats_["elapsedMs"] = elapsed;
-            self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)").arg(scene.stats.meshes_loaded).arg(scene.stats.shapes).arg(scene.stats.textures_loaded).arg(elapsed);
-          } else {
-            self->clear();
-            self->issues_ = {QVariantMap{{"severity", "error"}, {"code", "SceneFailed"}, {"message", error}}};
-            self->status_ = error;
-            emit self->changed();
-          }
-          emit self->loadingChanged(); emit self->ready();
-        }, Qt::QueuedConnection);
-      });
+      last_request_key_ = key;
+      last_appearance_ = data;
+      build(data);
     }, [this, serial](int, const QString& error, const Json&) {
       if (serial != serial_) return;
       clear(); status_ = error;
@@ -227,15 +258,38 @@ void SceneViewModel::reload() {
 void SceneViewModel::install(const rendering::CharacterScene& scene) {
   auto* old = resources_;
   resources_ = new QObject(this);
+  if (!pool_owner_) pool_owner_ = new QObject(this);
   parts_.clear(); issues_.clear(); selected_.clear(); visibility_.clear();
-  QHash<QString, QQuick3DTextureData*> textures;
-  for (const auto& [path, image] : scene.textures) textures[qs(path)] = texture(*image, resources_);
+  // Reuse GPU objects whose content did not change (a face edit leaves the body and outfit alone).
+  QHash<QString, QQuick3DTextureData*> textures, texture_pool;
+  for (const auto& [path, image] : scene.textures) {
+    const auto key = qs(path) + QStringLiteral("|%1x%2|").arg(image->width).arg(image->height) +
+                     QString::number(qHashBits(image->data.data(), image->data.size()), 16);
+    auto* t = texture_pool.value(key);
+    if (!t) t = texture_pool_.take(key);
+    if (!t) t = texture(*image, pool_owner_);
+    texture_pool.insert(key, t);
+    textures[qs(path)] = t;
+  }
+  QHash<QString, QQuick3DGeometry*> geometry_pool, uv_pool;
+  auto take = [&](const rendering::RenderPart& part, bool uv) {
+    const auto key = qs(part.mesh_path + "|" + part.shape_name + "|") +
+                     QString::number(qHashBits(part.vertices.data(), part.vertices.size() * sizeof(float)), 16) + "|" +
+                     QString::number(qHashBits(part.indices.data(), part.indices.size() * sizeof(std::uint32_t)), 16);
+    auto& fresh = uv ? uv_pool : geometry_pool;
+    auto& previous = uv ? uv_pool_ : geometry_pool_;
+    if (auto* g = fresh.value(key)) return g;
+    auto* g = previous.take(key);
+    if (!g) g = geometry(part, pool_owner_, uv);
+    fresh.insert(key, g);
+    return g;
+  };
   for (const auto& part : scene.parts) {
     QVariantMap row{{"id", qs(part.id)}, {"label", qs(part.label + " / " + part.shape_name)}, {"shape", qs(part.shape_name)},
       {"group", qs(part.group)}, {"path", qs(part.mesh_path)}, {"armorFormKey", qs(part.armor_form_key)},
       {"shownByDefault", part.shown_by_default}, {"hiddenReason", qs(part.hidden_reason)},
-      {"geometry", QVariant::fromValue(geometry(part, resources_, false))},
-      {"uvGeometry", QVariant::fromValue(geometry(part, resources_, true))},
+      {"geometry", QVariant::fromValue(take(part, false))},
+      {"uvGeometry", QVariant::fromValue(take(part, true))},
       {"diffuse", QVariant::fromValue(textures.value(qs(part.diffuse)))},
       {"normal", QVariant::fromValue(textures.value(qs(part.normal)))},
       {"alphaMode", qs(std::string(rendering::to_string(part.alpha_mode)))}, {"alphaCutoff", part.alpha_cutoff},
@@ -262,6 +316,13 @@ void SceneViewModel::install(const rendering::CharacterScene& scene) {
     {"hiddenShapes", scene.stats.hidden_shapes}, {"texturesReduced", scene.stats.textures_reduced}, {"piecesUnequipped", scene.stats.pieces_unequipped}};
   emit changed(); emit visibilityChanged(); emit selectionChanged();
   if (old) old->deleteLater();
+  // Objects no part uses any more go away once QML has switched to the new ones.
+  for (auto* g : std::as_const(geometry_pool_)) g->deleteLater();
+  for (auto* g : std::as_const(uv_pool_)) g->deleteLater();
+  for (auto* t : std::as_const(texture_pool_)) t->deleteLater();
+  geometry_pool_ = std::move(geometry_pool);
+  uv_pool_ = std::move(uv_pool);
+  texture_pool_ = std::move(texture_pool);
 }
 void SceneViewModel::select(const QString& id) { selected_ = id; emit selectionChanged(); }
 void SceneViewModel::setVisible(const QString& id, bool visible) {

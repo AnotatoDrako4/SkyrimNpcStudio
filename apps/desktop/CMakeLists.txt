@@ -9,6 +9,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/console_model.cpp viewmodels/console_model.hpp
   viewmodels/variant_list_model.cpp viewmodels/variant_list_model.hpp
   viewmodels/worker_client.cpp viewmodels/worker_client.hpp
+  viewmodels/edit_history.cpp viewmodels/edit_history.hpp
+  viewmodels/resource_context.cpp viewmodels/resource_context.hpp
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp

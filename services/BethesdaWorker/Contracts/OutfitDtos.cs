@@ -27,6 +27,16 @@ public sealed record OutfitValidateResponse
     public required IReadOnlyList<Issue> Issues { get; init; }
 }
 
+public sealed record PieceMaterialDto
+{
+    public required string ArmorFormKey { get; init; }
+    public AppearanceColor? CustomTintColor { get; init; }
+    public string? DiffusePath { get; init; }
+    public string? NormalPath { get; init; }
+    public string? SpecularPath { get; init; }
+    public string? MaterialName { get; init; }
+}
+
 public sealed record OutfitAssignment
 {
     public required string NpcFormKey { get; init; }
@@ -36,6 +46,9 @@ public sealed record OutfitAssignment
     public string? OutfitEditorId { get; init; }
 
     public bool AlsoSetSleepingOutfit { get; init; }
+
+    /// <summary>Material/recolor overrides for specific armor pieces.</summary>
+    public IReadOnlyList<PieceMaterialDto>? MaterialOverrides { get; init; }
 }
 
 public sealed record ExportOutfitPatchRequest
@@ -80,20 +93,66 @@ public sealed record ExportResponse
     public required IReadOnlyList<Issue> Issues { get; init; }
 }
 
+/// <summary>The complete face of an NPC as the export writes it (NAM9, NAMA, NAM7, QNAM, HCLF, tints).</summary>
+public sealed record FaceValuesDto
+{
+    /// <summary>The 18 NAM9 sliders in record order.</summary>
+    public required IReadOnlyList<float> Sliders { get; init; }
+
+    /// <summary>NAMA: nose, unused, eyes, mouth (-1 = none).</summary>
+    public required IReadOnlyList<int> Presets { get; init; }
+
+    public required float Weight { get; init; }
+    public required AppearanceColor SkinTone { get; init; }
+
+    /// <summary>Null: no hair color record (HCLF cleared).</summary>
+    public AppearanceColor? HairColor { get; init; }
+
+    public required IReadOnlyList<FaceRecipeTint> Tints { get; init; }
+}
+
+/// <summary>A file the studio generated (never a copy of another mod's file), staged for the mod.</summary>
+public sealed record GeneratedAsset
+{
+    /// <summary>Absolute path of the generated file in the studio's temporary staging folder.</summary>
+    public required string SourcePath { get; init; }
+
+    /// <summary>Data-relative destination; only the NPC's own FaceGen paths are accepted.</summary>
+    public required string DataPath { get; init; }
+
+    public required string Sha256 { get; init; }
+
+    /// <summary>"facegen-geometry" or "facegen-tint".</summary>
+    public required string Kind { get; init; }
+}
+
+/// <summary>How the FaceGen was produced, for the manifest and README.</summary>
+public sealed record FaceGenProvenance
+{
+    /// <summary>"regenerate" (head parts + morphs, as the Creation Kit) or "preserve" (existing FaceGen + edit delta).</summary>
+    public string Mode { get; init; } = "regenerate";
+    public IReadOnlyList<string> Parts { get; init; } = [];
+
+    /// <summary>Non-Bethesda sources whose geometry the FaceGen contains (personal use unless permitted).</summary>
+    public IReadOnlyList<string> DerivedFrom { get; init; } = [];
+    public int CustomMorphs { get; init; }
+    public int SculptTargets { get; init; }
+}
+
 public sealed record FaceAssignment
 {
     public required string NpcFormKey { get; init; }
-    public string? DonorNpcFormKey { get; init; }
-    public string? DonorFaceGeometryPath { get; init; }
-    public string? DonorFaceTintPath { get; init; }
-    public IReadOnlyList<string>? HeadPartFormKeys { get; init; }
-    public AppearanceColor? HairColor { get; init; }
-    public AppearanceColor? SkinTone { get; init; }
-    public FaceMorphsDto? FaceMorphs { get; init; }
-    public FacePartsDto? FaceParts { get; init; }
-    public IReadOnlyList<TintLayerDto>? TintLayers { get; init; }
-    public float? Weight { get; init; }
+    public FaceValuesDto? Values { get; init; }
+
+    /// <summary>The complete PNAM list (head part FormKeys).</summary>
+    public IReadOnlyList<string>? HeadParts { get; init; }
+
+    /// <summary>FTST face texture set FormKey; "" clears it (race default); null keeps the winner's.</summary>
+    public string? HeadTexture { get; init; }
+
     public float? Height { get; init; }
+    public IReadOnlyList<GeneratedAsset>? GeneratedAssets { get; init; }
+    public FaceGenProvenance? FaceGen { get; init; }
 }
 
 public sealed record ExportFaceOverhaulRequest

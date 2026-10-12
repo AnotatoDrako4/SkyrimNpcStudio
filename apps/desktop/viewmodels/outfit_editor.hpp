@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QObject>
 #include <QTimer>
 #include <QVariantMap>
@@ -7,16 +8,21 @@
 #include <functional>
 
 #include "console_model.hpp"
+#include "edit_history.hpp"
 #include "mo2_snapshot.hpp"
+#include "sns/appearance/appearance_draft.hpp"
+#include "sns/appearance/compatibility_guardian.hpp"
 #include "sns/outfit/outfit_draft.hpp"
+#include "sns/outfit/outfit_presets.hpp"
 #include "sns/projects/command_stack.hpp"
 #include "sns/projects/project.hpp"
 #include "worker_client.hpp"
 
 namespace sns::app {
 
-// Outfit editing for the selected NPC. Every change is an undoable command on the engine's
-// OutfitDraft; the worker re-validates the draft automatically, and export goes through the worker.
+// Outfit editing for the selected NPC. The outfit lives in the studio's shared AppearanceDraft and
+// every change is a command of the shared EditHistory (one undo/redo for face, body and outfit);
+// the worker re-validates the draft automatically, and export goes through the worker.
 class OutfitEditor : public QObject {
   Q_OBJECT
   QML_ELEMENT
@@ -40,13 +46,16 @@ class OutfitEditor : public QObject {
   Q_PROPERTY(QString defaultExportDirectory READ default_export_directory CONSTANT)
   Q_PROPERTY(QVariantList projectNpcs READ project_npcs NOTIFY projectChanged)
   Q_PROPERTY(int projectNpcCount READ project_npc_count NOTIFY projectChanged)
+  Q_PROPERTY(QVariantList outfitPresets READ outfit_presets CONSTANT)
+  Q_PROPERTY(QVariantMap compatibilityReport READ compatibility_report NOTIFY changed)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
   using FaceProvider = std::function<std::optional<projects::FaceConfig>(const std::string& form_key)>;
   using FaceLoadedHandler = std::function<void(const std::string& form_key, const std::optional<projects::FaceConfig>& face)>;
 
-  OutfitEditor(WorkerClient* worker, ConsoleModel* console, SnapshotProvider snapshot, QObject* parent = nullptr);
+  OutfitEditor(WorkerClient* worker, ConsoleModel* console, SnapshotProvider snapshot, appearance::AppearanceDraft& draft,
+               EditHistory* history, QObject* parent = nullptr);
 
   void set_face_provider(FaceProvider provider) { face_provider_ = std::move(provider); }
   void set_face_loaded_handler(FaceLoadedHandler handler) { face_loaded_handler_ = std::move(handler); }
@@ -56,11 +65,14 @@ class OutfitEditor : public QObject {
   [[nodiscard]] QString suggested_plugin_name() const;
   [[nodiscard]] QVariantList pieces() const;
   [[nodiscard]] QVariantList local_conflicts() const;
-  [[nodiscard]] bool can_undo() const { return stack_.can_undo(); }
-  [[nodiscard]] bool can_redo() const { return stack_.can_redo(); }
-  [[nodiscard]] QString undo_text() const { return qs(stack_.undo_text()); }
-  [[nodiscard]] QString redo_text() const { return qs(stack_.redo_text()); }
-  [[nodiscard]] bool dirty() const { return !stack_.is_clean(); }
+  [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
+  [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
+  [[nodiscard]] QString undo_text() const { return history_->undo_text(); }
+  [[nodiscard]] QString redo_text() const { return history_->redo_text(); }
+  [[nodiscard]] bool dirty() const { return history_->dirty(); }
+  [[nodiscard]] const std::vector<outfit::Piece>& current_pieces() const { return draft_.outfit().pieces(); }
+  [[nodiscard]] const projects::NpcTarget& target() const { return target_; }
+  [[nodiscard]] const std::optional<projects::Project>& project() const { return project_; }
   [[nodiscard]] QStringList history() const;
   [[nodiscard]] QVariantMap validation() const { return validation_; }
   [[nodiscard]] bool validating() const { return validating_; }
@@ -87,6 +99,13 @@ class OutfitEditor : public QObject {
   Q_INVOKABLE void addCurrentToProject();
   Q_INVOKABLE void removeNpcFromProject(const QString& form_key);
   Q_INVOKABLE void loadNpcFromProject(const QString& form_key);
+  [[nodiscard]] QVariantList outfit_presets() const;
+  [[nodiscard]] QVariantMap compatibility_report() const;
+
+  Q_INVOKABLE void applyPreset(const QString& preset_id);
+  Q_INVOKABLE void setPieceMaterial(const QString& form_key, const QColor& tint_color, const QString& diffuse_path,
+                                    const QString& normal_path, const QString& material_name);
+  Q_INVOKABLE void clearPieceMaterial(const QString& form_key);
   Q_INVOKABLE bool saveProject(const QString& folder_or_url, const QString& name);
   Q_INVOKABLE bool openProject(const QString& folder_or_url);
 
@@ -111,8 +130,9 @@ class OutfitEditor : public QObject {
   SnapshotProvider snapshot_;
   projects::NpcTarget target_;
   std::vector<outfit::Piece> current_;  // the NPC's outfit in the active load order
-  outfit::OutfitDraft draft_;
-  projects::CommandStack stack_;
+  appearance::AppearanceDraft& draft_;
+  EditHistory* history_;
+  std::vector<outfit::Piece> last_pieces_;  // to re-validate only when the outfit itself changed
   QVariantMap validation_;
   bool validating_ = false;
   bool exporting_ = false;

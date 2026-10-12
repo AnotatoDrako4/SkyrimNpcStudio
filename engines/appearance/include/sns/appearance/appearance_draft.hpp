@@ -1,137 +1,97 @@
 #pragma once
 
-#include <cstdint>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "sns/face/face_recipe.hpp"
 #include "sns/outfit/outfit_draft.hpp"
 #include "sns/projects/command_stack.hpp"
 #include "sns/projects/project.hpp"
 
 namespace sns::appearance {
 
-struct FaceDraft {
-  projects::FaceConfig config;
-  bool active = false;
+// The face of the NPC being edited, in the terms the export writes: NPC_ record values (NAM9,
+// NAMA, weight, QNAM, hair color, tints), the PNAM head part list, and the RaceMenu-only data
+// (custom morphs, sculpt) that is baked into the regenerated FaceGen.
+struct FaceState {
+  face::FaceValues values;
+  std::vector<std::string> head_parts;  // PNAM, FormKeys ("051193:Skyrim.esm")
+  std::string head_texture;             // FTST face texture set FormKey ("" = race default)
+  std::string source;                   // provenance for the UI: "", "RaceMenu: Carrot.jslot", "Donante: ..."
+  std::string geometry_mode = "regenerate";  // "regenerate" or "preserve"
 
-  [[nodiscard]] float slider_value(const std::string& name, float default_val = 0.0f) const {
-    const auto it = config.morph_sliders.find(name);
-    return it != config.morph_sliders.end() ? it->second : default_val;
-  }
-
-  void set_slider(std::string name, float val) {
-    config.morph_sliders[std::move(name)] = val;
-    active = true;
-  }
-
-  void set_head_part(projects::HeadPartRef part) {
-    for (auto& p : config.head_parts) {
-      if (p.type == part.type) {
-        p = std::move(part);
-        active = true;
-        return;
-      }
-    }
-    config.head_parts.push_back(std::move(part));
-    active = true;
-  }
-
-  void remove_head_part(const std::string& type) {
-    std::erase_if(config.head_parts, [&](const auto& p) { return p.type == type; });
-  }
-
-  void clear() {
-    config = {};
-    active = false;
-  }
+  bool operator==(const FaceState&) const = default;
 };
 
+// One draft for everything the studio edits on an NPC: face, body height and outfit. Face and outfit
+// changes go through the same command stack (shared undo/redo), so the project, the comparison
+// and the export always see one consistent state.
 class AppearanceDraft {
  public:
-  AppearanceDraft() = default;
-
   [[nodiscard]] const projects::NpcTarget& target() const noexcept { return target_; }
-  void set_target(projects::NpcTarget target) { target_ = std::move(target); }
+  void set_target(projects::NpcTarget target);
 
   [[nodiscard]] const outfit::OutfitDraft& outfit() const noexcept { return outfit_; }
   [[nodiscard]] outfit::OutfitDraft& outfit() noexcept { return outfit_; }
-
-  [[nodiscard]] const FaceDraft& face() const noexcept { return face_; }
-  [[nodiscard]] FaceDraft& face() noexcept { return face_; }
-
-  [[nodiscard]] const projects::FaceConfig& initial_face() const noexcept { return initial_face_; }
-  void set_initial_face(projects::FaceConfig face) {
-    initial_face_ = face;
-    face_.config = std::move(face);
-    face_.active = false;
-  }
-
   [[nodiscard]] const std::vector<outfit::Piece>& initial_outfit() const noexcept { return initial_outfit_; }
-  void set_initial_outfit(std::vector<outfit::Piece> pieces) {
-    initial_outfit_ = pieces;
-    outfit_.assign(std::move(pieces));
+  void set_initial_outfit(std::vector<outfit::Piece> pieces);
+
+  // The face as the active load order defines it (from face.getRecipe). Until it is set the face
+  // cannot be edited or exported.
+  void set_face_baseline(FaceState baseline);
+  [[nodiscard]] bool face_loaded() const noexcept { return face_loaded_; }
+  [[nodiscard]] const FaceState& face() const noexcept { return face_; }
+  [[nodiscard]] const FaceState& face_baseline() const noexcept { return face_baseline_; }
+  void set_face(FaceState state) { face_ = std::move(state); }  // used by commands
+  // The geometry mode is decided after loading (by comparing the existing FaceGen with a
+  // regeneration). It updates the baseline, and the current face too unless the user changed it.
+  void set_baseline_geometry_mode(const std::string& mode) {
+    if (face_.geometry_mode == face_baseline_.geometry_mode) face_.geometry_mode = mode;
+    face_baseline_.geometry_mode = mode;
   }
 
-  [[nodiscard]] bool is_face_dirty() const noexcept { return face_.active; }
+  [[nodiscard]] float height() const noexcept { return height_; }
+  [[nodiscard]] float height_baseline() const noexcept { return height_baseline_; }
+  void set_height_baseline(float height);
+  void set_height(float height) { height_ = height; }
+
+  [[nodiscard]] bool is_face_dirty() const noexcept { return face_loaded_ && face_ != face_baseline_; }
+  [[nodiscard]] bool is_height_dirty() const noexcept { return height_ != height_baseline_; }
   [[nodiscard]] bool is_outfit_dirty() const noexcept { return outfit_.pieces() != initial_outfit_; }
-  [[nodiscard]] bool is_dirty() const noexcept { return is_face_dirty() || is_outfit_dirty(); }
+  [[nodiscard]] bool is_dirty() const noexcept { return is_face_dirty() || is_height_dirty() || is_outfit_dirty(); }
 
-  [[nodiscard]] projects::NpcEdit to_npc_edit() const {
-    projects::NpcEdit edit;
-    edit.target = target_;
-    if (!outfit_.pieces().empty()) {
-      edit.outfit = projects::OutfitConfig{
-          .outfit_editor_id = "SNS_" + (target_.editor_id.empty() ? "Npc" : target_.editor_id) + "Outfit",
-          .pieces = outfit_.pieces(),
-          .also_sleeping = false,
-      };
-    }
-    if (face_.active) {
-      edit.face = face_.config;
-    }
-    return edit;
-  }
-
-  void load_npc_edit(const projects::NpcEdit& edit) {
-    target_ = edit.target;
-    if (edit.outfit) {
-      outfit_.assign(edit.outfit->pieces);
-    } else {
-      outfit_.assign({});
-    }
-    if (edit.face) {
-      face_.config = *edit.face;
-      face_.active = true;
-    } else {
-      face_.clear();
-    }
-  }
-
-  void reset_to_initial() {
-    outfit_.assign(initial_outfit_);
-    face_.config = initial_face_;
-    face_.active = false;
-  }
+  // Project mapping. The face is stored complete (format 3) only when it differs from the record.
+  [[nodiscard]] projects::NpcEdit to_npc_edit() const;
+  void reset();
 
  private:
   projects::NpcTarget target_;
   outfit::OutfitDraft outfit_;
-  FaceDraft face_;
-  projects::FaceConfig initial_face_;
   std::vector<outfit::Piece> initial_outfit_;
+  FaceState face_;
+  FaceState face_baseline_;
+  bool face_loaded_ = false;
+  float height_ = 1.0f;
+  float height_baseline_ = 1.0f;
 };
 
-// Command factories for undo/redo
-std::unique_ptr<projects::Command> make_apply_donor_face(AppearanceDraft& draft, projects::FaceConfig donor, std::string description);
-std::unique_ptr<projects::Command> make_set_face_slider(AppearanceDraft& draft, std::string slider_name, float value);
-std::unique_ptr<projects::Command> make_set_hair_color(AppearanceDraft& draft, std::optional<projects::ColorRgb> color);
-std::unique_ptr<projects::Command> make_set_skin_tone(AppearanceDraft& draft, std::optional<projects::ColorRgb> color);
-std::unique_ptr<projects::Command> make_set_head_part(AppearanceDraft& draft, projects::HeadPartRef part);
-std::unique_ptr<projects::Command> make_remove_head_part(AppearanceDraft& draft, std::string type);
-std::unique_ptr<projects::Command> make_set_body_dimensions(AppearanceDraft& draft, float weight, float height);
-std::unique_ptr<projects::Command> make_reset_face(AppearanceDraft& draft);
+// FaceConfig (project file) <-> FaceState. A complete (format 3) config replaces the baseline; a
+// format 2 config is applied on top of it: listed sliders, head parts replaced by type (needs the
+// baseline recipe to know the types), colors and tints. Format 2 weight is ignored unless the
+// config came from a donor, because format 2 always wrote the default 100 (see docs/PROJECT_FORMAT.md).
+projects::FaceConfig to_face_config(const FaceState& state, const face::FaceRecipe& recipe);
+FaceState from_face_config(const projects::FaceConfig& config, const FaceState& baseline, const face::FaceRecipe& recipe,
+                           std::vector<std::string>* notes = nullptr);
+
+// Face values and PNAM as the worker's recipe describes the record.
+FaceState face_state_from_recipe(const face::FaceRecipe& recipe);
+
+// Undoable edits. `merge_key` lets a continuous gesture (dragging one slider) become one step:
+// consecutive commands with the same non-empty key are merged by the command stack.
+std::unique_ptr<projects::Command> make_set_face(AppearanceDraft& draft, FaceState next, std::string description,
+                                                 std::string merge_key = {});
+std::unique_ptr<projects::Command> make_set_height(AppearanceDraft& draft, float height);
 
 }  // namespace sns::appearance

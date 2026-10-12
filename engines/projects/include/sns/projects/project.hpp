@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -9,7 +10,7 @@
 
 namespace sns::projects {
 
-inline constexpr int kProjectFormatVersion = 2;
+inline constexpr int kProjectFormatVersion = 3;
 inline constexpr const char* kProjectExtension = ".snps";
 
 // Which MO2 setup the project was made against. Paths are informational: the project resolves
@@ -29,11 +30,31 @@ struct NpcTarget {
   int override_count = 0;
 };
 
+struct ColorRgb {
+  std::uint8_t r = 255;
+  std::uint8_t g = 255;
+  std::uint8_t b = 255;
+
+  bool operator==(const ColorRgb&) const = default;
+};
+
+struct PieceMaterialOverride {
+  std::string name;
+  std::optional<ColorRgb> tint_color;
+  std::string diffuse_override;
+  std::string normal_override;
+  float glossiness = 1.0f;
+  float specular_strength = 1.0f;
+
+  bool operator==(const PieceMaterialOverride&) const = default;
+};
+
 struct OutfitPieceRef {
   std::string form_key;
   std::string name;
   std::string plugin;
   std::uint32_t slot_mask = 0;
+  std::optional<PieceMaterialOverride> material;
 
   bool operator==(const OutfitPieceRef&) const = default;
 };
@@ -53,14 +74,6 @@ struct HeadPartRef {
   bool operator==(const HeadPartRef&) const = default;
 };
 
-struct ColorRgb {
-  std::uint8_t r = 255;
-  std::uint8_t g = 255;
-  std::uint8_t b = 255;
-
-  bool operator==(const ColorRgb&) const = default;
-};
-
 struct TintLayerConfig {
   std::uint32_t index = 0;
   ColorRgb color;
@@ -70,6 +83,18 @@ struct TintLayerConfig {
   bool operator==(const TintLayerConfig&) const = default;
 };
 
+// RaceMenu sculpt offsets for one head part, addressed by its chargen TRI ("host").
+struct SculptConfig {
+  std::string host;
+  std::uint32_t vertex_count = 0;
+  std::vector<std::array<float, 4>> deltas;  // vertex index, dx, dy, dz (already divided)
+
+  bool operator==(const SculptConfig&) const = default;
+};
+
+// Face of one NPC as the export writes it. Format 3 stores the COMPLETE state (every NAM9 slider,
+// the NAMA presets, the whole PNAM list, tints, colors) so a reopened project rebuilds exactly the
+// same FaceGen. Format 2 files stored partial edits; see `complete`.
 struct FaceConfig {
   std::string preset_id;
   std::string preset_name;
@@ -81,10 +106,17 @@ struct FaceConfig {
   std::optional<ColorRgb> hair_color;
   std::optional<ColorRgb> skin_tone;
   std::vector<HeadPartRef> head_parts;
-  std::map<std::string, float> morph_sliders;
+  std::map<std::string, float> morph_sliders;  // NAM9 field name -> value
   std::vector<TintLayerConfig> tint_layers;
   float weight = 100.0f;
   float height = 1.0f;
+  // ---- format 3
+  bool complete = false;            // head_parts/morph_sliders/tints are the full record state
+  std::vector<std::int32_t> face_presets;  // NAMA (4 values) when known
+  std::map<std::string, float> custom_morphs;  // RaceMenu extension morphs baked into FaceGen
+  std::vector<SculptConfig> sculpt;
+  std::string geometry_mode;        // "regenerate" or "preserve" (keep the existing FaceGen's sculpt)
+  std::string head_texture;         // FTST FormKey ("" = race default)
 };
 
 struct NpcEdit {

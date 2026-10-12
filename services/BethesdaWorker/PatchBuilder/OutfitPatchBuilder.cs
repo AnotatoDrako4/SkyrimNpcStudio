@@ -17,9 +17,14 @@ internal sealed record BuiltAssignment(
     FormKey Npc, string? NpcEditorId, string? NpcName, FormKey Outfit, string OutfitEditorId,
     IReadOnlyList<ArmorSummary> Armors);
 
+internal sealed record BuiltGeneratedAsset(string Npc, string DataPath, string Sha256, string Kind);
+
+internal sealed record BuiltFace(string Npc, string? NpcEditorId, FaceGenProvenance Provenance, IReadOnlyList<string> ChangedFields);
+
 internal sealed record BuiltPatch(
     string PluginPath, IReadOnlyList<ModKey> Masters, bool EslFlagged,
-    IReadOnlyList<ExportedRecord> Records, IReadOnlyList<BuiltAssignment> Assignments, IReadOnlyList<Issue> Issues);
+    IReadOnlyList<ExportedRecord> Records, IReadOnlyList<BuiltAssignment> Assignments, IReadOnlyList<Issue> Issues,
+    IReadOnlyList<BuiltGeneratedAsset>? Generated = null, IReadOnlyList<BuiltFace>? Faces = null);
 
 /// <summary>
 /// Mode A (Outfit Patch): one new OTFT per NPC plus a minimal NPC override that only changes the
@@ -117,8 +122,10 @@ internal static partial class OutfitPatchBuilder
         {
             var editorId = UniqueEditorId(assignment.OutfitEditorId ?? $"SNS_{npc.EditorID ?? npc.FormKey.ID.ToString("X6")}Outfit", usedEditorIds);
             var outfit = patch.Outfits.AddNew(editorId);
+
+            var (itemKeys, outfitPieces) = ResolveOutfitItems(patch, session, validation.Pieces, assignment.MaterialOverrides, usedEditorIds, records);
             outfit.Items = new ExtendedList<IFormLinkGetter<IOutfitTargetGetter>>(
-                validation.Pieces.Select(p => (IFormLinkGetter<IOutfitTargetGetter>)new FormLink<IOutfitTargetGetter>(FormKey.Factory(p.Armor.FormKey))));
+                itemKeys.Select(k => (IFormLinkGetter<IOutfitTargetGetter>)new FormLink<IOutfitTargetGetter>(k)));
 
             var npcOverride = patch.Npcs.GetOrAddAsOverride(npc);
             npcOverride.DefaultOutfit.SetTo(outfit.FormKey);
@@ -129,8 +136,7 @@ internal static partial class OutfitPatchBuilder
 
             records.Add(new ExportedRecord { FormKey = outfit.FormKey.ToString(), RecordType = "OTFT", EditorId = editorId, Kind = "new" });
             records.Add(new ExportedRecord { FormKey = npc.FormKey.ToString(), RecordType = "NPC_", EditorId = npc.EditorID, Kind = "override" });
-            built.Add(new BuiltAssignment(npc.FormKey, npc.EditorID, npc.Name?.String, outfit.FormKey, editorId,
-                validation.Pieces.Select(p => p.Armor).ToArray()));
+            built.Add(new BuiltAssignment(npc.FormKey, npc.EditorID, npc.Name?.String, outfit.FormKey, editorId, outfitPieces));
         }
 
         if (request.EslFlag)
@@ -235,7 +241,112 @@ internal static partial class OutfitPatchBuilder
         return masters;
     }
 
-    private static string UniqueEditorId(string candidate, HashSet<string> used)
+    internal static (IReadOnlyList<FormKey> ItemKeys, IReadOnlyList<ArmorSummary> Pieces) ResolveOutfitItems(
+        SkyrimMod patch, LoadOrderSession session, IReadOnlyList<OutfitPiece> pieces,
+        IReadOnlyList<PieceMaterialDto>? overrides, HashSet<string> usedEditorIds, List<ExportedRecord> records)
+    {
+        var itemKeys = new List<FormKey>();
+        var finalPieces = new List<ArmorSummary>();
+        var matMap = (overrides ?? []).ToDictionary(m => m.ArmorFormKey, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var piece in pieces)
+        {
+            var origKey = FormKey.Factory(piece.Armor.FormKey);
+            if (!matMap.TryGetValue(piece.Armor.FormKey, out var mat) ||
+                (string.IsNullOrEmpty(mat.DiffusePath) && string.IsNullOrEmpty(mat.NormalPath) && string.IsNullOrEmpty(mat.SpecularPath) && mat.CustomTintColor == null))
+            {
+                itemKeys.Add(origKey);
+                finalPieces.Add(piece.Armor);
+                continue;
+            }
+
+            if (!session.LinkCache.TryResolve<IArmorGetter>(origKey, out var origArmor))
+            {
+                itemKeys.Add(origKey);
+                finalPieces.Add(piece.Armor);
+                continue;
+            }
+
+            // Create new TextureSet
+            var txstEditorId = UniqueEditorId($"SNS_TXST_{origArmor.EditorID ?? origArmor.FormKey.ID.ToString("X6")}", usedEditorIds);
+            var txst = patch.TextureSets.AddNew(txstEditorId);
+            if (!string.IsNullOrEmpty(mat.DiffusePath)) txst.Diffuse = mat.DiffusePath;
+            if (!string.IsNullOrEmpty(mat.NormalPath)) txst.NormalOrGloss = mat.NormalPath;
+            if (!string.IsNullOrEmpty(mat.SpecularPath)) txst.BacklightMaskOrSpecular = mat.SpecularPath;
+            records.Add(new ExportedRecord { FormKey = txst.FormKey.ToString(), RecordType = "TXST", EditorId = txstEditorId, Kind = "new" });
+
+            // Duplicate ArmorAddon records
+            var clonedArmas = new List<FormKey>();
+            foreach (var armaLink in origArmor.Armature)
+            {
+                if (!session.LinkCache.TryResolve<IArmorAddonGetter>(armaLink.FormKey, out var origArma))
+                    continue;
+
+                var armaEditorId = UniqueEditorId($"SNS_ARMA_{origArma.EditorID ?? origArma.FormKey.ID.ToString("X6")}", usedEditorIds);
+                var arma = patch.ArmorAddons.DuplicateInAsNewRecord(origArma);
+                arma.EditorID = armaEditorId;
+
+                if (arma.WorldModel?.Female is { } wf && !string.IsNullOrEmpty(wf.File.GivenPath))
+                {
+                    wf.AlternateTextures ??= new ExtendedList<AlternateTexture>();
+                    wf.AlternateTextures.Add(new AlternateTexture
+                    {
+                        Name = origArma.EditorID ?? "Piece",
+                        NewTexture = new FormLink<ITextureSetGetter>(txst.FormKey),
+                        Index = 0
+                    });
+                }
+                if (arma.WorldModel?.Male is { } wm && !string.IsNullOrEmpty(wm.File.GivenPath))
+                {
+                    wm.AlternateTextures ??= new ExtendedList<AlternateTexture>();
+                    wm.AlternateTextures.Add(new AlternateTexture
+                    {
+                        Name = origArma.EditorID ?? "Piece",
+                        NewTexture = new FormLink<ITextureSetGetter>(txst.FormKey),
+                        Index = 0
+                    });
+                }
+
+                clonedArmas.Add(arma.FormKey);
+                records.Add(new ExportedRecord { FormKey = arma.FormKey.ToString(), RecordType = "ARMA", EditorId = armaEditorId, Kind = "new" });
+            }
+
+            // Duplicate Armor record
+            var armoEditorId = UniqueEditorId($"SNS_ARMO_{origArmor.EditorID ?? origArmor.FormKey.ID.ToString("X6")}", usedEditorIds);
+            var armo = patch.Armors.DuplicateInAsNewRecord(origArmor);
+            armo.EditorID = armoEditorId;
+            if (clonedArmas.Count > 0)
+            {
+                armo.Armature.Clear();
+                foreach (var ca in clonedArmas)
+                {
+                    armo.Armature.Add(new FormLink<IArmorAddonGetter>(ca));
+                }
+            }
+            records.Add(new ExportedRecord { FormKey = armo.FormKey.ToString(), RecordType = "ARMO", EditorId = armoEditorId, Kind = "new" });
+            itemKeys.Add(armo.FormKey);
+            finalPieces.Add(new ArmorSummary
+            {
+                FormKey = armo.FormKey.ToString(),
+                FormId = armo.FormKey.ID.ToString("X8"),
+                EditorId = armo.EditorID ?? armoEditorId,
+                Name = armo.Name?.String ?? piece.Armor.Name,
+                OriginPlugin = patch.ModKey.FileName,
+                WinningPlugin = patch.ModKey.FileName,
+                SlotMask = piece.Armor.SlotMask,
+                Slots = piece.Armor.Slots,
+                ArmorType = piece.Armor.ArmorType,
+                NonPlayable = piece.Armor.NonPlayable,
+                MaleModel = piece.Armor.MaleModel,
+                FemaleModel = piece.Armor.FemaleModel,
+                AddonCount = clonedArmas.Count > 0 ? clonedArmas.Count : piece.Armor.AddonCount,
+            });
+        }
+
+        return (itemKeys, finalPieces);
+    }
+
+    internal static string UniqueEditorId(string candidate, HashSet<string> used)
     {
         var baseId = NonEditorIdChars().Replace(candidate, "_");
         if (baseId.Length > 90)

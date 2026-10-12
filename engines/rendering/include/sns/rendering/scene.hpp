@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -182,7 +183,40 @@ struct SceneStats {
   int pieces_unequipped = 0;   // outfit pieces replaced by a later piece in the same slot
 };
 
+// In-memory files that replace Data paths for one build (the regenerated FaceGen NIF and tint of
+// the draft). Keys are text::data_path_key(); values are the exact bytes the export will write.
+using AssetOverlay = std::unordered_map<std::string, std::shared_ptr<const std::string>>;
+
+// Parsed meshes and decoded textures shared between builds of the same MO2 snapshot, so a face or
+// outfit edit only reads and decodes what changed. Thread-safe. Overlay files are never cached.
+class SceneCache {
+ public:
+  struct Texture {
+    std::shared_ptr<const textures::DdsImage> image;  // decoded RGBA8, possibly a reduced mip
+    std::string source_format;                       // format of the file ("BC7", ...)
+    textures::AlphaStats alpha;                      // measured once on the decoded image
+  };
+
+  explicit SceneCache(std::uint64_t texture_budget_bytes = 768ull * 1024 * 1024) : budget_(texture_budget_bytes) {}
+  [[nodiscard]] std::shared_ptr<const nif::MeshFile> mesh(const std::string& key) const;
+  void put_mesh(const std::string& key, std::shared_ptr<const nif::MeshFile> mesh);
+  [[nodiscard]] std::optional<Texture> texture(const std::string& key) const;
+  void put_texture(const std::string& key, Texture texture);
+  void clear();
+  [[nodiscard]] std::size_t mesh_count() const;
+  [[nodiscard]] std::size_t texture_count() const;
+
+ private:
+  mutable std::mutex mutex_;
+  std::unordered_map<std::string, std::shared_ptr<const nif::MeshFile>> meshes_;
+  std::unordered_map<std::string, Texture> textures_;
+  std::uint64_t texture_bytes_ = 0;
+  std::uint64_t budget_;
+};
+
 struct SceneOptions {
+  std::shared_ptr<const AssetOverlay> overlay;  // consulted before MO2 loose files and BSAs
+  std::shared_ptr<SceneCache> cache;            // optional; enables reuse across builds
   bool apply_skinning = false;  // CPU-skin skinned shapes with the race skeleton (reference pose)
   bool include_skeleton = true;
   std::function<bool()> cancelled;

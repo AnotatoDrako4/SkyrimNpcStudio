@@ -13,7 +13,7 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
     {
         var r = fixture.IndexResponse;
         Assert.Equal(4, r.PluginCount);
-        Assert.Equal(3, r.NpcCount);          // Lydia, guard template, templated guard
+        Assert.Equal(4, r.NpcCount);          // Lydia, Hert (vampire), guard template, templated guard
         Assert.Equal(7, r.ArmorCount);        // 5 vanilla-like + 2 from the ESL pack
         Assert.Equal(1, r.OutfitCount);
         Assert.DoesNotContain(r.Issues, i => i.Severity == "error");
@@ -42,7 +42,7 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
     {
         NpcSearchResponse Search(NpcSearchRequest r) => fixture.State.Read(c => c.Queries.SearchNpcs(r));
 
-        Assert.Equal(1, Search(new() { Sex = "female" }).Total);
+        Assert.Equal(2, Search(new() { Sex = "female" }).Total);
         Assert.Equal(2, Search(new() { Sex = "male" }).Total);
         Assert.Equal(1, Search(new() { Kind = "templated" }).Total);
         Assert.Equal(1, Search(new() { Kind = "unique" }).Total);
@@ -134,7 +134,7 @@ public sealed class IncrementalIndexTests : IDisposable
         File.SetLastWriteTimeUtc(_fixture.LoadOrder.PathOf(SyntheticLoadOrder.LateTweak), DateTime.UtcNow.AddMinutes(1));
         var touched = _fixture.State.Index(_fixture.Request(), _ => { }, CancellationToken.None);
         Assert.Equal(1, touched.ParsedPlugins);
-        Assert.Equal(3, touched.NpcCount);
+        Assert.Equal(4, touched.NpcCount);
     }
 
     [Fact]

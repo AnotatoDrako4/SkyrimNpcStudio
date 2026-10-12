@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
+
 #include "sns/appearance/appearance_draft.hpp"
 #include "sns/core/error.hpp"
+#include "sns/core/file_io.hpp"
 #include "sns/projects/command_stack.hpp"
 #include "sns/projects/project.hpp"
 #include "temp_dir.hpp"
@@ -10,152 +14,190 @@ using namespace sns;
 using namespace sns::appearance;
 using namespace sns::projects;
 
-TEST_CASE("Appearance edits are undoable commands", "[appearance][commands]") {
+namespace {
+
+// Lydia-like recipe: hair, face, eyes from the record and the race; vanilla values.
+face::FaceRecipe lydia_recipe() {
+  face::FaceRecipe r;
+  r.npc_form_key = "0A2C8E:Skyrim.esm";
+  r.race_editor_id = "NordRace";
+  r.female = true;
+  auto part = [](const char* fk, const char* edid, face::HeadPartType type) {
+    face::HeadPartData p;
+    p.form_key = fk;
+    p.editor_id = edid;
+    p.type = type;
+    p.model = std::string("meshes\\") + edid + ".nif";
+    return p;
+  };
+  r.parts = {part("051193:Skyrim.esm", "HairFemaleNord02", face::HeadPartType::Hair),
+             part("051623:Skyrim.esm", "FemaleHeadNord", face::HeadPartType::Face),
+             part("040210:Skyrim.esm", "FemaleEyesHumanGreenHazel", face::HeadPartType::Eyes),
+             part("051176:Skyrim.esm", "HairFemaleNord04", face::HeadPartType::Hair)};
+  r.npc_head_parts = {"0EC1B2:Skyrim.esm", "051193:Skyrim.esm", "040210:Skyrim.esm"};
+  r.values.sliders[0] = 0.1f;
+  r.values.sliders[7] = -0.6f;
+  r.values.presets = {16, -1, 9, 16};
+  r.values.weight = 100.0f;
+  r.values.skin_tone = {206, 205, 204};
+  r.values.hair_color = face::Rgb8{26, 28, 28};
+  r.values.tints = {{24, {206, 205, 204}, 1.0f, 602}, {31, {47, 32, 19}, 0.61f, 661}};
+  return r;
+}
+
+AppearanceDraft loaded_draft(const face::FaceRecipe& recipe) {
   AppearanceDraft draft;
-  CommandStack stack;
-
   draft.set_target({"0A2C8E:Skyrim.esm", "HousecarlWhiterun", "Lydia", "Skyrim.esm", 1});
-  projects::FaceConfig initial_face{
-      .preset_id = "initial",
-      .preset_name = "Vanilla Lydia",
-      .preset_source = "vanilla",
-      .donor_npc_form_key = "0A2C8E:Skyrim.esm",
-      .donor_plugin = "Skyrim.esm",
-      .hair_color = ColorRgb{40, 30, 25},
-      .skin_tone = ColorRgb{210, 200, 190},
-      .weight = 80.0f,
-      .height = 1.0f,
-  };
-  draft.set_initial_face(initial_face);
+  draft.set_initial_outfit({{"013952:Skyrim.esm", "Steel Armor", "Skyrim.esm", 1u << 2}});
+  draft.set_face_baseline(face_state_from_recipe(recipe));
+  return draft;
+}
 
+}  // namespace
+
+TEST_CASE("Face and outfit edits share one undo history; a slider drag is one step", "[appearance][commands]") {
+  const auto recipe = lydia_recipe();
+  auto draft = loaded_draft(recipe);
+  CommandStack stack;
   CHECK_FALSE(draft.is_dirty());
-  CHECK_FALSE(draft.is_face_dirty());
 
-  // Apply donor face
-  projects::FaceConfig donor{
-      .preset_id = "helen",
-      .preset_name = "Helen Lydia Replacer",
-      .preset_source = "donor",
-      .donor_npc_form_key = "0A2C8E:Skyrim.esm",
-      .donor_plugin = "Helen_Lydia_replacer.esp",
-      .donor_facegen_mesh = "meshes/actors/character/facegendata/facegeom/Skyrim.esm/000A2C8E.nif",
-      .donor_facegen_tint = "textures/actors/character/facegendata/facetint/Skyrim.esm/000A2C8E.dds",
-      .hair_color = ColorRgb{48, 35, 33},
-      .skin_tone = ColorRgb{221, 221, 221},
-      .head_parts = {
-          {"000801:Helen_Lydia_replacer.esp", "AAA_Hair", "Hair", "meshes/helen/hair.nif"},
-          {"000802:Helen_Lydia_replacer.esp", "AAA_GirlHeads", "Face", "meshes/helen/head.nif"},
-      },
-      .weight = 100.0f,
-      .height = 0.97f,
-  };
-
-  stack.push(make_apply_donor_face(draft, donor, "Aplicar apariencia de Helen Replacer"));
+  // Dragging the nose slider produces many commands that merge into one undo step.
+  for (const float v : {0.2f, 0.4f, 0.6f, 0.8f}) {
+    auto next = draft.face();
+    next.values.sliders[0] = v;
+    stack.push(make_set_face(draft, next, "Nariz", "slider:NoseLongVsShort"));
+  }
+  CHECK(draft.face().values.sliders[0] == 0.8f);
+  CHECK(stack.history().size() == 1);
   CHECK(draft.is_face_dirty());
-  CHECK(draft.face().config.donor_plugin == "Helen_Lydia_replacer.esp");
-  CHECK(draft.face().config.weight == 100.0f);
 
-  // Set facial slider
-  stack.push(make_set_face_slider(draft, "NoseLongShort", 0.45f));
-  CHECK(draft.face().slider_value("NoseLongShort") == 0.45f);
+  stack.push(outfit::make_add_piece(draft.outfit(), {"013951:Skyrim.esm", "Steel Boots", "Skyrim.esm", 1u << 7}, true));
+  auto hair = draft.face();
+  hair.head_parts[1] = "051176:Skyrim.esm";
+  stack.push(make_set_face(draft, hair, "Cambiar cabello"));
+  stack.push(make_set_height(draft, 1.03f));
+  stack.push(make_set_height(draft, 1.05f));  // merged with the previous height change
+  CHECK(stack.history().size() == 4);
 
-  // Undo slider
-  CHECK(stack.undo());
-  CHECK(draft.face().slider_value("NoseLongShort") == 0.0f);
+  // Undo walks back through face, outfit and body changes in order.
+  REQUIRE(stack.undo());
+  CHECK(draft.height() == 1.0f);
+  REQUIRE(stack.undo());
+  CHECK(draft.face().head_parts[1] == "051193:Skyrim.esm");
+  REQUIRE(stack.undo());
+  CHECK(draft.outfit().pieces().size() == 1);
+  REQUIRE(stack.undo());
+  CHECK(draft.face().values.sliders[0] == 0.1f);
+  CHECK_FALSE(draft.is_dirty());
 
-  // Redo slider
-  CHECK(stack.redo());
-  CHECK(draft.face().slider_value("NoseLongShort") == 0.45f);
+  REQUIRE(stack.redo());
+  CHECK(draft.face().values.sliders[0] == 0.8f);
 
-  // Undo donor face
-  CHECK(stack.undo()); // undo slider
-  CHECK(stack.undo()); // undo donor face
-  CHECK_FALSE(draft.face().active);
-  CHECK(draft.face().config.donor_plugin == "Skyrim.esm");
+  // A different slider is a new step even right after.
+  auto eyes = draft.face();
+  eyes.values.sliders[7] = 0.3f;
+  stack.push(make_set_face(draft, eyes, "Ojos", "slider:EyesUpVsDown"));
+  CHECK(stack.history().size() == 2);
+
+  // Merging never crosses the saved state.
+  stack.mark_clean();
+  auto again = draft.face();
+  again.values.sliders[7] = 0.4f;
+  stack.push(make_set_face(draft, again, "Ojos", "slider:EyesUpVsDown"));
+  CHECK(stack.history().size() == 3);
+  CHECK_FALSE(stack.is_clean());
 }
 
-TEST_CASE("Projects format v2 stores both outfit and face with backward compatibility", "[projects][v2]") {
-  test::TempDir dir;
-  const auto folder = dir.path() / "Lydia_Complete.snps";
-  auto project = ProjectStore::create("Lydia Complete", {"Default", "D:/MO2/ModOrganizer.ini", "Default", "Anniversary Edition"});
+TEST_CASE("Format 3 projects store and restore the complete face", "[appearance][projects]") {
+  const auto recipe = lydia_recipe();
+  auto draft = loaded_draft(recipe);
+  auto edited = draft.face();
+  edited.values.sliders[3] = -0.45f;
+  edited.values.presets[0] = 3;
+  edited.values.weight = 60.0f;
+  edited.values.hair_color = face::Rgb8{120, 30, 20};
+  edited.values.tints[1].value = 0.9f;
+  edited.values.custom_morphs["CME_BrowInOut"] = 0.25f;
+  edited.values.sculpt = {{"Actors\\Character\\Character Assets\\FemaleHeadCharGen.tri", 996, {{12, {0.5f, 0.0f, -0.25f}}}}};
+  edited.head_parts[1] = "051176:Skyrim.esm";
+  edited.geometry_mode = "preserve";
+  edited.source = "RaceMenu: Carrot.jslot";
+  draft.set_face(edited);
 
-  NpcEdit edit;
-  edit.target = {"0A2C8E:Skyrim.esm", "HousecarlWhiterun", "Lydia", "Helen_Lydia_replacer.esp", 4};
-  edit.outfit = OutfitConfig{
-      .outfit_editor_id = "SNS_LydiaOutfit",
-      .pieces = {{"00000A:[Amsedillir] Runes of Roots.esp", "Corset", "[Amsedillir] Runes of Roots.esp", 4}},
-      .also_sleeping = false,
-  };
-  edit.face = FaceConfig{
-      .preset_id = "helen_lydia",
-      .preset_name = "Helen Lydia",
-      .preset_source = "donor",
-      .donor_npc_form_key = "0A2C8E:Skyrim.esm",
-      .donor_plugin = "Helen_Lydia_replacer.esp",
-      .donor_facegen_mesh = "meshes/actors/character/facegendata/facegeom/Skyrim.esm/000A2C8E.nif",
-      .donor_facegen_tint = "textures/actors/character/facegendata/facetint/Skyrim.esm/000A2C8E.dds",
-      .hair_color = ColorRgb{48, 35, 33},
-      .skin_tone = ColorRgb{221, 221, 221},
-      .head_parts = {{"000801:Helen_Lydia_replacer.esp", "AAA_Hair", "Hair", "meshes/hair.nif"}},
-      .weight = 100.0f,
-      .height = 0.97f,
-  };
+  test::TempDir dir;
+  auto project = ProjectStore::create("Lydia", {});
+  auto edit = draft.to_npc_edit();
+  edit.face = to_face_config(draft.face(), recipe);
+  CHECK(edit.face->head_parts[1].editor_id == "HairFemaleNord04");
+  CHECK(edit.face->head_parts[1].type == "Hair");
   project.npcs.push_back(edit);
-
+  const auto folder = dir.path() / "Lydia.snps";
   ProjectStore::save(folder, project);
-  CHECK(std::filesystem::exists(folder / "face.json"));
-  CHECK(std::filesystem::exists(folder / "outfit.json"));
-  CHECK(std::filesystem::exists(folder / "npc.json"));
 
   const auto loaded = ProjectStore::load(folder);
+  CHECK(loaded.format_version == 3);
   REQUIRE(loaded.npcs.size() == 1);
-  CHECK(loaded.format_version == 2);
-  REQUIRE(loaded.npcs[0].face.has_value());
-  CHECK(loaded.npcs[0].face->donor_plugin == "Helen_Lydia_replacer.esp");
-  CHECK(loaded.npcs[0].face->weight == 100.0f);
-  REQUIRE(loaded.npcs[0].outfit.has_value());
-  CHECK(loaded.npcs[0].outfit->pieces.size() == 1);
+  REQUIRE(loaded.npcs[0].face);
+  REQUIRE(loaded.npcs[0].outfit);
+  CHECK(loaded.npcs[0].face->complete);
 
-  // Check dependencies collected both outfit and face donor plugins
-  CHECK(std::find(loaded.dependencies.begin(), loaded.dependencies.end(), "[Amsedillir] Runes of Roots.esp") != loaded.dependencies.end());
-  CHECK(std::find(loaded.dependencies.begin(), loaded.dependencies.end(), "Helen_Lydia_replacer.esp") != loaded.dependencies.end());
+  std::vector<std::string> notes;
+  const auto restored = from_face_config(*loaded.npcs[0].face, face_state_from_recipe(recipe), recipe, &notes);
+  CHECK(restored == edited);
+  CHECK(notes.empty());
+
+  // Saving again without face edits removes face.json: the old edits must not come back.
+  project.npcs[0].face.reset();
+  ProjectStore::save(folder, project);
+  CHECK_FALSE(std::filesystem::exists(folder / "face.json"));
+  CHECK_FALSE(ProjectStore::load(folder).npcs[0].face.has_value());
 }
 
-TEST_CASE("ProjectStore loads legacy format v1 projects seamlessly", "[projects][v1_compat]") {
+TEST_CASE("Format 2 face edits migrate on top of the record", "[appearance][projects]") {
+  const auto recipe = lydia_recipe();
+  const auto baseline = face_state_from_recipe(recipe);
+
+  // What Character Creator 2.0 saved: one slider, a hair by type, the default weight 100.
+  FaceConfig v2;
+  v2.preset_source = "custom";
+  v2.morph_sliders = {{"JawNarrowVsWide", 0.3f}, {"NotASlider", 1.0f}};
+  v2.head_parts = {{"051176:Skyrim.esm", "HairFemaleNord04", "Hair", ""}, {"", "Brows?", "Eyebrows", ""}};
+  v2.weight = 100.0f;
+  v2.skin_tone = ColorRgb{180, 150, 140};
+
+  // The record says weight 100 here, so use a different baseline weight to see it is preserved.
+  auto lighter = baseline;
+  lighter.values.weight = 70.0f;
+  std::vector<std::string> notes;
+  const auto migrated = from_face_config(v2, lighter, recipe, &notes);
+  CHECK(migrated.values.sliders[3] == 0.3f);
+  CHECK(migrated.values.sliders[0] == 0.1f);  // untouched sliders keep the record's value
+  CHECK(migrated.values.weight == 70.0f);     // the default 100 is not applied
+  CHECK(migrated.values.skin_tone == face::Rgb8{180, 150, 140});
+  CHECK(std::count(migrated.head_parts.begin(), migrated.head_parts.end(), "051176:Skyrim.esm") == 1);
+  CHECK(std::count(migrated.head_parts.begin(), migrated.head_parts.end(), "051193:Skyrim.esm") == 0);
+  CHECK(std::count(migrated.head_parts.begin(), migrated.head_parts.end(), "040210:Skyrim.esm") == 1);
+  CHECK(notes.size() == 3);  // unknown slider, part without FormKey, weight ignored
+
+  v2.preset_source = "donor";
+  CHECK(from_face_config(v2, lighter, recipe).values.weight == 100.0f);
+}
+
+TEST_CASE("Format 2 project files still load", "[appearance][projects]") {
   test::TempDir dir;
-  const auto folder = dir.path() / "Legacy.snps";
-
-  // Simulate an old v1 project without face.json
-  dir.write("Legacy.snps/project.json", R"({
-    "format": "skyrim-npc-studio/project",
-    "formatVersion": 1,
-    "id": "1234567812345678",
-    "name": "Legacy Project",
-    "createdUtc": "2026-10-11T12:00:00Z",
-    "modifiedUtc": "2026-10-11T12:00:00Z",
-    "environment": {"instanceName": "Default", "instanceIni": "", "profile": "Default", "gameEdition": "SE"},
-    "exportOptions": {"pluginName": "Legacy.esp", "eslFlag": false, "createZip": false, "outputDirectory": ""},
-    "history": []
-  })");
-  dir.write("Legacy.snps/npc.json", R"({
-    "formatVersion": 1,
-    "npcs": [{"formKey": "0A2C8E:Skyrim.esm", "editorId": "Lydia", "name": "Lydia", "winningPlugin": "Skyrim.esm", "overrideCount": 1}]
-  })");
-  dir.write("Legacy.snps/outfit.json", R"({
-    "formatVersion": 1,
-    "outfits": {
-      "0A2C8E:Skyrim.esm": {
-        "outfitEditorId": "SNS_LydiaOutfit",
-        "pieces": [{"formKey": "013952:Skyrim.esm", "name": "Steel Armor", "plugin": "Skyrim.esm", "slotMask": 4}],
-        "alsoSleeping": false
-      }
-    }
-  })");
-
-  const auto loaded = ProjectStore::load(folder);
-  REQUIRE(loaded.npcs.size() == 1);
-  CHECK(loaded.format_version == 1);
-  REQUIRE(loaded.npcs[0].outfit.has_value());
-  CHECK(loaded.npcs[0].outfit->pieces[0].name == "Steel Armor");
-  CHECK_FALSE(loaded.npcs[0].face.has_value());
+  const auto folder = dir.path() / "Old.snps";
+  std::filesystem::create_directories(folder);
+  auto write = [&](const char* name, const char* content) { file_io::write_file_atomic(folder / name, content); };
+  write("project.json", R"({"format":"skyrim-npc-studio/project","formatVersion":2,"id":"abc","name":"Old"})");
+  write("npc.json", R"({"formatVersion":2,"npcs":[{"formKey":"0A2C8E:Skyrim.esm","editorId":"HousecarlWhiterun"}]})");
+  write("outfit.json", R"({"formatVersion":2,"outfits":{"0A2C8E:Skyrim.esm":{"pieces":[{"formKey":"013952:Skyrim.esm"}]}}})");
+  write("face.json", R"({"formatVersion":2,"faces":{"0A2C8E:Skyrim.esm":{"morphSliders":{"NoseUpVsDown":0.5},"weight":100}}})");
+  const auto p = ProjectStore::load(folder);
+  CHECK(p.format_version == 2);
+  REQUIRE(p.npcs.size() == 1);
+  REQUIRE(p.npcs[0].outfit);
+  CHECK(p.npcs[0].outfit->pieces.size() == 1);
+  REQUIRE(p.npcs[0].face);
+  CHECK_FALSE(p.npcs[0].face->complete);
+  CHECK(p.npcs[0].face->morph_sliders.at("NoseUpVsDown") == 0.5f);
 }

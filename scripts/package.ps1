@@ -9,12 +9,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Destination = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\SkyrimNpcStudio')
+    [string]$Destination = ""
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot 'dev-env.ps1') | Out-Null
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$root = Split-Path -Parent $scriptDir
+if ([string]::IsNullOrWhiteSpace($Destination)) {
+    $Destination = Join-Path $root 'dist\SkyrimNpcStudio'
+}
+. (Join-Path $scriptDir 'dev-env.ps1') | Out-Null
 
 Push-Location $root
 try {

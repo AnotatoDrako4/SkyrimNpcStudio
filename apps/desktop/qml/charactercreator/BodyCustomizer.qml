@@ -45,6 +45,64 @@ ScrollView {
             font.pixelSize: 13
         }
 
+        // Tarjeta de Detección de Malla y Físicas
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: bodyInfoCol.implicitHeight + 14
+            color: Theme.panelAlt
+            radius: 4
+            border.color: Theme.border
+            border.width: 1
+
+            ColumnLayout {
+                id: bodyInfoCol
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 4
+
+                RowLayout {
+                    spacing: 6
+                    Text {
+                        text: qsTr("Malla Corporal:")
+                        color: Theme.textDim
+                        font.pixelSize: 10
+                    }
+                    Text {
+                        text: (root.studio.outfit.compatibilityReport.body?.name ?? qsTr("Vanilla"))
+                        color: Theme.accent
+                        font.bold: true
+                        font.pixelSize: 11
+                    }
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        visible: root.studio.outfit.compatibilityReport.body?.physicsEnabled ?? false
+                        implicitWidth: physicsTxt.implicitWidth + 8
+                        implicitHeight: 18
+                        radius: 3
+                        color: "#2C3E50"
+                        border.color: "#3498DB"
+                        border.width: 1
+                        Text {
+                            id: physicsTxt
+                            anchors.centerIn: parent
+                            text: qsTr("FSMP / SMP Activo")
+                            color: "#5DADE2"
+                            font.pixelSize: 9
+                            font.bold: true
+                        }
+                    }
+                }
+
+                Text {
+                    text: root.studio.outfit.compatibilityReport.body?.details ?? qsTr("Soporta morphs estándar de peso (0 a 100).")
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
+        }
+
         // Peso (Weight)
         ColumnLayout {
             Layout.fillWidth: true

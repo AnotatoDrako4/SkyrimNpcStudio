@@ -4,59 +4,56 @@ namespace sns::face {
 
 namespace {
 
-const std::vector<MorphSliderDef> kStandardMorphs = {
-    // Nose
-    {"NoseLongVsShort", MorphCategory::Nose, "Longitud de la nariz", "Nose Length", -1.0f, 1.0f, 0.0f},
-    {"NoseUpVsDown", MorphCategory::Nose, "Altura de la nariz", "Nose Height", -1.0f, 1.0f, 0.0f},
+MorphSliderDef slider(std::size_t index, std::string key, MorphCategory category, std::string es, std::string en,
+                      std::string positive, std::string negative) {
+  MorphSliderDef def;
+  def.key = std::move(key);
+  def.index = index;
+  def.category = category;
+  def.display_name_es = std::move(es);
+  def.display_name_en = std::move(en);
+  def.positive_morph = std::move(positive);
+  def.negative_morph = std::move(negative);
+  return def;
+}
 
-    // Jaw
-    {"JawUpVsDown", MorphCategory::Jaw, "Altura de la mandíbula", "Jaw Height", -1.0f, 1.0f, 0.0f},
-    {"JawNarrowVsWide", MorphCategory::Jaw, "Anchura de la mandíbula", "Jaw Width", -1.0f, 1.0f, 0.0f},
-    {"JawForwardVsBack", MorphCategory::Jaw, "Profundidad de mandíbula", "Jaw Depth", -1.0f, 1.0f, 0.0f},
-
-    // Cheeks
-    {"CheeksUpVsDown", MorphCategory::Cheeks, "Altura de mejillas", "Cheeks Height", -1.0f, 1.0f, 0.0f},
-    {"CheeksForwardVsBack", MorphCategory::Cheeks, "Prominencia de mejillas", "Cheeks Depth", -1.0f, 1.0f, 0.0f},
-
-    // Eyes
-    {"EyesUpVsDown", MorphCategory::Eyes, "Altura de ojos", "Eyes Height", -1.0f, 1.0f, 0.0f},
-    {"EyesInVsOut", MorphCategory::Eyes, "Separación de ojos", "Eyes Separation", -1.0f, 1.0f, 0.0f},
-    {"EyesForwardVsBack", MorphCategory::Eyes, "Profundidad de ojos", "Eyes Depth", -1.0f, 1.0f, 0.0f},
-
-    // Brows
-    {"BrowsUpVsDown", MorphCategory::Brows, "Altura de cejas", "Brows Height", -1.0f, 1.0f, 0.0f},
-    {"BrowsInVsOut", MorphCategory::Brows, "Separación de cejas", "Brows Separation", -1.0f, 1.0f, 0.0f},
-    {"BrowsForwardVsBack", MorphCategory::Brows, "Profundidad de cejas", "Brows Depth", -1.0f, 1.0f, 0.0f},
-
-    // Lips
-    {"LipsUpVsDown", MorphCategory::Lips, "Altura de labios", "Lips Height", -1.0f, 1.0f, 0.0f},
-    {"LipsInVsOut", MorphCategory::Lips, "Profundidad de labios", "Lips Depth", -1.0f, 1.0f, 0.0f},
-
-    // Chin
-    {"ChinNarrowVsWide", MorphCategory::Chin, "Anchura de la barbilla", "Chin Width", -1.0f, 1.0f, 0.0f},
-    {"ChinUpVsDown", MorphCategory::Chin, "Altura de la barbilla", "Chin Height", -1.0f, 1.0f, 0.0f},
-    {"ChinUnderbiteVsOverbite", MorphCategory::Chin, "Prognatismo de barbilla", "Chin Underbite", -1.0f, 1.0f, 0.0f},
-};
+const std::vector<MorphSliderDef>& table() {
+  static const std::vector<MorphSliderDef> kSliders = {
+      slider(0, "NoseLongVsShort", MorphCategory::Nose, "Nariz: larga / corta", "Nose: long / short", "NoseLong", "NoseShort"),
+      slider(1, "NoseUpVsDown", MorphCategory::Nose, "Nariz: arriba / abajo", "Nose: up / down", "NoseUp", "NoseDown"),
+      slider(2, "JawUpVsDown", MorphCategory::Jaw, "Mandíbula: abajo / arriba", "Jaw: down / up", "JawDown", "JawUp"),
+      slider(3, "JawNarrowVsWide", MorphCategory::Jaw, "Mandíbula: ancha / estrecha", "Jaw: wide / narrow", "JawWide", "JawNarrow"),
+      slider(4, "JawForwardVsBack", MorphCategory::Jaw, "Mandíbula: adelante / atrás", "Jaw: forward / back", "JawForward", "JawBack"),
+      slider(5, "CheeksUpVsDown", MorphCategory::Cheeks, "Pómulos: arriba / abajo", "Cheeks: up / down", "CheeksUp", "CheeksDown"),
+      slider(6, "CheeksForwardVsBack", MorphCategory::Cheeks, "Pómulos: hacia fuera / dentro", "Cheeks: out / in", "CheeksOut", "CheeksIn"),
+      slider(7, "EyesUpVsDown", MorphCategory::Eyes, "Ojos: arriba / abajo", "Eyes: up / down", "EyesMoveUp", "EyesMoveDown"),
+      slider(8, "EyesInVsOut", MorphCategory::Eyes, "Ojos: separados / juntos", "Eyes: out / in", "EyesMoveOut", "EyesMoveIn"),
+      slider(9, "BrowsUpVsDown", MorphCategory::Brows, "Cejas: arriba / abajo", "Brows: up / down", "BrowUp", "BrowDown"),
+      slider(10, "BrowsInVsOut", MorphCategory::Brows, "Cejas: separadas / juntas", "Brows: out / in", "BrowOut", "BrowIn"),
+      slider(11, "BrowsForwardVsBack", MorphCategory::Brows, "Cejas: adelante / atrás", "Brows: forward / back", "BrowForward", "BrowBack"),
+      slider(12, "LipsUpVsDown", MorphCategory::Lips, "Labios: arriba / abajo", "Lips: up / down", "LipMoveUp", "LipMoveDown"),
+      slider(13, "LipsInVsOut", MorphCategory::Lips, "Labios: hacia fuera / dentro", "Lips: out / in", "LipMoveOut", "LipMoveIn"),
+      slider(14, "ChinNarrowVsWide", MorphCategory::Chin, "Barbilla: ancha / estrecha", "Chin: wide / thin", "ChinWide", "ChinThin"),
+      slider(15, "ChinUpVsDown", MorphCategory::Chin, "Barbilla: abajo / arriba", "Chin: down / up", "ChinMoveDown", "ChinMoveUp"),
+      slider(16, "ChinUnderbiteVsOverbite", MorphCategory::Chin, "Mordida: prognatismo / retrognatismo", "Bite: underbite / overbite", "Underbite", "Overbite"),
+      slider(17, "EyesForwardVsBack", MorphCategory::Eyes, "Ojos: adelante / atrás", "Eyes: forward / back", "EyesForward", "EyesBack"),
+  };
+  return kSliders;
+}
 
 }  // namespace
 
-const std::vector<MorphSliderDef>& get_standard_face_morphs() {
-  return kStandardMorphs;
-}
+const std::vector<MorphSliderDef>& get_standard_face_morphs() { return table(); }
 
 const MorphSliderDef* find_morph_def(std::string_view key) {
-  for (const auto& def : kStandardMorphs) {
-    if (def.key == key) {
-      return &def;
-    }
+  for (const auto& def : table()) {
+    if (def.key == key) return &def;
   }
   return nullptr;
 }
 
 float clamp_morph_value(std::string_view key, float value) {
-  if (const auto* def = find_morph_def(key)) {
-    return def->clamp(value);
-  }
+  if (const auto* def = find_morph_def(key)) return def->clamp(value);
   return std::clamp(value, -1.0f, 1.0f);
 }
 
@@ -72,6 +69,16 @@ std::string_view morph_category_name(MorphCategory category) {
     case MorphCategory::Custom: return "Custom";
   }
   return "Unknown";
+}
+
+const std::array<FacePresetSlotDef, kPresetSlotCount>& face_preset_slots() {
+  static const std::array<FacePresetSlotDef, kPresetSlotCount> kSlots = {{
+      {0, "Nose", "NoseType", "Forma de nariz", "Nose type"},
+      {1, "Unknown", "", "(sin uso)", "(unused)"},
+      {2, "Eyes", "EyesType", "Forma de ojos", "Eyes type"},
+      {3, "Mouth", "LipType", "Forma de labios", "Lips type"},
+  }};
+  return kSlots;
 }
 
 }  // namespace sns::face

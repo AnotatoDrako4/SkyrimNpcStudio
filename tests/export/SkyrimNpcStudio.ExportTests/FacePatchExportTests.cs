@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Plugins;
@@ -39,6 +40,8 @@ public sealed class FacePatchExportTests : IDisposable
             SkyrimRelease.SkyrimSE,
             new BinaryReadParameters { MasterFlagsLookup = _state.Read(c => c.Session.MasterStyles) });
 
+    private static string Sha256Of(string path) => Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)));
+
     [Fact]
     public void ExportFaceOverhaul_WritesPluginWithCustomizedFaceRecordAndCopiesFaceGen()
     {
@@ -47,6 +50,8 @@ public sealed class FacePatchExportTests : IDisposable
         var donorDds = Path.Combine(_out, "donor_face.dds");
         File.WriteAllBytes(donorNif, [0x4E, 0x49, 0x46, 0x00]); // fake NIF
         File.WriteAllBytes(donorDds, [0x44, 0x44, 0x53, 0x20]); // fake DDS
+
+        var expectedFaceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
 
         var request = new ExportFaceOverhaulRequest
         {
@@ -59,18 +64,37 @@ public sealed class FacePatchExportTests : IDisposable
                 new FaceAssignment
                 {
                     NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
-                    DonorFaceGeometryPath = donorNif,
-                    DonorFaceTintPath = donorDds,
-                    SkinTone = new AppearanceColor(240, 200, 180),
-                    FaceMorphs = new FaceMorphsDto(
-                        NoseLongVsShort: 0.4f, NoseUpVsDown: 0.1f,
-                        JawUpVsDown: -0.2f, JawNarrowVsWide: 0.3f, JawForwardVsBack: 0.0f,
-                        CheeksUpVsDown: 0.2f, CheeksForwardVsBack: 0.1f,
-                        EyesUpVsDown: 0.0f, EyesInVsOut: -0.1f, EyesForwardVsBack: 0.0f,
-                        BrowsUpVsDown: 0.2f, BrowsInVsOut: 0.0f, BrowsForwardVsBack: -0.1f,
-                        LipsUpVsDown: -0.2f, LipsInVsOut: 0.1f,
-                        ChinNarrowVsWide: 0.2f, ChinUpVsDown: -0.1f, ChinUnderbiteVsOverbite: 0.0f),
-                    Weight = 65f,
+                    Values = new FaceValuesDto
+                    {
+                        Sliders = [0.4f, 0.1f, -0.2f, 0.3f, 0.0f, 0.2f, 0.1f, 0.0f, -0.1f, 0.0f, 0.2f, 0.0f, -0.1f, -0.2f, 0.1f, 0.2f, -0.1f, 0.0f],
+                        Presets = [0, 0, 0, 0],
+                        Weight = 65f,
+                        SkinTone = new AppearanceColor(240, 200, 180),
+                        Tints = [],
+                    },
+                    HeadParts = [SyntheticLoadOrder.FemaleHeadNord.ToString(), SyntheticLoadOrder.HairNord.ToString()],
+                    FaceGen = new FaceGenProvenance
+                    {
+                        Mode = "regenerate",
+                        Parts = ["FemaleHeadNord", "HairNord"],
+                    },
+                    GeneratedAssets =
+                    [
+                        new GeneratedAsset
+                        {
+                            SourcePath = donorNif,
+                            DataPath = expectedFaceGen.GeometryPath,
+                            Sha256 = Sha256Of(donorNif),
+                            Kind = "facegen-geometry",
+                        },
+                        new GeneratedAsset
+                        {
+                            SourcePath = donorDds,
+                            DataPath = expectedFaceGen.TintPath,
+                            Sha256 = Sha256Of(donorDds),
+                            Kind = "facegen-tint",
+                        },
+                    ],
                 },
             ],
         };
@@ -81,7 +105,6 @@ public sealed class FacePatchExportTests : IDisposable
         Assert.True(response.EslFlagged);
 
         // Verify copied FaceGen files inside mod directory
-        var expectedFaceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
         var targetNif = Path.Combine(response.ModDirectory, expectedFaceGen.GeometryPath);
         var targetDds = Path.Combine(response.ModDirectory, expectedFaceGen.TintPath);
         Assert.True(File.Exists(targetNif), $"Target FaceGen NIF must exist in staged mod at '{targetNif}'");
@@ -91,7 +114,7 @@ public sealed class FacePatchExportTests : IDisposable
         var manifestText = File.ReadAllText(response.ManifestPath);
         using var manifest = JsonDocument.Parse(manifestText);
         Assert.Equal("face-overhaul", manifest.RootElement.GetProperty("mode").GetString());
-        Assert.Equal("hybrid", manifest.RootElement.GetProperty("dependencyMode").GetString());
+        Assert.Equal("generated", manifest.RootElement.GetProperty("dependencyMode").GetString());
         Assert.True(manifest.RootElement.GetProperty("bundledAssets").GetArrayLength() >= 2);
 
         // Verify binary plugin contents
@@ -111,6 +134,13 @@ public sealed class FacePatchExportTests : IDisposable
     [Fact]
     public void ExportCompleteOverhaul_CombinesFaceAndOutfitInSingleMod()
     {
+        var donorNif = Path.Combine(_out, "donor_complete.nif");
+        var donorDds = Path.Combine(_out, "donor_complete.dds");
+        File.WriteAllBytes(donorNif, [0x4E, 0x49, 0x46, 0x00]);
+        File.WriteAllBytes(donorDds, [0x44, 0x44, 0x53, 0x20]);
+
+        var expectedFaceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
+
         var request = new ExportCompleteOverhaulRequest
         {
             PluginName = "SkyrimNpcStudio_Lydia_Complete.esp",
@@ -134,8 +164,31 @@ public sealed class FacePatchExportTests : IDisposable
                     Face = new FaceAssignment
                     {
                         NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
-                        SkinTone = new AppearanceColor(255, 220, 200),
-                        Weight = 75f,
+                        Values = new FaceValuesDto
+                        {
+                            Sliders = [0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f],
+                            Presets = [0, 0, 0, 0],
+                            Weight = 75f,
+                            SkinTone = new AppearanceColor(255, 220, 200),
+                            Tints = [],
+                        },
+                        GeneratedAssets =
+                        [
+                            new GeneratedAsset
+                            {
+                                SourcePath = donorNif,
+                                DataPath = expectedFaceGen.GeometryPath,
+                                Sha256 = Sha256Of(donorNif),
+                                Kind = "facegen-geometry",
+                            },
+                            new GeneratedAsset
+                            {
+                                SourcePath = donorDds,
+                                DataPath = expectedFaceGen.TintPath,
+                                Sha256 = Sha256Of(donorDds),
+                                Kind = "facegen-tint",
+                            },
+                        ],
                     },
                 },
             ],

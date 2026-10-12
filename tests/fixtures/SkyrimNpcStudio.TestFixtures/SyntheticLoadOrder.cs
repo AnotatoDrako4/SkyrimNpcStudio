@@ -12,7 +12,9 @@ namespace SkyrimNpcStudio.TestFixtures;
 /// Contains no game data: every record is synthetic. Some FormIDs mirror vanilla ones
 /// (Lydia = 0A2C8E) so tests read like real-world scenarios.
 ///
-///   0 Skyrim.esm     master: races, ARMA/ARMO, an outfit, Lydia, a templated guard
+///   0 Skyrim.esm     master: races (with face data: default head parts, TRI files, tint masks,
+///                    default face texture; a vampire race with a morph race), head parts, ARMA/ARMO,
+///                    an outfit, Lydia (face values, tints, hair color), a templated guard, a vampire
 ///   1 FaceMod.esp    overrides Lydia: Height 1.05
 ///   2 ArmorPack.esp  ESL-flagged: two new armors for DefaultRace
 ///   3 LateTweak.esp  overrides Lydia from the ORIGINAL record: Weight 80 (loses FaceMod's height)
@@ -40,6 +42,16 @@ public sealed class SyntheticLoadOrder : IDisposable
     public static readonly FormKey HairNord = new(Skyrim, 0x0A0040);
     public static readonly FormKey DragonsreachCell = new(Skyrim, 0x01691D);
     public static readonly FormKey LydiaRef = new(Skyrim, 0x0A2C94);
+    public static readonly FormKey NordRaceVampire = new(Skyrim, 0x088794);
+    public static readonly FormKey VampireKeyword = new(Skyrim, 0x0A82BB);
+    public static readonly FormKey FemaleHeadNord = new(Skyrim, 0x051623);
+    public static readonly FormKey HairLineNord = new(Skyrim, 0x0A0041);
+    public static readonly FormKey EyesBrown = new(Skyrim, 0x051548);
+    public static readonly FormKey EyesGreen = new(Skyrim, 0x040210);
+    public static readonly FormKey SkinHeadFemaleNord = new(Skyrim, 0x03B522);
+    public static readonly FormKey EyesGreenTextures = new(Skyrim, 0x0E7AF0);
+    public static readonly FormKey HairColorBrown = new(Skyrim, 0x0A0434);
+    public static readonly FormKey VampireNpc = new(Skyrim, 0x01367C);
 
     public FormKey CrimsonCuirass { get; private set; }
     public FormKey CrimsonCloak { get; private set; }
@@ -69,8 +81,15 @@ public sealed class SyntheticLoadOrder : IDisposable
         master.ModHeader.Flags |= SkyrimModHeader.HeaderFlag.Master;
 
         var defaultRace = AddRace(master, DefaultRace, "DefaultRace", "Default", armorRace: null);
-        AddRace(master, NordRace, "NordRace", "Nord", armorRace: defaultRace);
+        var nordRace = AddRace(master, NordRace, "NordRace", "Nord", armorRace: defaultRace);
         AddRace(master, KhajiitRace, "KhajiitRace", "Khajiit", armorRace: null);
+        master.HeadParts.Add(new HeadPart(HairNord, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "HairFemaleNord01",
+            Type = HeadPart.TypeEnum.Hair,
+            Model = new Model { File = "Actors\\Character\\Character Assets\\Hair\\FemaleHair01.nif" },
+        });
+        AddFaceData(master, nordRace);
 
         AddArmor(master, SteelCuirass, "ArmorSteelCuirass", "Steel Armor", BipedObjectFlag.Body, DefaultRace, "Steel\\Cuirass");
         AddArmor(master, SteelBoots, "ArmorSteelBoots", "Steel Boots", BipedObjectFlag.Feet, DefaultRace, "Steel\\Boots");
@@ -90,12 +109,6 @@ public sealed class SyntheticLoadOrder : IDisposable
         master.Outfits.Add(outfit);
 
         master.Factions.Add(new Faction(HousecarlFaction, SkyrimRelease.SkyrimSE) { EditorID = "HousecarlWhiterunFaction", Name = "Housecarl" });
-        master.HeadParts.Add(new HeadPart(HairNord, SkyrimRelease.SkyrimSE)
-        {
-            EditorID = "HairFemaleNord01",
-            Type = HeadPart.TypeEnum.Hair,
-            Model = new Model { File = "Actors\\Character\\Character Assets\\Hair\\FemaleHair01.nif" },
-        });
 
         var lydia = new Npc(Lydia, SkyrimRelease.SkyrimSE)
         {
@@ -106,10 +119,28 @@ public sealed class SyntheticLoadOrder : IDisposable
         };
         lydia.Race.SetTo(NordRace);
         lydia.Configuration.Flags = NpcConfiguration.Flag.Female | NpcConfiguration.Flag.Unique | NpcConfiguration.Flag.Essential;
+        // Face values of vanilla Lydia (NAM9, NAMA, QNAM, HCLF, tints).
+        lydia.FaceMorph = new NpcFaceMorph
+        {
+            NoseLongVsShort = 0.1f, JawUpVsDown = -0.3f, CheeksUpVsDown = 0.1f, CheeksForwardVsBack = 0.3f,
+            EyesUpVsDown = -0.6f, EyesInVsOut = -0.1f, BrowsUpVsDown = -0.1f, BrowsInVsOut = 0.5f,
+            BrowsForwardVsBack = 0.2f, LipsUpVsDown = 0.6f, LipsInVsOut = -0.4f, ChinNarrowVsWide = 0.2f,
+            ChinUpVsDown = -0.2f, EyesForwardVsBack = -0.2f,
+        };
+        lydia.FaceParts = new NpcFaceParts { Nose = 16, Unknown = 0xFFFFFFFF, Eyes = 9, Mouth = 16 };
+        lydia.TextureLighting = System.Drawing.Color.FromArgb(255, 206, 205, 204);
+        lydia.HairColor.SetTo(HairColorBrown);
+        lydia.TintLayers.Add(new TintLayer { Index = 24, Color = System.Drawing.Color.FromArgb(0, 206, 205, 204), InterpolationValue = 1.0f, Preset = 602 });
+        lydia.TintLayers.Add(new TintLayer { Index = 31, Color = System.Drawing.Color.FromArgb(0, 47, 32, 19), InterpolationValue = 0.61f, Preset = 661 });
         lydia.DefaultOutfit.SetTo(HousecarlOutfit);
         lydia.HeadParts.Add(new FormLink<IHeadPartGetter>(HairNord));
         lydia.Factions.Add(new RankPlacement { Faction = new FormLink<IFactionGetter>(HousecarlFaction), Rank = 0 });
         master.Npcs.Add(lydia);
+
+        var vampire = new Npc(VampireNpc, SkyrimRelease.SkyrimSE) { EditorID = "Hert", Name = "Hert", Weight = 20f };
+        vampire.Race.SetTo(NordRaceVampire);
+        vampire.Configuration.Flags = NpcConfiguration.Flag.Female;
+        master.Npcs.Add(vampire);
 
         var template = new Npc(GuardTemplate, SkyrimRelease.SkyrimSE) { EditorID = "GuardTemplate", Name = "Guard" };
         template.Race.SetTo(NordRace);
@@ -163,6 +194,99 @@ public sealed class SyntheticLoadOrder : IDisposable
         var tweakLydia = tweak.Npcs.GetOrAddAsOverride(lydia);
         tweakLydia.Weight = 80f;
         tweak.WriteToBinary(PathOf(LateTweak));
+    }
+
+    /// <summary>
+    /// Face data shaped like vanilla Nord: the race's default female head parts (head with race,
+    /// expression and chargen TRI; eyes with a texture set; the hair with its hairline as an extra
+    /// part), the tint masks, the default face texture set, a hair color, and NordRaceVampire with
+    /// NordRace as morph race and the Vampire keyword.
+    /// </summary>
+    private void AddFaceData(SkyrimMod master, Race nordRace)
+    {
+        const string assets = "Actors\\Character\\Character Assets\\";
+        master.TextureSets.Add(new TextureSet(SkinHeadFemaleNord, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "SkinHeadFemaleNord",
+            Diffuse = "Actors\\Character\\Female\\FemaleHead.dds",
+            NormalOrGloss = "Actors\\Character\\Female\\FemaleHead_msn.dds",
+            GlowOrDetailMap = "Actors\\Character\\Female\\FemaleHead_sk.dds",
+            Height = "Actors\\Character\\Male\\BlankDetailmap.dds",
+            BacklightMaskOrSpecular = "Actors\\Character\\Female\\FemaleHead_S.dds",
+        });
+        master.TextureSets.Add(new TextureSet(EyesGreenTextures, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "EyesMaleHumanBrightGreen",
+            Diffuse = "Actors\\Character\\Eyes\\EyeGreen.dds",
+            NormalOrGloss = "Actors\\Character\\Eyes\\EyeBrown_n.dds",
+            EnvironmentMaskOrSubsurfaceTint = "Actors\\Character\\Eyes\\EyeEnvironmentMask_M.dds",
+            Environment = "Cubemaps\\EyeCubeMap.dds",
+        });
+        master.Colors.Add(new ColorRecord(HairColorBrown, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "HairColor06Brown",
+            Color = System.Drawing.Color.FromArgb(255, 26, 28, 28),
+            Playable = true,
+        });
+
+        var head = new HeadPart(FemaleHeadNord, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "FemaleHeadNord",
+            Type = HeadPart.TypeEnum.Face,
+            Flags = HeadPart.Flag.Playable | HeadPart.Flag.Female,
+            Model = new Model { File = assets + "FemaleHead.nif" },
+        };
+        head.Parts.Add(new Part { PartType = Part.PartTypeEnum.RaceMorph, FileName = assets + "FemaleHeadRaces.tri" });
+        head.Parts.Add(new Part { PartType = Part.PartTypeEnum.Tri, FileName = assets + "FemaleHead.tri" });
+        head.Parts.Add(new Part { PartType = Part.PartTypeEnum.ChargenMorph, FileName = assets + "FemaleHeadCharGen.tri" });
+        master.HeadParts.Add(head);
+
+        var hairline = new HeadPart(HairLineNord, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "HairLineFemaleNord01",
+            Type = HeadPart.TypeEnum.Misc,
+            Flags = HeadPart.Flag.Female | HeadPart.Flag.IsExtraPart,
+            Model = new Model { File = assets + "Hair\\Female\\Hairline01.nif" },
+        };
+        master.HeadParts.Add(hairline);
+        master.HeadParts.First(h => h.FormKey == HairNord).ExtraParts.Add(hairline);
+
+        foreach (var (key, editorId, textures) in new[] { (EyesBrown, "FemaleEyesHumanBrown", (FormKey?)null), (EyesGreen, "FemaleEyesHumanGreenHazel", EyesGreenTextures) })
+        {
+            var eyes = new HeadPart(key, SkyrimRelease.SkyrimSE)
+            {
+                EditorID = editorId,
+                Type = HeadPart.TypeEnum.Eyes,
+                Flags = HeadPart.Flag.Playable | HeadPart.Flag.Female,
+                Model = new Model { File = assets + "EyesFemale.nif" },
+            };
+            eyes.Parts.Add(new Part { PartType = Part.PartTypeEnum.ChargenMorph, FileName = assets + "EyesFemaleChargen.tri" });
+            if (textures is { } t) eyes.TextureSet.SetTo(t);
+            master.HeadParts.Add(eyes);
+        }
+
+        nordRace.HeadData = new GenderedItem<HeadData?>(null, new HeadData
+        {
+            HeadParts = new ExtendedList<HeadPartReference>
+            {
+                new() { Number = 0, Head = new FormLinkNullable<IHeadPartGetter>(HairNord) },
+                new() { Number = 1, Head = new FormLinkNullable<IHeadPartGetter>(FemaleHeadNord) },
+                new() { Number = 2, Head = new FormLinkNullable<IHeadPartGetter>(EyesBrown) },
+            },
+            TintMasks = new ExtendedList<TintAssets>
+            {
+                new() { Index = 24, FileName = assets + "TintMasks\\SkinTone.dds", MaskType = TintAssets.TintMaskType.SkinTone },
+                new() { Index = 31, FileName = assets + "TintMasks\\FemaleHeadNord_Lips.dds", MaskType = TintAssets.TintMaskType.LipColor },
+            },
+            DefaultFaceTexture = new FormLinkNullable<ITextureSetGetter>(SkinHeadFemaleNord),
+        });
+
+        master.Keywords.Add(new Keyword(VampireKeyword, SkyrimRelease.SkyrimSE) { EditorID = "Vampire" });
+        var vampireRace = new Race(NordRaceVampire, SkyrimRelease.SkyrimSE) { EditorID = "NordRaceVampire", Name = "Nord" };
+        vampireRace.MorphRace.SetTo(nordRace);
+        vampireRace.Keywords = new ExtendedList<IFormLinkGetter<IKeywordGetter>> { new FormLink<IKeywordGetter>(VampireKeyword) };
+        vampireRace.HeadData = nordRace.HeadData;
+        master.Races.Add(vampireRace);
     }
 
     private static Race AddRace(SkyrimMod mod, FormKey key, string editorId, string name, Race? armorRace)

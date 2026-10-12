@@ -47,6 +47,11 @@ AlphaStats measure_alpha(const DdsImage& image, std::uint8_t cutoff = 128);
 
 std::string_view to_string(TextureFormat format);
 
+// Writes an RGBA8 image as a DDS file Skyrim SE can load: RGBA8 (uncompressed), BC1, BC3 (legacy
+// DX9 header) or BC7 (DX10 header), optionally with a full box-filtered mip chain.
+// Throws sns::Error(InvalidArgument) for non-RGBA8 input or an unsupported target.
+std::string encode_dds(const DdsImage& rgba, TextureFormat format, bool generate_mips);
+
 // Size in bytes of one mip level.
 std::uint64_t level_size(TextureFormat format, std::uint32_t width, std::uint32_t height);
 

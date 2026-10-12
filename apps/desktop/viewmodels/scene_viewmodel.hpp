@@ -3,11 +3,14 @@
 #include <QObject>
 #include <QTimer>
 #include <QVector3D>
+#include <QHash>
 #include <QtQuick3D/QQuick3DGeometry>
+#include <QtQuick3D/QQuick3DTextureData>
 #include <QtQml/qqmlregistration.h>
 #include <memory>
 #include <optional>
 
+#include "json_bridge.hpp"
 #include "mo2_snapshot.hpp"
 #include "outfit_editor.hpp"
 #include "worker_client.hpp"
@@ -70,6 +73,7 @@ class SceneViewModel : public QObject {
   void ready();
  private:
   void install(const rendering::CharacterScene& scene);
+  void schedule(int delay_ms);
   WorkerClient* worker_;
   OutfitEditor* outfit_;
   AppearanceEditor* appearance_ = nullptr;
@@ -91,5 +95,13 @@ class SceneViewModel : public QObject {
   float radius_ = 100;
   QQuick3DGeometry* skeleton_ = nullptr;
   QObject* resources_ = nullptr;
+  // Last catalog.getAppearance result: face/body edits rebuild the scene from it without a worker
+  // round trip (the outfit, which is what the worker resolves, did not change).
+  Json last_appearance_;
+  QString last_request_key_;
+  // GPU-side objects reused across builds when a part's data did not change.
+  QObject* pool_owner_ = nullptr;
+  QHash<QString, QQuick3DGeometry*> geometry_pool_, uv_pool_;
+  QHash<QString, QQuick3DTextureData*> texture_pool_;
 };
 } // namespace sns::app

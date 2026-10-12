@@ -1,62 +1,25 @@
 #pragma once
 
-#include <cstdint>
-#include <map>
-#include <optional>
 #include <string>
 #include <vector>
 
-#include "sns/projects/project.hpp"
+#include "sns/appearance/appearance_draft.hpp"
+#include "sns/face/face_recipe.hpp"
+#include "sns/presets/jslot_parser.hpp"
 
 namespace sns::presets {
 
-struct PresetHeadPart {
-  std::string form_id;
-  std::string plugin;
-  std::string editor_id;
-  std::string type;
-  std::string mesh_path;
+// What applying a RaceMenu preset to an NPC means for the record and the FaceGen:
+// NAM9/NAMA/weight/hair color/head parts/face texture set from the preset; tints matched to the
+// target race's masks by texture path (RaceMenu stores mask paths, not TINI indices); the skin
+// tone layer also gives QNAM; custom morphs and sculpt are baked into FaceGen.
+struct PresetMapping {
+  appearance::FaceState state;
+  std::vector<std::string> notes;            // everything that could not be carried over, in plain language
+  std::vector<std::string> runtime_only;     // RaceMenu/NiOverride data the NPC record cannot hold
+  std::size_t tints_matched = 0, tints_skipped = 0;
 };
 
-struct PresetTint {
-  int index = 0;
-  projects::ColorRgb color{255, 255, 255};
-  float alpha = 1.0f;
-  std::string texture_path;
-};
-
-struct PresetItem {
-  std::string id;
-  std::string name;
-  std::string description;
-  std::string source;  // "jslot", "donor", "snps"
-  std::string file_path;
-  std::string donor_npc_form_key;
-  std::string donor_plugin;
-  std::string donor_facegen_mesh;
-  std::string donor_facegen_tint;
-  std::string race;
-  std::string sex;  // "female", "male", "any"
-  float weight = 100.0f;
-  float height = 1.0f;
-  std::optional<projects::ColorRgb> hair_color;
-  std::optional<projects::ColorRgb> skin_tone;
-  std::vector<PresetHeadPart> head_parts;
-  std::map<std::string, float> morphs;
-  std::vector<PresetTint> tints;
-  std::vector<std::string> dependencies;
-  bool has_sculpt_data = false;
-  std::string thumbnail_path;
-};
-
-struct CompatibilityReport {
-  bool compatible = true;
-  bool exportable = true;
-  std::vector<std::string> issues;
-  std::vector<std::string> missing_dependencies;
-  std::vector<std::string> non_exportable_features;
-};
-
-projects::FaceConfig to_face_config(const PresetItem& preset, const std::string& donor_plugin = "");
+PresetMapping map_preset(const RaceMenuPreset& preset, const appearance::FaceState& baseline, const face::FaceRecipe& target);
 
 }  // namespace sns::presets

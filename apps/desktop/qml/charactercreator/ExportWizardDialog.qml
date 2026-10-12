@@ -17,7 +17,7 @@ Dialog {
     modal: true
     anchors.centerIn: Overlay.overlay
     width: 660
-    title: qsTr("Exportar Mod — Character Creator 2.0")
+    title: qsTr("Exportar Mod — Character Creator 3.0")
     standardButtons: Dialog.Close
 
     Settings {
@@ -224,7 +224,7 @@ Dialog {
 
                     if (modeA.checked) {
                         // Modo A: Outfit Patch
-                        root.studio.outfit.exportPatch(pName, oDir, eslCheck.checked, zipCheck.checked, false, "Exported via Studio")
+                        root.studio.outfit.exportPatch(pName, oDir, eslCheck.checked, zipCheck.checked, "Exported via Studio", false, true)
                     } else if (modeB.checked) {
                         // Modo B: Face Overhaul
                         root.studio.appearance.exportFaceOverhaul(pName, oDir, eslCheck.checked, zipCheck.checked)

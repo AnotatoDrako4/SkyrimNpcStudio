@@ -18,7 +18,7 @@ namespace SkyrimNpcStudio.Worker.PatchBuilder;
 internal static class ModPackager
 {
     public const string ManifestFormat = "skyrim-npc-studio/export";
-    public const int ManifestVersion = 1;
+    public const int ManifestVersion = 2;
 
     public static ExportResponse ExportOutfitPatch(
         LoadOrderSession session, CatalogQueries queries, ExportOutfitPatchRequest request, CancellationToken ct)
@@ -220,8 +220,23 @@ internal static class ModPackager
             outfitEditorId = string.IsNullOrEmpty(a.OutfitEditorId) ? null : a.OutfitEditorId,
             armors = a.Armors.Select(x => new { formKey = x.FormKey, editorId = x.EditorId, name = x.Name, plugin = x.WinningPlugin, slots = x.Slots }),
         }),
-        dependencyMode = bundledAssets.Count > 0 ? "hybrid" : "dependent",
+        // "generated": every bundled file was produced by the studio (FaceGen), nothing is copied
+        // from other mods; "dependent": the plugin only references assets of its masters.
+        dependencyMode = bundledAssets.Count > 0 ? "generated" : "dependent",
         bundledAssets,
+        generatedAssets = (built.Generated ?? []).Select(g => new { npc = g.Npc, dataPath = g.DataPath, sha256 = g.Sha256, kind = g.Kind }),
+        faces = (built.Faces ?? []).Select(f => new
+        {
+            npc = f.Npc,
+            npcEditorId = f.NpcEditorId,
+            changedFields = f.ChangedFields,
+            faceGenMode = f.Provenance.Mode,
+            parts = f.Provenance.Parts,
+            derivedFrom = f.Provenance.DerivedFrom,
+            customMorphs = f.Provenance.CustomMorphs,
+            sculptTargets = f.Provenance.SculptTargets,
+        }),
+        personalUseOnly = (built.Faces ?? []).Any(f => f.Provenance.DerivedFrom.Count > 0),
         issues = built.Issues,
         inGameVerified = false,
     };
@@ -247,7 +262,18 @@ internal static class ModPackager
         sb.AppendLine(CultureInfo.InvariantCulture, $"- {built.Assignments.Count} override(s) de NPC.");
         if (bundledAssets.Count > 0)
         {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"- {bundledAssets.Count} archivo(s) de FaceGen (mallas y texturas) empaquetados directamente en el mod.");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"- {bundledAssets.Count} archivo(s) FaceGen regenerados por Skyrim NPC Studio a partir del registro exportado (no copiados de otros mods).");
+        }
+
+        foreach (var face in built.Faces ?? [])
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"- Rostro de {face.NpcEditorId ?? face.Npc}: campos {string.Join(", ", face.ChangedFields)}; FaceGen en modo `{face.Provenance.Mode}`.");
+            if (face.Provenance.DerivedFrom.Count > 0)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  - Contiene geometría derivada de: {string.Join(", ", face.Provenance.DerivedFrom)}. Uso personal: no lo redistribuyas sin permiso de sus autores.");
+            }
         }
 
         sb.AppendLine().AppendLine("## Requisitos (masters)").AppendLine();
@@ -262,6 +288,12 @@ internal static class ModPackager
         sb.AppendLine(CultureInfo.InvariantCulture, $"1. En MO2, *Instalar mod desde archivo* y elige `{modName}.zip`.");
         sb.AppendLine(CultureInfo.InvariantCulture, $"2. Activa el mod y el plugin `{pluginName}`.");
         sb.AppendLine("3. Coloca el plugin después de sus masters y de cualquier otro mod que modifique a estos NPC.");
+        if (bundledAssets.Count > 0)
+        {
+            sb.AppendLine("4. En el panel izquierdo de MO2, coloca este mod DEBAJO (prioridad mayor) de cualquier mod que aporte FaceGen para los mismos NPC; si no, el juego usará la cabeza del otro mod y puede verse la cara oscura.");
+        }
+
+        sb.AppendLine().AppendLine("Estado: generado y verificado por el estudio; pendiente de comprobar dentro del juego.");
         return sb.ToString();
     }
 

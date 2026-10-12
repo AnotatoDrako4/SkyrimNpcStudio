@@ -34,7 +34,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             ProtocolMinor = Protocol.Minor,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
-            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "appearance.donor", "catalog.headParts"],
+            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul"],
         };
     }
 
@@ -79,13 +79,13 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     public AppearanceResponse GetAppearance(AppearanceRequest request) =>
         Guard(() => state.Read(c => AppearanceQueries.Get(c.Session, c.Queries, request)));
 
-    [JsonRpcMethod(Methods.GetDonorAppearance)]
-    public DonorAppearanceResponse GetDonorAppearance(DonorAppearanceRequest request) =>
-        Guard(() => state.Read(c => AppearanceQueries.GetDonor(c.Session, c.Queries, request)));
-
     [JsonRpcMethod(Methods.SearchHeadParts)]
     public SearchHeadPartsResponse SearchHeadParts(SearchHeadPartsRequest request) =>
         Guard(() => state.Read(c => c.Queries.SearchHeadParts(request)));
+
+    [JsonRpcMethod(Methods.GetFaceRecipe)]
+    public FaceRecipeResponse GetFaceRecipe(FaceRecipeRequest request) =>
+        Guard(() => state.Read(c => FaceRecipeQueries.Get(c.Session, c.Queries, request)));
 
     [JsonRpcMethod(Methods.ValidateOutfit)]
     public OutfitValidateResponse ValidateOutfit(OutfitValidateRequest request) =>

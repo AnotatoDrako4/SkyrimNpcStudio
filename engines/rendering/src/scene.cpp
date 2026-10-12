@@ -30,16 +30,39 @@ Vec3 normalized(Vec3 v) {
   return len > 1e-8f ? Vec3{v.x / len, v.y / len, v.z / len} : Vec3{0, 0, 1};
 }
 
-std::optional<nif::MeshFile> load(const assets::AssetResolver& resolver, const std::string& path, CharacterScene& scene,
-                                  const std::string& subject) {
+bool overlaid(const SceneOptions& options, const std::string& key) {
+  return options.overlay && options.overlay->contains(key);
+}
+
+// Bytes of a Data path: the build's overlay first (generated draft files), then MO2/BSA.
+std::optional<std::string> read_asset(const assets::AssetResolver& resolver, const SceneOptions& options, const std::string& path) {
+  if (options.overlay) {
+    if (const auto it = options.overlay->find(text::data_path_key(path)); it != options.overlay->end() && it->second) {
+      return *it->second;
+    }
+  }
+  return resolver.read(path);
+}
+
+std::optional<nif::MeshFile> load(const assets::AssetResolver& resolver, const SceneOptions& options, const std::string& path,
+                                  CharacterScene& scene, const std::string& subject) {
+  const auto key = text::data_path_key(path);
+  const bool generated = overlaid(options, key);
   try {
-    auto bytes = resolver.read(path);
+    if (!generated && options.cache) {
+      if (const auto cached = options.cache->mesh(key)) {
+        for (const auto& w : cached->warnings) issue(scene, "info", "MeshWarning", w, path);
+        return *cached;
+      }
+    }
+    auto bytes = read_asset(resolver, options, path);
     if (!bytes) {
       issue(scene, "warning", "MeshNotFound", "Mesh not found as loose file or in any loaded BSA: " + path, subject);
       return std::nullopt;
     }
     auto mesh = nif::load_mesh(*bytes, path);
     for (const auto& w : mesh.warnings) issue(scene, "info", "MeshWarning", w, path);
+    if (!generated && options.cache) options.cache->put_mesh(key, std::make_shared<const nif::MeshFile>(mesh));
     return mesh;
   } catch (const Error& e) {
     issue(scene, "warning", "MeshUnreadable", e.what(), subject);
@@ -407,7 +430,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   std::optional<nif::Skeleton> skeleton;
   if (!appearance.skeleton.empty()) {
     try {
-      if (auto bytes = resolver.read(appearance.skeleton)) {
+      if (auto bytes = read_asset(resolver, options, appearance.skeleton)) {
         skeleton = nif::load_skeleton(*bytes, appearance.skeleton);
         scene.skeleton_bones = skeleton->bones.size();
         if (options.include_skeleton) {
@@ -433,18 +456,18 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     check_cancel();
     if (path.empty()) return;
     ++scene.stats.meshes_requested;
-    auto mesh = load(resolver, path, scene, label);
+    auto mesh = load(resolver, options, path, scene, label);
     if (!mesh) return;
     ++scene.stats.meshes_loaded;
-    const auto location = describe(resolver.locate(path));
+    const auto location = overlaid(options, text::data_path_key(path)) ? std::string("generated (draft)") : describe(resolver.locate(path));
     std::optional<nif::MeshFile> thin;
     const auto thin_path = weight_variant(path, 0);
     if (slider && !thin_path.empty() && text::to_lower_ascii(thin_path) != text::to_lower_ascii(path)) {
-      thin = load(resolver, thin_path, scene, label);
+      thin = load(resolver, options, thin_path, scene, label);
     }
     std::vector<std::string> collision;
     if (!mesh->physics_xml.empty()) {
-      if (auto xml = resolver.read(mesh->physics_xml)) collision = smp_collision_shapes(*xml);
+      if (auto xml = read_asset(resolver, options, mesh->physics_xml)) collision = smp_collision_shapes(*xml);
       else issue(scene, "info", "PhysicsXmlMissing", "SMP physics file named by the mesh was not found: " + mesh->physics_xml, path);
     }
     std::vector<std::string> hidden, extra_bones, missing_bones;
@@ -591,11 +614,34 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     TextureInfo info;
     info.path = req.key;
     info.normal_map = req.normal;
-    info.location = describe(resolver.locate(req.key));
+    const auto data_key = text::data_path_key(req.key);
+    const bool generated = overlaid(options, data_key);
+    info.location = generated ? std::string("generated (draft)") : describe(resolver.locate(req.key));
+    const std::uint32_t first_cap = req.normal ? options.normal_max_dimension : options.diffuse_max_dimension;
+    const auto cache_key = data_key + (req.normal ? "|n|" : "|c|") + std::to_string(first_cap);
+    if (!generated && options.cache) {
+      if (const auto cached = options.cache->texture(cache_key);
+          cached && texture_bytes + cached->image->data.size() <= options.texture_budget_bytes) {
+        const auto& image = cached->image;
+        if (image->width != image->source_width || image->height != image->source_height) ++scene.stats.textures_reduced;
+        texture_bytes += image->data.size();
+        info.width = image->width;
+        info.height = image->height;
+        info.source_width = image->source_width;
+        info.source_height = image->source_height;
+        info.mip_level = image->mip_level;
+        info.format = cached->source_format;
+        info.alpha = cached->alpha;
+        scene.textures[req.key] = image;
+        ++scene.stats.textures_loaded;
+        scene.texture_info[req.key] = std::move(info);
+        continue;
+      }
+    }
     try {
-      auto bytes = resolver.read(req.key);
+      auto bytes = read_asset(resolver, options, req.key);
       if (!bytes) throw Error(ErrorKind::NotFound, "Texture not found as loose file or in any loaded BSA");
-      std::uint32_t cap = req.normal ? options.normal_max_dimension : options.diffuse_max_dimension;
+      std::uint32_t cap = first_cap;
       std::shared_ptr<textures::DdsImage> image;
       for (;;) {
         const auto parsed = textures::parse_dds(*bytes, cap);
@@ -617,6 +663,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       info.mip_level = image->mip_level;
       info.format = std::string(textures::to_string(textures::parse_dds(*bytes, 1).format));
       info.alpha = textures::measure_alpha(*image);
+      if (!generated && options.cache && cap == first_cap) options.cache->put_texture(cache_key, {image, info.format, info.alpha});
       scene.textures[req.key] = std::move(image);
       ++scene.stats.textures_loaded;
     } catch (const Error& e) {
@@ -710,6 +757,56 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   issue(scene, "info", "PreviewFidelity",
         "Reference pose preview; Skyrim shaders, animations and SMP physics are not reproduced", appearance.npc_form_key);
   return scene;
+}
+
+// ------------------------------------------------------------------------------------- cache
+
+std::shared_ptr<const nif::MeshFile> SceneCache::mesh(const std::string& key) const {
+  std::lock_guard lock(mutex_);
+  const auto it = meshes_.find(key);
+  return it == meshes_.end() ? nullptr : it->second;
+}
+
+void SceneCache::put_mesh(const std::string& key, std::shared_ptr<const nif::MeshFile> mesh) {
+  std::lock_guard lock(mutex_);
+  meshes_[key] = std::move(mesh);
+}
+
+std::optional<SceneCache::Texture> SceneCache::texture(const std::string& key) const {
+  std::lock_guard lock(mutex_);
+  const auto it = textures_.find(key);
+  if (it == textures_.end()) return std::nullopt;
+  return it->second;
+}
+
+void SceneCache::put_texture(const std::string& key, Texture texture) {
+  if (!texture.image) return;
+  std::lock_guard lock(mutex_);
+  const auto size = texture.image->data.size();
+  if (texture_bytes_ + size > budget_) {
+    textures_.clear();  // simple and predictable: start over rather than evicting piecemeal
+    texture_bytes_ = 0;
+  }
+  if (const auto it = textures_.find(key); it != textures_.end()) texture_bytes_ -= it->second.image->data.size();
+  texture_bytes_ += size;
+  textures_[key] = std::move(texture);
+}
+
+void SceneCache::clear() {
+  std::lock_guard lock(mutex_);
+  meshes_.clear();
+  textures_.clear();
+  texture_bytes_ = 0;
+}
+
+std::size_t SceneCache::mesh_count() const {
+  std::lock_guard lock(mutex_);
+  return meshes_.size();
+}
+
+std::size_t SceneCache::texture_count() const {
+  std::lock_guard lock(mutex_);
+  return textures_.size();
 }
 
 }  // namespace sns::rendering

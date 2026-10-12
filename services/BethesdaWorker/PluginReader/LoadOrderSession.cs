@@ -51,7 +51,16 @@ internal sealed class LoadOrderSession : IDisposable
         MasterStyles = styles;
         _byKey = plugins.ToDictionary(p => p.ModKey);
         LinkCache = plugins.Select(p => (ISkyrimModGetter)p.Mod).ToImmutableLinkCache();
+        _official = new Lazy<ILinkCache<ISkyrimMod, ISkyrimModGetter>>(() => plugins
+            .Where(p => NpcCatalog.FaceRecipeQueries.IsBaseGameMaster(p.ModKey))
+            .Select(p => (ISkyrimModGetter)p.Mod)
+            .ToImmutableLinkCache());
     }
+
+    private readonly Lazy<ILinkCache<ISkyrimMod, ISkyrimModGetter>> _official;
+
+    /// <summary>Records as the five base-game masters define them (no mod or Creation Club overrides).</summary>
+    public ILinkCache<ISkyrimMod, ISkyrimModGetter> OfficialLinkCache => _official.Value;
 
     public IReadOnlyList<SessionPlugin> Plugins { get; }
 

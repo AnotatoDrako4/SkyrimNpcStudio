@@ -76,7 +76,7 @@ public sealed class RpcProtocolTests : IAsyncDisposable
             CacheDirectory = Path.Combine(lo.DataDirectory, "_cache"),
             Plugins = lo.LoadOrder.Select(p => new LoadOrderEntry { FileName = p.FileName, Path = p.Path }).ToArray(),
         }, ct);
-        Assert.Equal(3, index.NpcCount);
+        Assert.Equal(4, index.NpcCount);
 
         var search = await _client.InvokeWithParameterObjectAsync<NpcSearchResponse>(Methods.SearchNpcs, new NpcSearchRequest { Text = "lydia" }, ct);
         Assert.Equal("HousecarlWhiterun", Assert.Single(search.Items).EditorId);

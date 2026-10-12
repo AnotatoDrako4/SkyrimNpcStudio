@@ -84,23 +84,18 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
                                            "winningMod", "slots", "slotMask", "armorType", "nonPlayable", "maleModel",
                                            "femaleModel", "addonCount"},
                                           this)) {
-  outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, this);
-  appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, this);
+  history_ = new EditHistory(this);
+  outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, draft_, history_, this);
+  appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
 
+  // Project save/open: the face travels with the outfit in the same .snps.
   outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {
-    if (appearance_ && appearance_->npc_form_key().toStdString() == form_key && appearance_->draft().is_face_dirty()) {
-      return appearance_->draft().face().config;
-    }
+    if (appearance_ && appearance_->npc_form_key().toStdString() == form_key) return appearance_->face_config_for_project();
     return std::nullopt;
   });
-
   outfit_->set_face_loaded_handler([this](const std::string& form_key, const std::optional<projects::FaceConfig>& face) {
-    if (appearance_) {
-      projects::NpcTarget target;
-      target.form_key = form_key;
-      appearance_->set_target(target, face);
-    }
+    if (appearance_) appearance_->queue_saved_face(form_key, face);
   });
 
   connect(worker_, &WorkerClient::logLine, this,
@@ -579,13 +574,18 @@ void StudioController::selectNpc(const QString& form_key) {
     npc_ = details;
     npc_loading_ = false;
     emit npcChanged();
-    outfit_->setTarget(details);
     const auto sum = details.value("summary").toMap();
     projects::NpcTarget target{
         .form_key = ss(sum.value("formKey").toString()),
         .editor_id = ss(sum.value("editorId").toString()),
         .name = ss(sum.value("name").toString()),
+        .winning_plugin = ss(sum.value("winningPlugin").toString()),
+        .override_count = sum.value("overrideCount").toInt(),
     };
+    // A new NPC starts a new draft and a new history (face, body and outfit together).
+    draft_.set_target(target);
+    history_->clear();
+    outfit_->setTarget(details);
     appearance_->set_target(target);
   }, [this, form_key](int, const QString& message, const Json&) {
     if (form_key != pending_npc_) return;
