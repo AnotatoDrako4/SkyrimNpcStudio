@@ -109,6 +109,7 @@ ColumnLayout {
     }
 
     ListView {
+        id: armorListView
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
@@ -116,7 +117,7 @@ ColumnLayout {
         model: root.studio.armorResults
         ScrollBar.vertical: ScrollBar {}
 
-        delegate: Rectangle {
+        delegate: ItemDelegate {
             id: card
             required property int index
             required property string formKey
@@ -128,30 +129,26 @@ ColumnLayout {
             required property string slots
             required property string armorType
             required property bool nonPlayable
-            required property bool nifFound
-            required property bool hasSmp
+            property bool nifFound: (typeof model.nifFound !== "undefined") ? Boolean(model.nifFound) : false
+            property bool hasSmp: (typeof model.hasSmp !== "undefined") ? Boolean(model.hasSmp) : false
 
-            width: ListView.view.width - 6
+            width: armorListView.width - 6
             x: 3
-            implicitHeight: cardContent.implicitHeight + 12
-            radius: 4
-            color: cardMouse.containsMouse ? Theme.panelAlt : Theme.panel
-            border.color: cardMouse.containsMouse ? Theme.accent : Theme.border
-            border.width: 1
+            padding: 8
+            hoverEnabled: true
 
-            MouseArea {
-                id: cardMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: root.previewRequested(card.formKey)
-                onDoubleClicked: root.studio.outfit.addPiece(root.studio.armorResults.get(card.index), true)
+            background: Rectangle {
+                radius: 4
+                color: card.hovered ? Theme.panelAlt : Theme.panel
+                border.color: card.hovered ? Theme.accent : Theme.border
+                border.width: 1
             }
 
-            ColumnLayout {
-                id: cardContent
-                anchors.fill: parent
-                anchors.margins: 6
-                spacing: 4
+            onClicked: root.previewRequested(card.formKey)
+            onDoubleClicked: root.studio.outfit.addPiece(root.studio.armorResults.get(card.index), true)
+
+            contentItem: ColumnLayout {
+                spacing: 5
 
                 // Fila 1: Nombre, FormID y Badge SMP
                 RowLayout {
@@ -159,7 +156,7 @@ ColumnLayout {
                     spacing: 6
 
                     Text {
-                        text: card.name.length > 0 ? card.name : card.editorId
+                        text: card.name && card.name.length > 0 ? card.name : card.editorId
                         color: Theme.text
                         font.pixelSize: Theme.normal
                         font.bold: true
@@ -193,7 +190,7 @@ ColumnLayout {
                         Text {
                             id: formIdText
                             anchors.centerIn: parent
-                            text: card.formId || card.formKey.split(":")[0]
+                            text: card.formId && card.formId.length > 0 ? card.formId : (card.formKey ? card.formKey.split(":")[0] : "")
                             color: Theme.textDim
                             font.pixelSize: 10
                             font.family: "Consolas, monospace"
@@ -222,7 +219,7 @@ ColumnLayout {
                     }
 
                     Rectangle {
-                        visible: card.armorType.length > 0
+                        visible: card.armorType && card.armorType.length > 0
                         implicitWidth: typeTag.implicitWidth + 6
                         implicitHeight: 16
                         radius: 2
@@ -240,7 +237,7 @@ ColumnLayout {
                     }
 
                     Text {
-                        text: "📦 " + (card.winningMod.length > 0 ? card.winningMod : card.winningPlugin)
+                        text: "📦 " + (card.winningMod && card.winningMod.length > 0 ? card.winningMod : card.winningPlugin)
                         color: Theme.textDim
                         font.pixelSize: 10
                         elide: Text.ElideMiddle
@@ -291,3 +288,4 @@ ColumnLayout {
         }
     }
 }
+

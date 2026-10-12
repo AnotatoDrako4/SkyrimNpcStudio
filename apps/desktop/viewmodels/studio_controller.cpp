@@ -82,7 +82,7 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
                                         this)),
       armor_results_(new VariantListModel({"formKey", "formId", "name", "editorId", "originPlugin", "winningPlugin",
                                            "winningMod", "slots", "slotMask", "armorType", "nonPlayable", "maleModel",
-                                           "femaleModel", "addonCount"},
+                                           "femaleModel", "addonCount", "nifFound", "hasSmp"},
                                           this)) {
   history_ = new EditHistory(this);
   outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, draft_, history_, this);
