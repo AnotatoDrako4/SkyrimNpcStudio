@@ -1,5 +1,7 @@
 #include "sns/assets/asset_resolver.hpp"
 
+#include <algorithm>
+#include <fstream>
 #include <unordered_set>
 
 #include "sns/core/error.hpp"
@@ -79,9 +81,52 @@ AssetResolver::AssetResolver(const mo2::VirtualFileSystem& vfs, const std::vecto
       archived_files_ += archive->file_count();
       archives_.push_back({ref, std::move(archive)});
     } catch (const Error& e) {
-      issues_.push_back({ref.name, e.what()});
+      auto diagnosis = diagnose_archive(ref.path);
+      issues_.push_back({ref.name, diagnosis.corrupt ? "ArchiveCorrupt" : "ArchiveUnreadable",
+                         diagnosis.corrupt ? diagnosis.message : std::string(e.what())});
     }
   }
+}
+
+ArchiveDiagnosis diagnose_archive(const std::filesystem::path& path) {
+  ArchiveDiagnosis d;
+  const auto name = text::path_to_utf8(path.filename());
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  std::ifstream in(path, std::ios::binary);
+  if (ec || !in) {
+    d.message = name + " cannot be opened";
+    return d;
+  }
+  // Header plus two 64 KiB samples (start and middle): enough to tell a zero-filled file apart.
+  std::string head(16, '\0');
+  in.read(head.data(), 16);
+  head.resize(static_cast<std::size_t>(in.gcount()));
+  std::size_t zeros = 0, sampled = 0;
+  for (const std::uint64_t at : {std::uint64_t{0}, size / 2}) {
+    std::string block(64 * 1024, '\0');
+    in.clear();
+    in.seekg(static_cast<std::streamoff>(at));
+    in.read(block.data(), static_cast<std::streamsize>(block.size()));
+    const auto got = static_cast<std::size_t>(in.gcount());
+    zeros += static_cast<std::size_t>(std::count(block.begin(), block.begin() + static_cast<std::ptrdiff_t>(got), '\0'));
+    sampled += got;
+  }
+  std::string hex;
+  for (const char c : head.substr(0, 8)) {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    hex += digits[(static_cast<unsigned char>(c) >> 4) & 0xF];
+    hex += digits[static_cast<unsigned char>(c) & 0xF];
+  }
+  d.corrupt = head.size() < 4 || head.compare(0, 4, std::string("BSA\0", 4)) != 0;
+  if (!d.corrupt) return d;
+  const auto zero_pct = sampled ? 100 * zeros / sampled : 100;
+  d.message = name + " is not a valid BSA: header bytes " + hex + " instead of 42534100 ('BSA'), " +
+              std::to_string(size / (1024 * 1024)) + " MB, " + std::to_string(zero_pct) +
+              "% of sampled bytes are zero. The file is damaged or incomplete; only resources inside it are "
+              "affected. Repair it outside the studio (Steam: Properties > Installed Files > Verify integrity of "
+              "game files). The studio never modifies game files.";
+  return d;
 }
 
 std::optional<AssetLocation> AssetResolver::locate(std::string_view data_path) const {

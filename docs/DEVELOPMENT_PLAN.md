@@ -36,7 +36,8 @@ Ver [NIF_PIPELINE.md](NIF_PIPELINE.md): arquitectura, archivos, compilación, pr
 - [x] Peso `_0`/`_1` validado por topología y skinning CPU estático
 - [x] Cámaras, orbit/pan/zoom, picking, ocultación, UV, huesos y original/borrador
 - [x] Diagnósticos, cancelación, liberación de recursos y límites de memoria
-- [x] Fixtures y carga real de Lydia (40 geometrías, 25 texturas)
+- [x] Fixtures y carga real de Lydia (29 geometrías, 41 texturas tras resolver el orden de equipamiento)
+- [x] Auditoría del renderizador: transparencias explícitas, FaceTint compuesto, formas SMP no dibujadas, inspector y diagnósticos, 5 capturas antes/después
 - [ ] Animación/skinning dinámico, normal maps model-space, TXST y shaders Bethesda
 - [ ] Adaptadores de herencia por plantilla y cuerpos personalizados
 

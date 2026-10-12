@@ -35,7 +35,10 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/SectionHeader.qml
     qml/components/KeyValue.qml
     qml/components/IssueList.qml
-    qml/components/StatusBadge.qml)
+    qml/components/StatusBadge.qml
+  RESOURCES
+    qml/shaders/alpha_channel.vert
+    qml/shaders/alpha_channel.frag)
 
 # The generated QML type registration includes view model headers by file name.
 target_include_directories(SkyrimNpcStudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/viewmodels)

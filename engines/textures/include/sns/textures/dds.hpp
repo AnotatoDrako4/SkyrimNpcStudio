@@ -17,15 +17,33 @@ struct DdsImage {
   TextureFormat format = TextureFormat::RGBA8;
   bool srgb = false;
   bool cubemap = false;  // only the first face is kept
-  bool has_alpha = false;
-  std::string data;      // mip 0
+  bool has_alpha = false;  // the FORMAT can store alpha; see measure_alpha() for real usage
+  std::string data;        // the selected mip level
+  std::uint32_t source_width = 0;   // dimensions of mip 0 in the file
+  std::uint32_t source_height = 0;
+  std::uint32_t mip_level = 0;      // which stored level `data` holds
 };
 
 inline constexpr std::uint32_t kMaxTextureDimension = 16384;
 
-// Throws sns::Error(Parse) for malformed or unsupported files.
-DdsImage parse_dds(std::string_view bytes);
+// Throws sns::Error(Parse) for malformed or unsupported files. With max_dimension > 0 the first
+// stored mip level whose larger side fits is returned (no resampling: real file data).
+DdsImage parse_dds(std::string_view bytes, std::uint32_t max_dimension = 0);
 DdsImage decode_rgba(const DdsImage& image, bool normal_map = false);
+
+// Box-filter halving of an RGBA8 image until it fits (for files without a usable mip chain).
+DdsImage downscale_rgba(const DdsImage& image, std::uint32_t max_dimension);
+
+struct AlphaStats {
+  bool uses_alpha = false;            // at least one texel below 250
+  std::uint8_t min = 255;
+  float mean = 255.0f;
+  float translucent_fraction = 0.0f;  // texels below 250
+  float below_cutoff_fraction = 0.0f; // texels below the requested cutoff
+};
+
+// Measures the alpha channel of decoded RGBA8 data (BC1 punch-through included).
+AlphaStats measure_alpha(const DdsImage& image, std::uint8_t cutoff = 128);
 
 std::string_view to_string(TextureFormat format);
 

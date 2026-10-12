@@ -137,7 +137,7 @@ Rectangle {
                         Layout.leftMargin: 10
                         Layout.rightMargin: 10
                         Text { text: modelData.type ?? ""; color: Theme.accent; font.pixelSize: Theme.small; Layout.preferredWidth: 80 }
-                        Text { text: (modelData.editorId || modelData.formKey); color: Theme.text; font.pixelSize: Theme.small; Layout.fillWidth: true }
+                        Text { text: (modelData.editorId || modelData.formKey) ?? ""; color: Theme.text; font.pixelSize: Theme.small; Layout.fillWidth: true }
                         Text { text: "[" + modelData.formKey + "]"; color: Theme.textDim; font.family: Theme.mono; font.pixelSize: Theme.small }
                     }
                 }

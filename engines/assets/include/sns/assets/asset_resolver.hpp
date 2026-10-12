@@ -36,12 +36,21 @@ std::vector<ArchiveRef> archive_load_order(const mo2::Profile& profile, const mo
                                            const mo2::VirtualFileSystem& vfs,
                                            const std::optional<std::filesystem::path>& my_games_override = std::nullopt);
 
+// Looks at a BSA that failed to open: a file whose header is not "BSA\0" is reported as damaged,
+// with evidence (header bytes, size, share of zero bytes) and an external repair recommendation.
+struct ArchiveDiagnosis {
+  bool corrupt = false;
+  std::string message;
+};
+ArchiveDiagnosis diagnose_archive(const std::filesystem::path& path);
+
 // Resolves Data-relative assets like the game: a loose file (from MO2's virtual Data folder) always
 // wins; otherwise the last loaded archive that contains it. Thread-safe for reads once built.
 class AssetResolver {
  public:
   struct OpenIssue {
     std::string archive;
+    std::string code;  // "ArchiveCorrupt" (damaged file) or "ArchiveUnreadable" (unsupported/other)
     std::string message;
   };
 

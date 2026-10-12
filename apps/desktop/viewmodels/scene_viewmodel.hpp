@@ -6,6 +6,7 @@
 #include <QtQuick3D/QQuick3DGeometry>
 #include <QtQml/qqmlregistration.h>
 #include <memory>
+#include <optional>
 
 #include "mo2_snapshot.hpp"
 #include "outfit_editor.hpp"
@@ -19,6 +20,9 @@ class SceneViewModel : public QObject {
   QML_ELEMENT
   QML_UNCREATABLE("Owned by StudioController")
   Q_PROPERTY(QVariantList parts READ parts NOTIFY changed)
+  // id -> bool. Kept apart from `parts` so that showing or hiding a part never rebuilds the
+  // Repeater3D delegates (that would release and re-create their GPU resources).
+  Q_PROPERTY(QVariantMap visibility READ visibility NOTIFY visibilityChanged)
   Q_PROPERTY(QVariantList issues READ issues NOTIFY changed)
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
   Q_PROPERTY(QVector3D center READ center NOTIFY changed)
@@ -32,6 +36,7 @@ class SceneViewModel : public QObject {
   SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, std::function<SnapshotPtr()> snapshot, QObject* parent);
   ~SceneViewModel() override;
   QVariantList parts() const { return parts_; }
+  QVariantMap visibility() const { return visibility_; }
   QVariantList issues() const { return issues_; }
   QVariantMap stats() const { return stats_; }
   QVector3D center() const { return center_; }
@@ -48,8 +53,16 @@ class SceneViewModel : public QObject {
   Q_INVOKABLE void setVisible(const QString& id, bool visible);
   Q_INVOKABLE void clear();
   Q_INVOKABLE QVariantMap selectedBounds() const;
+  // Inspector data of the selected part (empty when nothing is selected).
+  Q_INVOKABLE QVariantMap selectedPart() const;
+  // Every part back to its default visibility (shapes the game does not draw stay hidden).
+  Q_INVOKABLE void restoreVisibility();
+  // Preview-only armor list (FormKeys; [] = skin only); null follows the outfit editor again.
+  // Used by viewport verification; it never touches the project, the outfit or undo/redo.
+  Q_INVOKABLE void setPreviewArmor(const QVariant& formKeys);
  signals:
   void changed();
+  void visibilityChanged();
   void loadingChanged();
   void selectionChanged();
   void originalChanged();
@@ -68,8 +81,10 @@ class SceneViewModel : public QObject {
   bool original_ = false;
   QString status_;
   QString selected_;
+  std::optional<QStringList> preview_armor_;
   QVariantList parts_, issues_;
   QVariantMap stats_;
+  QVariantMap visibility_;
   QVector3D center_;
   float radius_ = 100;
   QQuick3DGeometry* skeleton_ = nullptr;

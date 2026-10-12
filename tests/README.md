@@ -26,6 +26,15 @@ Resultado de referencia (2026-10-11, perfil real "Default"): 415 plugins activos
 
 ## Datos
 
-El test local también construye la escena real de Lydia y comprueba FaceGen de origen, geometrías, texturas y esqueleto. `scripts/smoke-test.ps1 -VerifyViewport` comprueba imagen y controles nativos; ver `docs/NIF_PIPELINE.md`.
+El test local también construye la escena real de Lydia y comprueba FaceGen de origen, geometrías, texturas y esqueleto. `"[diag]"` vuelca cada pieza (texturas efectivas y su origen, modo alfa y motivo, huesos, límites) y las formas en bruto de cada NIF; `SNS_LOCAL_NPC` elige otro NPC.
+
+Visor nativo (D3D11), ver `docs/NIF_PIPELINE.md`:
+
+```powershell
+.\scripts\smoke-test.ps1 -Instance D:\Apps\ModOrganizer.ini -MO2Profile Default -Npc 0A2C8E:Skyrim.esm `
+    -VerifyViewport -ShowWindow -CaptureSet out\visual\after
+```
+
+`-ShowWindow` hace falta para probar la selección con el ratón (`View3D.pick`); sin ella ese paso sale como *SKIPPED*. `-CaptureSet` guarda 5 capturas con la misma cámara (`1-face`, `2-hair`, `3-body`, `4-armor`, `5-outfit`) y `captures.txt` con píxeles cubiertos y casi blancos.
 
 No se incluye ningún asset propietario. Los IDs de algunos registros sintéticos imitan a los vanilla (Lydia `0A2C8E`, DefaultRace `000019`) para que los escenarios se lean como reales; el `Skyrim.esm` sintético se escribe desactivando la comprobación de rango bajo de FormID solo para él.

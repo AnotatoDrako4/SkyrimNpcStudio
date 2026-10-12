@@ -33,6 +33,22 @@ nifly::MatTransform global_transform(const nifly::NifFile& nif, nifly::NiAVObjec
   return xf;
 }
 
+// NiAVObject flag bit 0 hides the object and its whole subtree.
+bool hidden_in_chain(const nifly::NifFile& nif, nifly::NiAVObject* object) {
+  if (object->flags & 0x1) return true;
+  for (auto* parent = nif.GetParentNode(object); parent; parent = nif.GetParentNode(parent)) {
+    if (parent->flags & 0x1) return true;
+  }
+  return false;
+}
+
+Vec3 sub(const Vec3& a, const Vec3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+float dot(const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3 unit(const Vec3& v) {
+  const float len = std::sqrt(dot(v, v));
+  return len > 1e-12f ? Vec3{v.x / len, v.y / len, v.z / len} : Vec3{};
+}
+
 void load_nif(nifly::NifFile& nif, std::string_view bytes, std::string_view label) {
   if (bytes.size() > 64ull * 1024 * 1024)
     throw Error(ErrorKind::Parse, "NIF exceeds the 64 MiB parser limit");
@@ -85,10 +101,51 @@ std::string normalize_texture_path(std::string_view path) {
   return key;
 }
 
+bool orient_tangent_basis(Shape& s) {
+  const auto n = s.positions.size();
+  if (s.tangents.size() != n || s.bitangents.size() != n || s.uvs.size() != n || s.indices.size() < 3) return false;
+  // Compare both stored vectors with the geometric dP/du of each triangle (sampled).
+  double along_tangent = 0, along_bitangent = 0;
+  const std::size_t step = std::max<std::size_t>(1, s.indices.size() / 3 / 4000) * 3;
+  for (std::size_t t = 0; t + 2 < s.indices.size(); t += step) {
+    const auto i0 = s.indices[t], i1 = s.indices[t + 1], i2 = s.indices[t + 2];
+    const Vec3 e1 = sub(s.positions[i1], s.positions[i0]);
+    const Vec3 e2 = sub(s.positions[i2], s.positions[i0]);
+    const float du1 = s.uvs[i1].u - s.uvs[i0].u, dv1 = s.uvs[i1].v - s.uvs[i0].v;
+    const float du2 = s.uvs[i2].u - s.uvs[i0].u, dv2 = s.uvs[i2].v - s.uvs[i0].v;
+    const float r = du1 * dv2 - du2 * dv1;
+    if (std::abs(r) < 1e-12f) continue;  // degenerate UVs carry no orientation
+    const Vec3 dpdu = unit({(e1.x * dv2 - e2.x * dv1) / r, (e1.y * dv2 - e2.y * dv1) / r, (e1.z * dv2 - e2.z * dv1) / r});
+    const Vec3 t_avg = unit({s.tangents[i0].x + s.tangents[i1].x + s.tangents[i2].x,
+                             s.tangents[i0].y + s.tangents[i1].y + s.tangents[i2].y,
+                             s.tangents[i0].z + s.tangents[i1].z + s.tangents[i2].z});
+    const Vec3 b_avg = unit({s.bitangents[i0].x + s.bitangents[i1].x + s.bitangents[i2].x,
+                             s.bitangents[i0].y + s.bitangents[i1].y + s.bitangents[i2].y,
+                             s.bitangents[i0].z + s.bitangents[i1].z + s.bitangents[i2].z});
+    along_tangent += std::abs(dot(dpdu, t_avg));
+    along_bitangent += std::abs(dot(dpdu, b_avg));
+  }
+  if (along_bitangent > along_tangent * 1.2) {
+    std::swap(s.tangents, s.bitangents);
+    s.tangents_swapped = true;
+  }
+  return s.tangents_swapped;
+}
+
 MeshFile load_mesh(std::string_view bytes, std::string_view label) {
   nifly::NifFile nif;
   load_nif(nif, bytes, label);
   MeshFile file;
+  if (auto* root = nif.GetRootNode()) {
+    for (auto& ref : root->extraDataRefs) {
+      const auto* data = nif.GetHeader().GetBlock<nifly::NiStringExtraData>(ref);
+      if (data && text::iequals_ascii(data->name.get(), "HDT Skinned Mesh Physics Object")) {
+        auto xml = text::data_path_key(text::trim(data->stringData.get()));
+        if (xml.starts_with("data\\")) xml.erase(0, 5);
+        file.physics_xml = xml;
+      }
+    }
+  }
 
   for (auto* shape : nif.GetShapes()) {
     Shape s;
@@ -102,6 +159,8 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
     }
 
     s.skinned = shape->IsSkinned();
+    s.hidden = hidden_in_chain(nif, shape);
+    if (auto* parent = nif.GetParentNode(shape); parent && parent != nif.GetRootNode()) s.parent_node = parent->name.get();
     nifly::MatTransform to_root;
     if (s.skinned) {
       nifly::MatTransform global_to_skin;
@@ -112,6 +171,7 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
     } else {
       to_root = global_transform(nif, shape);
     }
+    s.to_root = from(to_root);
 
     s.positions.reserve(verts->size());
     for (const auto& v : *verts) {
@@ -142,7 +202,21 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
       s.indices.insert(s.indices.end(), {t.p1, t.p2, t.p3});
     }
 
+    orient_tangent_basis(s);
+
     if (auto* shader = nif.GetShader(shape)) {
+      s.has_shader = true;
+      s.shader_block = shader->GetBlockName();
+      s.has_texture_set = shader->HasTextureSet();
+      if (const auto* bs = dynamic_cast<const nifly::BSShaderProperty*>(shader)) {
+        s.shader_flags1 = bs->shaderFlags1;
+        s.shader_flags2 = bs->shaderFlags2;
+      }
+      s.material_alpha = shader->GetAlpha();
+      const auto offset = shader->GetUVOffset();
+      const auto scale = shader->GetUVScale();
+      s.uv_offset = {offset.u, offset.v};
+      s.uv_scale = {scale.u, scale.v};
       s.shader_type = shader->GetShaderType();
       s.double_sided = shader->IsDoubleSided();
       s.model_space_normals = shader->IsModelSpace();
@@ -154,6 +228,7 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
       s.textures[slot] = normalize_texture_path(texture);
     }
     if (auto* alpha = nif.GetAlphaProperty(shape)) {
+      s.alpha_flags = alpha->flags;
       s.alpha_blend = (alpha->flags & 0x1) != 0;
       s.alpha_test = (alpha->flags & 0x200) != 0;
       s.alpha_threshold = alpha->threshold;
@@ -166,6 +241,9 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
         nifly::MatTransform skin_to_bone;
         nif.GetShapeTransformSkinToBone(shape, b, skin_to_bone);
         s.skin_to_bone.push_back(from(skin_to_bone));
+        nifly::MatTransform bone_global;
+        s.mesh_bone_to_global.push_back(nif.GetNodeTransformToGlobal(s.bones[b], bone_global)
+                                            ? std::optional<Transform>(from(bone_global)) : std::nullopt);
         std::unordered_map<std::uint16_t, float> weights;
         nif.GetShapeBoneWeights(shape, b, weights);
         for (const auto& [vertex, weight] : weights) {
@@ -183,6 +261,15 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
       std::vector<int> tri_parts;
       if (nif.GetShapePartitions(shape, parts, tri_parts)) {
         for (const auto& p : parts) s.partitions.push_back(p.partID);
+      }
+      if (const auto* ref = shape->SkinInstanceRef()) {
+        if (const auto* skin = nif.GetHeader().GetBlock<nifly::NiSkinInstance>(*ref)) {
+          if (const auto* partition = nif.GetHeader().GetBlock(skin->skinPartitionRef)) {
+            std::uint32_t total = 0;
+            for (const auto& block : partition->partitions) total += block.numTriangles;
+            s.partition_triangles = total;
+          }
+        }
       }
     }
     file.shapes.push_back(std::move(s));

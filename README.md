@@ -13,7 +13,7 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 - **GUARDAR MOD (Modo A)**: OTFT nuevo (y atuendo de dormir opcional) + override mínimo copiado del registro ganador → ESP (opcionalmente ESL) verificado releyéndolo, carpeta lista para MO2 + ZIP, README y `manifest.json`. Atómico y sin sobrescribir nada.
 - **Instalación asistida en MO2**: Opción directa desde el diálogo de exportación para copiar el mod a `mods/` tras validar que `ModOrganizer.exe` está cerrado y previa confirmación de seguridad.
 - Proyectos editables `.snps` con historial de versiones.
-- Visor Qt Quick 3D: NIF mediante nifly, recursos sueltos/BSA 105, DDS mediante DirectXTex, mezcla de peso y skinning CPU. Cámara orbital, paneo, zoom, selección, ocultación, UV, huesos y comparación del atuendo original/borrador.
+- Visor Qt Quick 3D: NIF mediante nifly, recursos sueltos/BSA 105, DDS mediante DirectXTex, mezcla de peso y skinning CPU. Transparencias traducidas de la `NiAlphaProperty` y del alfa real de cada textura, FaceGen con tinte compuesto, formas de física SMP ocultas como en el juego. Cámara orbital, paneo, zoom, selección, ocultación, UV, huesos, comparación del atuendo original/borrador, inspector por geometría (origen MO2, shader, texturas, alfa, huesos, avisos) y vistas de diagnóstico (canal alfa, normales, tangentes, alambre, solo difusa, sin luz).
 - Recursos incompatibles o ausentes generan diagnósticos. No reproduce shaders, animaciones ni física de Skyrim; el visor no certifica exportaciones faciales.
 
 ## Ejecutar Sin Compilar
@@ -58,10 +58,10 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (36) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
-| C++ (51, dos locales opcionales) | `ctest --preset debug` | IPC, MO2, proyectos, exportación sintética, BSA/LZ4, DDS/RGBA, NIF sintético, peso y skinning |
+| .NET (37) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
+| C++ (63, locales opcionales) | `ctest --preset debug` | IPC, MO2, proyectos, exportación sintética, BSA/LZ4 y BSA dañado, DDS (mips, alfa BC3/BC7), NIF y escena sintéticos (transparencias, FaceGen, jerarquía, formas SMP, UV, colores de vértice), peso y skinning |
 | Locales `[local]` | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2; se omiten si no están definidas |
-| UI | `.\scripts\smoke-test.ps1 -VerifyViewport` con instancia/perfil/NPC | capturas nativas y comprobación de píxeles, picking, cámara, ocultación, UV y ventana compacta |
+| UI | `.\scripts\smoke-test.ps1 -VerifyViewport -ShowWindow [-CaptureSet dir]` con instancia/perfil/NPC | capturas nativas y comprobación de píxeles, picking, inspector, cámara, ocultación, UV, diagnósticos, restaurar y ventana compacta; 5 capturas con cámara fija para antes/después |
 
 ## Primer caso de uso: el atuendo de Lydia
 

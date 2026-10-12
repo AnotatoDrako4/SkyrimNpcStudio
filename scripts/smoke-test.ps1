@@ -5,6 +5,10 @@
 
 .EXAMPLE
   .\scripts\smoke-test.ps1 -Instance D:\Apps\ModOrganizer.ini -MO2Profile Default -Npc 0A2C8E:Skyrim.esm
+
+.EXAMPLE
+  # Viewport checks plus the five fixed-camera captures (face, hair, body, armor, outfit).
+  .\scripts\smoke-test.ps1 -Instance D:\Apps\ModOrganizer.ini -MO2Profile Default -Npc 0A2C8E:Skyrim.esm -VerifyViewport -CaptureSet out\visual\after
 #>
 [CmdletBinding()]
 param(
@@ -14,6 +18,10 @@ param(
     [string]$Npc,
     [string]$Game,
     [switch]$VerifyViewport,
+    [string]$CaptureSet,
+    # Show the window instead of starting it hidden. A hidden window is never exposed, so it only
+    # renders through grabWindow(); picking needs the real, exposed render path.
+    [switch]$ShowWindow,
     [string]$Screenshot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'out\smoke.png')
 )
 
@@ -36,16 +44,22 @@ if ($MO2Profile) { $arguments += @('--profile', "`"$MO2Profile`"") }
 if ($Npc) { $arguments += @('--npc', $Npc) }
 if ($Game) { $arguments += @('--game', "`"$Game`"") }
 if ($VerifyViewport) { $arguments += '--verify-viewport' }
+if ($CaptureSet) {
+    New-Item -ItemType Directory -Force $CaptureSet | Out-Null
+    $arguments += @('--capture-set', "`"$((Resolve-Path $CaptureSet).Path)`"")
+}
 
 $log = [IO.Path]::ChangeExtension($Screenshot, '.log')
-$process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError $log
+$process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle $(if ($ShowWindow) { 'Normal' } else { 'Hidden' }) -PassThru -RedirectStandardError $log
 if (-not $process.WaitForExit(15 * 60 * 1000)) { $process.Kill(); throw 'Smoke test timed out.' }
 
-$warnings = Select-String -Path $log -Pattern '\.qml:\d+' | Where-Object { $_.Line -notmatch 'propertyCache' }
-Get-Content $log | Select-String 'smoke:|screenshot'
+# QML warnings and runtime shader compilation errors (custom materials compile at run time).
+$warnings = Select-String -Path $log -Pattern '\.qml:\d+|Failed to compile|QSpirvCompiler|Failed to build graphics pipeline' |
+    Where-Object { $_.Line -notmatch 'propertyCache' }
+Get-Content $log | Select-String 'smoke:|screenshot|viewport:|capture:'
 if ($warnings) {
     $warnings | Select-Object -First 20 | ForEach-Object { Write-Warning $_.Line }
-    throw "QML warnings found ($(@($warnings).Count)); see $log"
+    throw "QML or shader warnings found ($(@($warnings).Count)); see $log"
 }
 if ($process.ExitCode -ne 0) { throw "Studio exited with $($process.ExitCode); see $log" }
 Write-Host "OK - screenshot: $Screenshot"

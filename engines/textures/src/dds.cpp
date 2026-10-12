@@ -64,7 +64,7 @@ std::uint64_t level_size(TextureFormat format, std::uint32_t width, std::uint32_
   return blocks * (eight ? 8 : 16);
 }
 
-DdsImage parse_dds(std::string_view b) {
+DdsImage parse_dds(std::string_view b, std::uint32_t max_dimension) {
   if (b.size() < 4 + kHeaderSize || b.substr(0, 4) != "DDS ") throw Error(ErrorKind::Parse, "not a DDS file");
   if (u32(b, 4) != kHeaderSize) throw Error(ErrorKind::Parse, "invalid DDS header size");
 
@@ -82,8 +82,25 @@ DdsImage parse_dds(std::string_view b) {
   if (img.width == 0 || img.height == 0 || img.width > kMaxTextureDimension || img.height > kMaxTextureDimension) {
     throw Error(ErrorKind::Parse, "DDS dimensions out of range");
   }
+  img.source_width = img.width;
+  img.source_height = img.height;
 
   std::size_t data_offset = 4 + kHeaderSize;
+  // Skips whole mip levels until the image fits max_dimension (the DDS already stores them).
+  const auto pick_level = [&](auto level_bytes) -> std::uint64_t {
+    std::uint32_t w = img.width, h = img.height, level = 0;
+    std::uint64_t offset = data_offset;
+    while (max_dimension && std::max(w, h) > max_dimension && level + 1 < img.mip_count) {
+      offset += level_bytes(w, h);
+      w = std::max(1u, w / 2);
+      h = std::max(1u, h / 2);
+      ++level;
+    }
+    img.width = w;
+    img.height = h;
+    img.mip_level = level;
+    return offset;
+  };
   bool uncompressed = false;
   if (pf_flags & kFlagFourCC) {
     switch (pf_fourcc) {
@@ -123,10 +140,11 @@ DdsImage parse_dds(std::string_view b) {
           default: throw Error(ErrorKind::Parse, "unsupported DXGI format " + std::to_string(dxgi));
         }
         if (uncompressed) {
+          const auto offset = pick_level([](std::uint32_t w, std::uint32_t h) { return 4ull * w * h; });
           const auto bytes = level_size(TextureFormat::RGBA8, img.width, img.height);
-          if (b.size() < data_offset + bytes) throw Error(ErrorKind::Parse, "truncated DDS pixel data");
+          if (b.size() < offset + bytes) throw Error(ErrorKind::Parse, "truncated DDS pixel data");
           img.format = TextureFormat::RGBA8;
-          img.data.assign(b.substr(data_offset, bytes));
+          img.data.assign(b.substr(offset, bytes));
           if (dxgi != 28 && dxgi != 29) {
             for (std::size_t i = 0; i < img.data.size(); i += 4) std::swap(img.data[i], img.data[i + 2]);  // BGRA -> RGBA
           }
@@ -145,15 +163,16 @@ DdsImage parse_dds(std::string_view b) {
     // Uncompressed 8/16/24/32-bit layouts described by bit masks.
     if (pf_bits != 8 && pf_bits != 16 && pf_bits != 24 && pf_bits != 32) throw Error(ErrorKind::Parse, "unsupported DDS bit depth");
     const std::size_t bpp = pf_bits / 8;
+    const auto offset = pick_level([bpp](std::uint32_t w, std::uint32_t h) { return static_cast<std::uint64_t>(w) * h * bpp; });
     const std::uint64_t pixels = static_cast<std::uint64_t>(img.width) * img.height;
-    if (b.size() < data_offset + pixels * bpp) throw Error(ErrorKind::Parse, "truncated DDS pixel data");
+    if (b.size() < offset + pixels * bpp) throw Error(ErrorKind::Parse, "truncated DDS pixel data");
     img.format = TextureFormat::RGBA8;
     img.has_alpha = (pf_flags & kFlagAlphaPixels) != 0;
     img.data.resize(pixels * 4);
     const bool luminance = (pf_flags & kFlagLuminance) != 0;
     for (std::uint64_t i = 0; i < pixels; ++i) {
       std::uint32_t pixel = 0;
-      std::memcpy(&pixel, b.data() + data_offset + i * bpp, bpp);
+      std::memcpy(&pixel, b.data() + offset + i * bpp, bpp);
       auto* out = reinterpret_cast<std::uint8_t*>(img.data.data()) + i * 4;
       if (luminance) {
         out[0] = out[1] = out[2] = channel(pixel, masks[0]);
@@ -169,9 +188,11 @@ DdsImage parse_dds(std::string_view b) {
     throw Error(ErrorKind::Parse, "unsupported DDS pixel format");
   }
 
+  const auto format = img.format;
+  const auto offset = pick_level([format](std::uint32_t w, std::uint32_t h) { return level_size(format, w, h); });
   const auto bytes = level_size(img.format, img.width, img.height);
-  if (b.size() < data_offset + bytes) throw Error(ErrorKind::Parse, "truncated DDS block data");
-  img.data.assign(b.substr(data_offset, bytes));
+  if (b.size() < offset + bytes) throw Error(ErrorKind::Parse, "truncated DDS block data");
+  img.data.assign(b.substr(offset, bytes));
   img.has_alpha = img.format == TextureFormat::BC2 || img.format == TextureFormat::BC3 || img.format == TextureFormat::BC7;
   return img;
 }
@@ -218,6 +239,63 @@ DdsImage decode_rgba(const DdsImage& image, bool normal_map) {
     }
   }
   return decoded;
+}
+
+}  // namespace sns::textures
+
+namespace sns::textures {
+
+DdsImage downscale_rgba(const DdsImage& image, std::uint32_t max_dimension) {
+  if (image.format != TextureFormat::RGBA8) throw Error(ErrorKind::InvalidArgument, "downscale_rgba needs RGBA8");
+  DdsImage out = image;
+  while (max_dimension && std::max(out.width, out.height) > max_dimension && (out.width > 1 || out.height > 1)) {
+    const std::uint32_t w = std::max(1u, out.width / 2), h = std::max(1u, out.height / 2);
+    std::string half(static_cast<std::size_t>(w) * h * 4, '\0');
+    const auto* src = reinterpret_cast<const std::uint8_t*>(out.data.data());
+    auto* dst = reinterpret_cast<std::uint8_t*>(half.data());
+    for (std::uint32_t y = 0; y < h; ++y) {
+      for (std::uint32_t x = 0; x < w; ++x) {
+        for (int c = 0; c < 4; ++c) {
+          unsigned sum = 0, count = 0;
+          for (std::uint32_t dy = 0; dy < 2; ++dy) {
+            for (std::uint32_t dx = 0; dx < 2; ++dx) {
+              const std::uint32_t sx = std::min(out.width - 1, x * 2 + dx), sy = std::min(out.height - 1, y * 2 + dy);
+              sum += src[(static_cast<std::size_t>(sy) * out.width + sx) * 4 + c];
+              ++count;
+            }
+          }
+          dst[(static_cast<std::size_t>(y) * w + x) * 4 + c] = static_cast<std::uint8_t>((sum + count / 2) / count);
+        }
+      }
+    }
+    out.data = std::move(half);
+    out.width = w;
+    out.height = h;
+  }
+  return out;
+}
+
+AlphaStats measure_alpha(const DdsImage& image, std::uint8_t cutoff) {
+  if (image.format != TextureFormat::RGBA8) throw Error(ErrorKind::InvalidArgument, "measure_alpha needs RGBA8");
+  AlphaStats stats;
+  const auto* px = reinterpret_cast<const std::uint8_t*>(image.data.data());
+  const std::size_t n = image.data.size() / 4;
+  if (n == 0) return stats;
+  std::size_t translucent = 0, below = 0;
+  double sum = 0;
+  stats.min = 255;
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto a = px[i * 4 + 3];
+    stats.min = std::min(stats.min, a);
+    sum += a;
+    if (a < 250) ++translucent;
+    if (a < cutoff) ++below;
+  }
+  stats.mean = static_cast<float>(sum / static_cast<double>(n));
+  stats.translucent_fraction = static_cast<float>(translucent) / static_cast<float>(n);
+  stats.below_cutoff_fraction = static_cast<float>(below) / static_cast<float>(n);
+  stats.uses_alpha = translucent > 0;
+  return stats;
 }
 
 }  // namespace sns::textures

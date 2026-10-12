@@ -60,8 +60,9 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption npc_opt("npc", "Select this NPC (FormKey or load-order FormID) once indexed.", "formKey");
   const QCommandLineOption shot_opt("screenshot", "Save a PNG of the window once loaded, then quit.", "file");
   const QCommandLineOption smoke_opt("smoke-test", "Load, print a summary to stderr and quit (exit code 0 on success).");
-  const QCommandLineOption verify_opt("verify-viewport", "Verify real rendered pixels, picking, camera, visibility, UV and compact layout.");
-  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, smoke_opt, verify_opt});
+  const QCommandLineOption verify_opt("verify-viewport", "Verify real rendered pixels, picking, inspector, camera, visibility, UV, diagnostics and compact layout.");
+  const QCommandLineOption capture_opt("capture-set", "Save five fixed-camera captures (face, hair, body, armor, outfit) with pixel metrics.", "directory");
+  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, smoke_opt, verify_opt, capture_opt});
   cli.process(app);
 
   // The worker is published next to the executable by the build (bin/worker/).
@@ -76,7 +77,7 @@ int main(int argc, char* argv[]) {
   if (engine.rootObjects().isEmpty()) return 1;
 
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
-  const bool automated = cli.isSet(shot_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt);
+  const bool automated = cli.isSet(shot_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt);
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
@@ -113,13 +114,21 @@ int main(int argc, char* argv[]) {
       QTimer::singleShot(1500, &app, [&] { finish(0); });
     }
   });
+  // Only the first scene load starts the automation: verification and captures reload the scene.
+  bool automation_started = false;
   QObject::connect(studio.scene(), &sns::app::SceneViewModel::ready, &app, [&] {
-    if (automated && cli.isSet(npc_opt)) {
+    if (automated && cli.isSet(npc_opt) && !automation_started) {
+      automation_started = true;
       QTimer::singleShot(2500, &app, [&] {
         if (studio.scene()->parts().isEmpty()) { finish(5); return; }
-        if (cli.isSet(verify_opt)) sns::app::verify_viewport(qobject_cast<QQuickWindow*>(engine.rootObjects().first()),
-          studio.scene(), cli.value(shot_opt), [&](bool valid) { finish(valid ? 0 : 6); });
-        else finish(0);
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        const auto then_capture = [&, window](bool valid) {
+          if (!valid) { finish(6); return; }
+          if (!cli.isSet(capture_opt)) { finish(0); return; }
+          sns::app::capture_set(window, studio.scene(), cli.value(capture_opt), [&](bool ok) { finish(ok ? 0 : 7); });
+        };
+        if (cli.isSet(verify_opt)) sns::app::verify_viewport(window, studio.scene(), cli.value(shot_opt), then_capture);
+        else then_capture(true);
       });
     }
   });
