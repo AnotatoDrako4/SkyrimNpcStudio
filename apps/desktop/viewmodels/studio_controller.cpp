@@ -90,6 +90,14 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
   armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
+  forge_ = new CharacterForgeViewModel([this] {
+    creation::ForgeEnvironment env;
+    env.instance_name = ss(instance_name_);
+    env.instance_ini = ss(instance_path_);
+    env.profile = ss(selected_profile_);
+    if (snapshot_) env.game_edition = mo2::to_string(snapshot_->game.edition);
+    return env;
+  }, this);
 
   // Project save/open: the face travels with the outfit in the same .snps.
   outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "console_model.hpp"
+#include "character_forge_viewmodel.hpp"
 #include "edit_history.hpp"
 #include "mo2_snapshot.hpp"
 #include "sns/appearance/appearance_draft.hpp"
@@ -27,6 +28,7 @@ class StudioController : public QObject {
   Q_PROPERTY(WorkerClient* worker READ worker CONSTANT)
   Q_PROPERTY(ConsoleModel* console READ console CONSTANT)
   Q_PROPERTY(OutfitEditor* outfit READ outfit CONSTANT)
+  Q_PROPERTY(CharacterForgeViewModel* forge READ forge CONSTANT)
   Q_PROPERTY(AppearanceEditor* appearance READ appearance CONSTANT)
   Q_PROPERTY(EditHistory* history READ history CONSTANT)
   Q_PROPERTY(SceneViewModel* scene READ scene CONSTANT)
@@ -59,6 +61,7 @@ class StudioController : public QObject {
   [[nodiscard]] WorkerClient* worker() const { return worker_; }
   [[nodiscard]] ConsoleModel* console() const { return console_; }
   [[nodiscard]] OutfitEditor* outfit() const { return outfit_; }
+  [[nodiscard]] CharacterForgeViewModel* forge() const { return forge_; }
   [[nodiscard]] AppearanceEditor* appearance() const { return appearance_; }
   [[nodiscard]] EditHistory* history() const { return history_; }
   [[nodiscard]] SceneViewModel* scene() const { return scene_; }
@@ -132,6 +135,7 @@ class StudioController : public QObject {
   appearance::AppearanceDraft draft_;
   EditHistory* history_ = nullptr;
   OutfitEditor* outfit_;
+  CharacterForgeViewModel* forge_ = nullptr;
   AppearanceEditor* appearance_ = nullptr;
   SceneViewModel* scene_ = nullptr;
   SceneViewModel* armor_preview_ = nullptr;

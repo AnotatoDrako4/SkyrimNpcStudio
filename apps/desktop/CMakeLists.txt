@@ -14,7 +14,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
-  viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp)
+  viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
+  viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -47,6 +48,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/CharacterCreator.qml
+    qml/characterforge/CharacterForge.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
     qml/shaders/alpha_channel.frag)
@@ -59,7 +61,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D
-  sns::ipc sns::mo2 sns::projects sns::outfit
+  sns::ipc sns::mo2 sns::projects sns::creation sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering
   sns::compile_options)

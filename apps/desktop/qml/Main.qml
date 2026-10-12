@@ -69,6 +69,16 @@ ApplicationWindow {
         id: exportWizardDialog
         studio: window.studio
     }
+    FolderDialog {
+        id: forgeOpenDialog
+        title: qsTr("Abrir proyecto Character Forge (.sncf)")
+        onAccepted: window.studio.forge.openProject(selectedFolder.toString())
+    }
+    FolderDialog {
+        id: forgeSaveDialog
+        title: qsTr("Carpeta para guardar proyecto Character Forge")
+        onAccepted: window.studio.forge.saveProject(selectedFolder.toString())
+    }
 
     Component.onCompleted: if (!ready) welcome.open()
 
@@ -76,19 +86,31 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: qsTr("&Proyecto")
-            Action { text: qsTr("Abrir proyecto (.snps)…"); enabled: window.ready; onTriggered: openProjectDialog.open() }
+            Action {
+                text: workspaceTabs.currentIndex === 2 ? qsTr("Abrir Character Forge (.sncf)…") : qsTr("Abrir proyecto (.snps)…")
+                enabled: workspaceTabs.currentIndex === 2 || window.ready
+                onTriggered: workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open()
+            }
             Action {
                 text: qsTr("Guardar proyecto")
                 shortcut: StandardKey.Save
-                enabled: window.studio.outfit.npcFormKey.length > 0
-                onTriggered: window.studio.outfit.projectPath.length > 0
-                             ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
-                             : saveProjectDialog.open()
+                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
+                onTriggered: {
+                    if (workspaceTabs.currentIndex === 2) {
+                        window.studio.forge.projectPath.length > 0
+                                ? window.studio.forge.saveProject(window.studio.forge.projectPath)
+                                : forgeSaveDialog.open()
+                    } else {
+                        window.studio.outfit.projectPath.length > 0
+                                ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
+                                : saveProjectDialog.open()
+                    }
+                }
             }
             Action {
                 text: qsTr("Guardar proyecto como…")
-                enabled: window.studio.outfit.npcFormKey.length > 0
-                onTriggered: saveProjectDialog.open()
+                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
+                onTriggered: workspaceTabs.currentIndex === 2 ? forgeSaveDialog.open() : saveProjectDialog.open()
             }
         }
         Menu {
@@ -101,16 +123,16 @@ ApplicationWindow {
         Menu {
             title: qsTr("&Editar")
             Action {
-                text: qsTr("Deshacer") + (window.studio.outfit.undoText ? ": " + window.studio.outfit.undoText : "")
+                text: qsTr("Deshacer") + (workspaceTabs.currentIndex === 2 ? "" : (window.studio.outfit.undoText ? ": " + window.studio.outfit.undoText : ""))
                 shortcut: StandardKey.Undo
-                enabled: window.studio.outfit.canUndo
-                onTriggered: window.studio.outfit.undo()
+                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.canUndo : window.studio.outfit.canUndo
+                onTriggered: workspaceTabs.currentIndex === 2 ? window.studio.forge.undo() : window.studio.outfit.undo()
             }
             Action {
-                text: qsTr("Rehacer") + (window.studio.outfit.redoText ? ": " + window.studio.outfit.redoText : "")
+                text: qsTr("Rehacer") + (workspaceTabs.currentIndex === 2 ? "" : (window.studio.outfit.redoText ? ": " + window.studio.outfit.redoText : ""))
                 shortcut: StandardKey.Redo
-                enabled: window.studio.outfit.canRedo
-                onTriggered: window.studio.outfit.redo()
+                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.canRedo : window.studio.outfit.canRedo
+                onTriggered: workspaceTabs.currentIndex === 2 ? window.studio.forge.redo() : window.studio.outfit.redo()
             }
         }
         Menu {
@@ -183,6 +205,7 @@ ApplicationWindow {
                 implicitHeight: 32
                 TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE") }
                 TabButton { text: qsTr("👗 ESTUDIO DE ATUENDOS") }
+                TabButton { text: qsTr("CHARACTER FORGE") }
             }
 
             Rectangle { width: 1; height: 22; color: Theme.borderSubtle }
@@ -190,19 +213,27 @@ ApplicationWindow {
             // Acciones de proyecto
             ToolButton {
                 text: "📁 " + qsTr("Abrir")
-                enabled: window.ready
+                enabled: workspaceTabs.currentIndex === 2 || window.ready
                 implicitHeight: 28
-                onClicked: openProjectDialog.open()
+                onClicked: workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: qsTr("Abrir proyecto .snps existente")
             }
 
             ToolButton {
                 text: "💾 " + qsTr("Guardar")
-                enabled: window.studio.outfit.npcFormKey.length > 0
+                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
                 implicitHeight: 28
-                onClicked: window.studio.outfit.projectPath.length > 0
-                           ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
-                           : saveProjectDialog.open()
+                onClicked: {
+                    if (workspaceTabs.currentIndex === 2) {
+                        window.studio.forge.projectPath.length > 0
+                                ? window.studio.forge.saveProject(window.studio.forge.projectPath)
+                                : forgeSaveDialog.open()
+                    } else {
+                        window.studio.outfit.projectPath.length > 0
+                                ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
+                                : saveProjectDialog.open()
+                    }
+                }
                 ToolTip.visible: hovered; ToolTip.text: qsTr("Guardar estado del proyecto actual")
             }
 
@@ -224,9 +255,11 @@ ApplicationWindow {
             Button {
                 text: qsTr("🚀 Exportar Mod…")
                 highlighted: true
-                enabled: window.ready
+                enabled: window.ready && workspaceTabs.currentIndex !== 2
                 implicitHeight: 32
                 font.bold: true
+                ToolTip.visible: hovered && workspaceTabs.currentIndex === 2
+                ToolTip.text: qsTr("La exportación de NPC nuevos llegará en Fase 2")
                 onClicked: exportWizardDialog.open()
             }
         }
@@ -343,6 +376,10 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+
+            CharacterForge {
+                forge: window.studio.forge
             }
         }
 
