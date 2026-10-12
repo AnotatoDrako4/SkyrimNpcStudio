@@ -58,10 +58,10 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (37) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
-| C++ (63, locales opcionales) | `ctest --preset debug` | IPC, MO2, proyectos, exportación sintética, BSA/LZ4 y BSA dañado, DDS (mips, alfa BC3/BC7), NIF y escena sintéticos (transparencias, FaceGen, jerarquía, formas SMP, UV, colores de vértice), peso y skinning |
+| .NET (45) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
+| C++ (88, locales opcionales) | `ctest --preset debug` | IPC, MO2, proyectos, exportación sintética, BSA/LZ4 y BSA dañado, DDS (mips, alfa BC3/BC7), NIF y escena sintéticos (transparencias, FaceGen, jerarquía, formas SMP, UV, colores de vértice), peso y skinning |
 | Locales `[local]` | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2; se omiten si no están definidas |
-| UI | `.\scripts\smoke-test.ps1 -VerifyViewport -ShowWindow [-CaptureSet dir]` con instancia/perfil/NPC | capturas nativas y comprobación de píxeles, picking, inspector, cámara, ocultación, UV, diagnósticos, restaurar y ventana compacta; 5 capturas con cámara fija para antes/después |
+| UI | `.\scripts\smoke-test.ps1` | verificación de carga QML completa, renderizado nativo y captura gráfica de la ventana |
 
 ## Primer caso de uso: el atuendo de Lydia
 
