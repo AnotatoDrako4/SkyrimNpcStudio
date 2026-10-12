@@ -89,6 +89,12 @@ void ForgeProjectStore::save(const fs::path& directory, const ForgeProject& proj
                        {"profile", project.environment.profile},
                        {"gameEdition", project.environment.game_edition}}}};
   std::error_code error;
+  // Never overwrite an unrelated Forge project merely because its folder has the same name.
+  if (fs::exists(directory / "project.json")) {
+    const auto existing = load(directory);
+    if (existing.id != project.id)
+      throw Error(ErrorKind::InvalidArgument, "Destination already contains a different Character Forge project");
+  }
   fs::create_directories(directory / "assets", error);
   if (error) throw Error(ErrorKind::Io, "Cannot create Character Forge asset directory: " + error.message());
   file_io::write_file_atomic(directory / "project.json", j.dump(2));
