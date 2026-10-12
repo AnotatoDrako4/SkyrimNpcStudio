@@ -172,13 +172,13 @@ ApplicationWindow {
             Action {
                 text: qsTr("Exportar mod completo / rostro (Character Creator)…")
                 shortcut: "Ctrl+Shift+E"
-                enabled: window.ready && !window.studio.appearance.exporting
+                enabled: workspaceTabs.currentIndex !== 2 && window.ready && !window.studio.appearance.exporting
                 onTriggered: exportWizardDialog.open()
             }
             Action {
                 text: qsTr("Exportar parche de atuendo (OTFT)…")
                 shortcut: "Ctrl+E"
-                enabled: window.studio.outfit.exportable && !window.studio.outfit.exporting
+                enabled: workspaceTabs.currentIndex !== 2 && window.studio.outfit.exportable && !window.studio.outfit.exporting
                 onTriggered: exportDialog.open()
             }
         }
@@ -216,7 +216,7 @@ ApplicationWindow {
                 enabled: workspaceTabs.currentIndex === 2 || window.ready
                 implicitHeight: 28
                 onClicked: workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open()
-                ToolTip.visible: hovered; ToolTip.text: qsTr("Abrir proyecto .snps existente")
+                ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Abrir un proyecto .sncf") : qsTr("Abrir proyecto .snps existente")
             }
 
             ToolButton {
@@ -234,7 +234,7 @@ ApplicationWindow {
                                 : saveProjectDialog.open()
                     }
                 }
-                ToolTip.visible: hovered; ToolTip.text: qsTr("Guardar estado del proyecto actual")
+                ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Guardar proyecto independiente .sncf") : qsTr("Guardar proyecto .snps actual")
             }
 
             Item { Layout.fillWidth: true }
