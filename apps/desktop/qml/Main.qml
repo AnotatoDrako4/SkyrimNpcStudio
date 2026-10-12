@@ -28,7 +28,7 @@ ApplicationWindow {
         property alias showBottom: bottomToggle.checked
         property alias showLeft: leftToggle.checked
         property alias showRight: rightToggle.checked
-        property alias advancedMode: Theme.advancedMode
+        property alias advancedMode: modeSwitch.checked
     }
 
     readonly property bool ready: studio.phase === StudioController.Ready

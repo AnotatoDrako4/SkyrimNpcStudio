@@ -7,6 +7,8 @@ QtObject {
     readonly property color surface: "#1c1e22"      // Viewport & canvas
     readonly property color panel: "#22252a"        // Sidebars & card backgrounds
     readonly property color panelAlt: "#282c33"     // Hovered cards & elevated panels
+    readonly property color control: "#282c33"      // Form inputs & control rectangles
+    readonly property color selection: "#2f4f72"    // Selected list items
     readonly property color panelHeader: "#1a1c20"  // Internal section headers
     readonly property color header: "#181a1d"       // Main window header & menubar
     readonly property color border: "#30343d"       // Clean subtle borders
@@ -18,7 +20,7 @@ QtObject {
     readonly property color accentHover: "#5595db"
     readonly property color accentPressed: "#376da6"
     readonly property color accentDim: "#1d3248"
-    readonly property color accentSubtle: "rgba(67, 130, 196, 0.15)"
+    readonly property color accentSubtle: "#264382c4"
     readonly property color accentBorder: "#3b6fa7"
 
     // ---------------------------------------------------------------- Typography & Content

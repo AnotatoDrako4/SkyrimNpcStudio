@@ -22,11 +22,12 @@ param(
     # Show the window instead of starting it hidden. A hidden window is never exposed, so it only
     # renders through grabWindow(); picking needs the real, exposed render path.
     [switch]$ShowWindow,
-    [string]$Screenshot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'out\smoke.png')
+    [string]$Screenshot = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Screenshot) { $Screenshot = Join-Path $root 'out\smoke.png' }
 $exe = Join-Path $root "build\$Preset\bin\SkyrimNpcStudio.exe"
 if (-not (Test-Path $exe)) { throw "Build first: $exe not found." }
 . (Join-Path $PSScriptRoot 'dev-env.ps1') | Out-Null
@@ -52,6 +53,7 @@ if ($CaptureSet) {
 $log = [IO.Path]::ChangeExtension($Screenshot, '.log')
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle $(if ($ShowWindow) { 'Normal' } else { 'Hidden' }) -PassThru -RedirectStandardError $log
 if (-not $process.WaitForExit(15 * 60 * 1000)) { $process.Kill(); throw 'Smoke test timed out.' }
+$process.WaitForExit()
 
 # QML warnings and runtime shader compilation errors (custom materials compile at run time).
 $warnings = Select-String -Path $log -Pattern '\.qml:\d+|Failed to compile|QSpirvCompiler|Failed to build graphics pipeline' |
@@ -61,5 +63,5 @@ if ($warnings) {
     $warnings | Select-Object -First 20 | ForEach-Object { Write-Warning $_.Line }
     throw "QML or shader warnings found ($(@($warnings).Count)); see $log"
 }
-if ($process.ExitCode -ne 0) { throw "Studio exited with $($process.ExitCode); see $log" }
+if ($process.ExitCode -and $process.ExitCode -ne 0) { throw "Studio exited with $($process.ExitCode); see $log" }
 Write-Host "OK - screenshot: $Screenshot"

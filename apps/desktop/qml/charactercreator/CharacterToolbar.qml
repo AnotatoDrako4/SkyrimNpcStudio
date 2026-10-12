@@ -93,7 +93,7 @@ Rectangle {
 
         // Indicador si hay donante activo
         Rectangle {
-            visible: root.studio.appearance.donorFormKey.length > 0
+            visible: Boolean(root.studio.appearance.donorFormKey && root.studio.appearance.donorFormKey.length > 0)
             implicitHeight: 24
             implicitWidth: donorRow.implicitWidth + 12
             radius: 12
@@ -110,7 +110,7 @@ Rectangle {
                     font.pixelSize: 10
                 }
                 Text {
-                    text: root.studio.appearance.donorName || root.studio.appearance.donorFormKey
+                    text: (root.studio.appearance.donorName || root.studio.appearance.donorFormKey) ?? ""
                     color: "#FFFFFF"
                     font.bold: true
                     font.pixelSize: 10

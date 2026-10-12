@@ -613,8 +613,8 @@ ScrollView {
                                         Layout.fillWidth: true
                                     }
                                     Text {
-                                        visible: modelData.remediation && modelData.remediation.length > 0
-                                        text: "→ " + modelData.remediation
+                                        visible: Boolean(modelData.remediation && modelData.remediation.length > 0)
+                                        text: "→ " + (modelData.remediation ?? "")
                                         color: Theme.textDim
                                         font.pixelSize: Theme.micro
                                         font.italic: true
