@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SkyrimNpcStudio.BethesdaWorker</AssemblyName>
+    <RootNamespace>SkyrimNpcStudio.Worker</RootNamespace>
+    <Version>0.1.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" />
+    <PackageReference Include="StreamJsonRpc" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SkyrimNpcStudio.BethesdaWorker.Tests" />
+    <InternalsVisibleTo Include="SkyrimNpcStudio.ExportTests" />
+  </ItemGroup>
+
+</Project>

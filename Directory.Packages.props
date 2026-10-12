@@ -1,0 +1,18 @@
+<Project>
+  <!-- Central package pinning. Every version here was verified on nuget.org
+       (listed, stable, license checked) on 2026-10-11. See docs/ADR/0003-dependencies.md. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- GPL-3.0-only. Plugin (ESP/ESM/ESL) reading and writing. -->
+    <PackageVersion Include="Mutagen.Bethesda.Skyrim" Version="0.54.4" />
+    <!-- MIT. JSON-RPC 2.0 over the named pipe (LSP-style Content-Length framing). -->
+    <PackageVersion Include="StreamJsonRpc" Version="2.25.29" />
+    <!-- MIT. NPC/record index cache. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <!-- Tests -->
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
+</Project>

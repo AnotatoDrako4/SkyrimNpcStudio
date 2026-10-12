@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Writes the synthetic load order of tests/fixtures to a folder, for C++ integration tests. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SkyrimNpcStudio.FixtureGen</AssemblyName>
+    <RootNamespace>SkyrimNpcStudio.FixtureGen</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\tests\fixtures\SkyrimNpcStudio.TestFixtures\SkyrimNpcStudio.TestFixtures.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,26 @@
+# Build trees
+/build/
+/out/
+bin/
+obj/
+*.user
+.vs/
+CMakeUserPresets.json
+
+# Test and runtime artifacts
+TestResults/
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Never commit game data or third-party mod content
+*.esp
+*.esm
+*.esl
+*.bsa
+*.ba2
+*.nif
+*.dds
+!tests/fixtures/**/*.README
+/dist/

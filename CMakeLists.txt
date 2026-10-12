@@ -1,0 +1,41 @@
+cmake_minimum_required(VERSION 3.25)
+
+project(SkyrimNpcStudio
+  VERSION 0.1.0
+  DESCRIPTION "Skyrim NPC Studio Ultimate - NPC appearance and outfit studio for Skyrim SE/AE"
+  LANGUAGES C CXX)
+
+if(NOT WIN32)
+  message(FATAL_ERROR "Skyrim NPC Studio targets Windows x64 only (named pipes, MO2, Skyrim SE).")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+option(SNS_BUILD_APP "Build the Qt Quick desktop application (requires Qt 6.11)" ON)
+option(SNS_BUILD_WORKER "Publish the .NET Bethesda worker with the dotnet CLI" ON)
+option(SNS_BUILD_TESTS "Build unit and integration tests" ON)
+
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(CompilerOptions)
+include(Dependencies)
+
+add_subdirectory(engines)
+
+if(SNS_BUILD_WORKER)
+  include(Worker)
+endif()
+
+if(SNS_BUILD_APP)
+  add_subdirectory(apps/desktop)
+endif()
+
+if(SNS_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

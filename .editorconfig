@@ -1,0 +1,32 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,qml,cmake,txt}]
+indent_size = 2
+
+[CMakeLists.txt]
+indent_size = 2
+
+[*.{ps1,bat,cmd}]
+end_of_line = crlf
+
+[*.cs]
+# Performance hints that conflict with stable public/RPC signatures; keep as suggestions.
+dotnet_diagnostic.CA1859.severity = suggestion
+dotnet_diagnostic.CA1822.severity = suggestion
+# Logging uses interpolated strings on purpose (stderr lines, no structured logger).
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1305.severity = suggestion
+
+[tests/**.cs]
+# Test names use Method_Scenario_Expectation.
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1515.severity = none

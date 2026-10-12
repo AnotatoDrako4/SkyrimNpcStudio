@@ -1,0 +1,24 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <!-- x64 only. Also matches the Platform=x64 variable that vcvars64.bat exports. -->
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/services/">
+    <Project Path="services/BethesdaWorker/BethesdaWorker.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/export/">
+    <Project Path="tests/export/SkyrimNpcStudio.ExportTests/SkyrimNpcStudio.ExportTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/fixtures/">
+    <Project Path="tests/fixtures/SkyrimNpcStudio.TestFixtures/SkyrimNpcStudio.TestFixtures.csproj" />
+  </Folder>
+  <Folder Name="/tests/unit/">
+    <Project Path="tests/unit/BethesdaWorker.Tests/BethesdaWorker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FixtureGen/FixtureGen.csproj" />
+  </Folder>
+</Solution>

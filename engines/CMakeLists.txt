@@ -1,0 +1,11 @@
+# Engines are framework-independent C++20 libraries (no Qt): they can be built and tested
+# without the Qt SDK and are wrapped by view models in apps/desktop.
+add_subdirectory(core)
+add_subdirectory(ipc)
+add_subdirectory(mo2)
+add_subdirectory(projects)
+add_subdirectory(outfit)
+add_subdirectory(assets)
+add_subdirectory(textures)
+add_subdirectory(nif)
+add_subdirectory(rendering)
