@@ -9,6 +9,7 @@
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
+#include "sns/rendering/smp_xml.hpp"
 
 namespace sns::rendering {
 namespace {
@@ -290,6 +291,97 @@ SkinningReport apply_skinning(nif::Shape& shape, const nif::Skeleton& skeleton) 
   return report;
 }
 
+nif::Skeleton pose_skeleton(const nif::Skeleton& base, std::string_view pose_name) {
+  if (pose_name.empty() || pose_name == "reference" || pose_name == "tpose") {
+    return base;
+  }
+  nif::Skeleton posed = base;
+
+  auto rotate_sub_tree = [&](int bone_idx, const std::array<std::array<float, 3>, 3>& R) {
+    if (bone_idx < 0 || static_cast<std::size_t>(bone_idx) >= posed.bones.size()) return;
+    const auto C = posed.bones[static_cast<std::size_t>(bone_idx)].to_global.translation;
+
+    std::vector<bool> is_descendant(posed.bones.size(), false);
+    is_descendant[static_cast<std::size_t>(bone_idx)] = true;
+    for (std::size_t i = 0; i < posed.bones.size(); ++i) {
+      int p = posed.bones[i].parent;
+      while (p >= 0) {
+        if (p == bone_idx || is_descendant[static_cast<std::size_t>(p)]) {
+          is_descendant[i] = true;
+          break;
+        }
+        p = posed.bones[static_cast<std::size_t>(p)].parent;
+      }
+    }
+
+    for (std::size_t i = 0; i < posed.bones.size(); ++i) {
+      if (!is_descendant[i]) continue;
+      auto& b = posed.bones[i];
+      const float dx = b.to_global.translation.x - C.x;
+      const float dy = b.to_global.translation.y - C.y;
+      const float dz = b.to_global.translation.z - C.z;
+      b.to_global.translation.x = C.x + (R[0][0] * dx + R[0][1] * dy + R[0][2] * dz);
+      b.to_global.translation.y = C.y + (R[1][0] * dx + R[1][1] * dy + R[1][2] * dz);
+      b.to_global.translation.z = C.z + (R[2][0] * dx + R[2][1] * dy + R[2][2] * dz);
+
+      std::array<std::array<float, 3>, 3> new_rot{};
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          new_rot[r][c] = R[r][0] * b.to_global.rotation[0][c] +
+                          R[r][1] * b.to_global.rotation[1][c] +
+                          R[r][2] * b.to_global.rotation[2][c];
+        }
+      }
+      b.to_global.rotation = new_rot;
+    }
+  };
+
+  auto rot_x = [](float rad) -> std::array<std::array<float, 3>, 3> {
+    const float c = std::cos(rad), s = std::sin(rad);
+    return {{{1, 0, 0}, {0, c, -s}, {0, s, c}}};
+  };
+  auto rot_y = [](float rad) -> std::array<std::array<float, 3>, 3> {
+    const float c = std::cos(rad), s = std::sin(rad);
+    return {{{c, 0, s}, {0, 1, 0}, {-s, 0, c}}};
+  };
+
+  auto find_bone = [&](std::string_view name_part) {
+    for (std::size_t i = 0; i < posed.bones.size(); ++i) {
+      if (text::to_lower_ascii(posed.bones[i].name).find(text::to_lower_ascii(name_part)) != std::string::npos) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  };
+
+  const int l_arm = find_bone("L UpperArm");
+  const int r_arm = find_bone("R UpperArm");
+  const int l_forearm = find_bone("L Forearm");
+  const int r_forearm = find_bone("R Forearm");
+  const int l_thigh = find_bone("L Thigh");
+  const int r_thigh = find_bone("R Thigh");
+  const int spine = find_bone("NPC Spine1");
+
+  if (pose_name == "apose") {
+    if (l_arm >= 0) rotate_sub_tree(l_arm, rot_y(0.70f));
+    if (r_arm >= 0) rotate_sub_tree(r_arm, rot_y(-0.70f));
+  } else if (pose_name == "relaxed") {
+    if (l_arm >= 0) rotate_sub_tree(l_arm, rot_y(0.85f));
+    if (r_arm >= 0) rotate_sub_tree(r_arm, rot_y(-0.85f));
+    if (l_forearm >= 0) rotate_sub_tree(l_forearm, rot_x(0.25f));
+    if (r_forearm >= 0) rotate_sub_tree(r_forearm, rot_x(0.25f));
+  } else if (pose_name == "combat") {
+    if (spine >= 0) rotate_sub_tree(spine, rot_x(0.12f));
+    if (l_arm >= 0) rotate_sub_tree(l_arm, rot_y(0.35f));
+    if (l_arm >= 0) rotate_sub_tree(l_arm, rot_x(0.45f));
+    if (r_arm >= 0) rotate_sub_tree(r_arm, rot_y(-0.35f));
+    if (r_arm >= 0) rotate_sub_tree(r_arm, rot_x(0.30f));
+    if (l_thigh >= 0) rotate_sub_tree(l_thigh, rot_x(0.20f));
+    if (r_thigh >= 0) rotate_sub_tree(r_thigh, rot_x(-0.15f));
+  }
+  return posed;
+}
+
 std::string_view to_string(AlphaMode mode) {
   switch (mode) {
     case AlphaMode::Opaque: return "opaque";
@@ -356,57 +448,7 @@ std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks)
 bool is_covered(std::uint32_t slots, std::uint32_t covered) { return (slots & covered) != 0; }
 
 std::vector<std::string> smp_collision_shapes(std::string_view xml) {
-  std::vector<std::string> names;
-  auto decode = [](std::string_view raw) {
-    std::string out;
-    for (std::size_t i = 0; i < raw.size(); ++i) {
-      if (raw[i] == '&') {
-        bool matched = false;
-        for (const auto& [entity, ch] : {std::pair{"&amp;", '&'}, {"&lt;", '<'}, {"&gt;", '>'}, {"&quot;", '"'}, {"&apos;", '\''}}) {
-          if (raw.substr(i).starts_with(entity)) {
-            out += ch;
-            i += std::string_view(entity).size() - 1;
-            matched = true;
-            break;
-          }
-        }
-        if (matched) continue;
-      }
-      out += raw[i];
-    }
-    return out;
-  };
-  std::size_t at = 0;
-  while ((at = xml.find('<', at)) != std::string_view::npos) {
-    if (xml.substr(at).starts_with("<!--")) {  // comments may hold disabled shapes
-      const auto end = xml.find("-->", at + 4);
-      if (end == std::string_view::npos) break;
-      at = end + 3;
-      continue;
-    }
-    const auto close = xml.find('>', at);
-    if (close == std::string_view::npos) break;
-    const auto tag = xml.substr(at + 1, close - at - 1);
-    at = close + 1;
-    const auto head = tag.find_first_of(" \t\r\n/");
-    if (head == std::string_view::npos || (tag.substr(0, head) != "per-vertex-shape" && tag.substr(0, head) != "per-triangle-shape")) continue;
-    // name="..." or name='...'
-    for (std::size_t p = tag.find("name", head); p != std::string_view::npos; p = tag.find("name", p + 4)) {
-      if (!std::isspace(static_cast<unsigned char>(tag[p - 1]))) continue;
-      auto q = p + 4;
-      while (q < tag.size() && std::isspace(static_cast<unsigned char>(tag[q]))) ++q;
-      if (q >= tag.size() || tag[q] != '=') continue;
-      ++q;
-      while (q < tag.size() && std::isspace(static_cast<unsigned char>(tag[q]))) ++q;
-      if (q >= tag.size() || (tag[q] != '"' && tag[q] != '\'')) continue;
-      const auto end = tag.find(tag[q], q + 1);
-      if (end == std::string_view::npos) break;
-      auto name = decode(tag.substr(q + 1, end - q - 1));
-      if (!name.empty() && std::find(names.begin(), names.end(), name) == names.end()) names.push_back(std::move(name));
-      break;
-    }
-  }
-  return names;
+  return parse_smp_xml(xml).collision_shapes;
 }
 
 std::string hidden_reason(const nif::Shape& shape, const std::vector<std::string>& collision) {
@@ -432,6 +474,9 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     try {
       if (auto bytes = read_asset(resolver, options, appearance.skeleton)) {
         skeleton = nif::load_skeleton(*bytes, appearance.skeleton);
+        if (!options.pose_name.empty() && options.pose_name != "reference") {
+          *skeleton = pose_skeleton(*skeleton, options.pose_name);
+        }
         scene.skeleton_bones = skeleton->bones.size();
         if (options.include_skeleton) {
           for (const auto& bone : skeleton->bones) {
@@ -466,9 +511,24 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       thin = load(resolver, options, thin_path, scene, label);
     }
     std::vector<std::string> collision;
+    std::vector<std::string> physics_bones;
+    std::string xml_location;
+    std::string xml_error;
+    bool xml_well_formed = false;
     if (!mesh->physics_xml.empty()) {
-      if (auto xml = read_asset(resolver, options, mesh->physics_xml)) collision = smp_collision_shapes(*xml);
-      else issue(scene, "info", "PhysicsXmlMissing", "SMP physics file named by the mesh was not found: " + mesh->physics_xml, path);
+      if (auto xml = read_asset(resolver, options, mesh->physics_xml)) {
+        const auto parsed = parse_smp_xml(*xml);
+        collision = parsed.collision_shapes;
+        physics_bones = parsed.bones;
+        xml_well_formed = parsed.well_formed;
+        xml_error = parsed.error;
+        xml_location = describe(resolver.locate(mesh->physics_xml));
+        if (!parsed.well_formed)
+          issue(scene, "warning", "PhysicsXmlInvalid", "SMP physics XML cannot be parsed safely: " + parsed.error, mesh->physics_xml);
+      } else {
+        xml_location = "missing";
+        issue(scene, "warning", "PhysicsXmlMissing", "SMP physics file named by the mesh was not found: " + mesh->physics_xml, path);
+      }
     }
     std::vector<std::string> hidden, extra_bones, missing_bones;
     for (auto& shape : mesh->shapes) {
@@ -509,6 +569,11 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       part.bones_from_mesh = std::move(skinning.from_mesh);
       part.bones_missing = std::move(skinning.missing);
       part.physics_xml = mesh->physics_xml;
+      part.physics_xml_location = xml_location;
+      part.physics_xml_well_formed = xml_well_formed;
+      part.physics_xml_error = xml_error;
+      part.physics_bones = physics_bones;
+      part.collision_shapes = collision;
       part.addon_form_key = addon_key;
       if (!part.bones_missing.empty()) {
         part.warnings.push_back(std::to_string(part.bones_missing.size()) + " bones missing from skeleton and mesh (bind pose kept), e.g. " +

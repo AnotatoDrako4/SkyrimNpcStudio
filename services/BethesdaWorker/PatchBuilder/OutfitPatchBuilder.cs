@@ -20,11 +20,13 @@ internal sealed record BuiltAssignment(
 internal sealed record BuiltGeneratedAsset(string Npc, string DataPath, string Sha256, string Kind);
 
 internal sealed record BuiltFace(string Npc, string? NpcEditorId, FaceGenProvenance Provenance, IReadOnlyList<string> ChangedFields);
+internal sealed record BuiltStandaloneOutfit(FormKey Outfit, string EditorId, IReadOnlyList<ArmorSummary> Armors);
 
 internal sealed record BuiltPatch(
     string PluginPath, IReadOnlyList<ModKey> Masters, bool EslFlagged,
     IReadOnlyList<ExportedRecord> Records, IReadOnlyList<BuiltAssignment> Assignments, IReadOnlyList<Issue> Issues,
-    IReadOnlyList<BuiltGeneratedAsset>? Generated = null, IReadOnlyList<BuiltFace>? Faces = null);
+    IReadOnlyList<BuiltGeneratedAsset>? Generated = null, IReadOnlyList<BuiltFace>? Faces = null,
+    IReadOnlyList<BuiltStandaloneOutfit>? StandaloneOutfits = null);
 
 /// <summary>
 /// Mode A (Outfit Patch): one new OTFT per NPC plus a minimal NPC override that only changes the
@@ -62,9 +64,9 @@ internal static partial class OutfitPatchBuilder
         LoadOrderSession session, CatalogQueries queries, ExportOutfitPatchRequest request, string pluginPath, CancellationToken ct)
     {
         ValidatePluginName(request.PluginName, session);
-        if (request.Assignments.Count == 0)
+        if (request.Assignments.Count == 0 && request.StandaloneOutfits.Count == 0)
         {
-            throw new WorkerException(ErrorCodes.InvalidArgument, "At least one outfit assignment is required.");
+            throw new WorkerException(ErrorCodes.InvalidArgument, "At least one outfit assignment or standalone outfit is required.");
         }
 
         var issues = new List<Issue>();
@@ -98,13 +100,49 @@ internal static partial class OutfitPatchBuilder
             resolved.Add((session.LinkCache.Resolve<INpcGetter>(npcKey), assignment, validation));
         }
 
+        var standaloneResolved = new List<(StandaloneOutfit Request, IReadOnlyList<OutfitPiece> Pieces)>();
+        foreach (var standalone in request.StandaloneOutfits)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(standalone.Name) || standalone.ArmorFormKeys.Count == 0)
+            {
+                issues.Add(Issue.Error("EmptyStandaloneOutfit", "A standalone outfit needs a name and at least one armor.", standalone.Name));
+                continue;
+            }
+            var pieces = new List<OutfitPiece>();
+            var seen = new HashSet<FormKey>();
+            uint occupied = 0;
+            foreach (var text in standalone.ArmorFormKeys)
+            {
+                if (!queries.TryParseAnyFormKey(text, out var key) ||
+                    !session.LinkCache.TryResolve<IArmorGetter>(key, out _) || queries.GetArmor(key.ToString()) is not { } armor)
+                {
+                    issues.Add(Issue.Error("ArmorNotFound", $"Armor '{text}' is not in the active load order.", text));
+                    continue;
+                }
+                if (!seen.Add(key))
+                {
+                    issues.Add(Issue.Error("DuplicatePiece", $"Armor '{text}' appears twice.", text));
+                    continue;
+                }
+                if ((occupied & armor.SlotMask) != 0)
+                    issues.Add(Issue.Error("SlotConflict", $"Armor '{text}' conflicts with another biped slot in this outfit.", text));
+                occupied |= armor.SlotMask;
+                pieces.Add(new OutfitPiece { Armor = armor, AddonsForRace = 0, Meshes = [] });
+            }
+            standaloneResolved.Add((standalone, pieces));
+        }
+
         if (issues.Any(i => i.Severity == "error"))
         {
             throw new WorkerException(ErrorCodes.ValidationFailed, "Validation failed; nothing was written.", issues);
         }
 
-        issues.Add(Issue.Info("SaveGamePersistence",
-            "NPCs already loaded in an existing save can keep their current equipment until the game re-initializes them; immediate application in every save is not guaranteed."));
+        if (request.Assignments.Count > 0)
+        {
+            issues.Add(Issue.Info("SaveGamePersistence",
+                "NPCs already loaded in an existing save can keep their current equipment until the game re-initializes them; immediate application in every save is not guaranteed."));
+        }
 
         var patchKey = ModKey.FromFileName(request.PluginName);
         var patch = new SkyrimMod(patchKey, SkyrimRelease.SkyrimSE);
@@ -116,6 +154,7 @@ internal static partial class OutfitPatchBuilder
         }
 
         var built = new List<BuiltAssignment>();
+        var standaloneBuilt = new List<BuiltStandaloneOutfit>();
         var records = new List<ExportedRecord>();
         var usedEditorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (npc, assignment, validation) in resolved)
@@ -139,6 +178,17 @@ internal static partial class OutfitPatchBuilder
             built.Add(new BuiltAssignment(npc.FormKey, npc.EditorID, npc.Name?.String, outfit.FormKey, editorId, outfitPieces));
         }
 
+        foreach (var (standalone, pieces) in standaloneResolved)
+        {
+            var editorId = UniqueEditorId($"SNS_{standalone.Name}_Outfit", usedEditorIds);
+            var outfit = patch.Outfits.AddNew(editorId);
+            var (itemKeys, outfitPieces) = ResolveOutfitItems(patch, session, pieces, standalone.MaterialOverrides, usedEditorIds, records);
+            outfit.Items = new ExtendedList<IFormLinkGetter<IOutfitTargetGetter>>(
+                itemKeys.Select(k => (IFormLinkGetter<IOutfitTargetGetter>)new FormLink<IOutfitTargetGetter>(k)));
+            records.Add(new ExportedRecord { FormKey = outfit.FormKey.ToString(), RecordType = "OTFT", EditorId = editorId, Kind = "new" });
+            standaloneBuilt.Add(new BuiltStandaloneOutfit(outfit.FormKey, editorId, outfitPieces));
+        }
+
         if (request.EslFlag)
         {
             foreach (var record in patch.EnumerateMajorRecords().Where(r => r.FormKey.ModKey == patchKey))
@@ -158,8 +208,8 @@ internal static partial class OutfitPatchBuilder
             MasterFlagsLookup = session.MasterStyles,
         });
 
-        var masters = Verify(session, pluginPath, patchKey, built, request.EslFlag, issues);
-        return new BuiltPatch(pluginPath, masters, request.EslFlag, records, built, issues);
+        var masters = Verify(session, pluginPath, patchKey, built, standaloneBuilt, request.EslFlag, issues);
+        return new BuiltPatch(pluginPath, masters, request.EslFlag, records, built, issues, StandaloneOutfits: standaloneBuilt);
     }
 
     /// <summary>
@@ -168,7 +218,8 @@ internal static partial class OutfitPatchBuilder
     /// ESL range respected and every reference resolvable.
     /// </summary>
     private static IReadOnlyList<ModKey> Verify(
-        LoadOrderSession session, string pluginPath, ModKey patchKey, IReadOnlyList<BuiltAssignment> built, bool esl, List<Issue> issues)
+        LoadOrderSession session, string pluginPath, ModKey patchKey, IReadOnlyList<BuiltAssignment> built,
+        IReadOnlyList<BuiltStandaloneOutfit> standalone, bool esl, List<Issue> issues)
     {
         using var written = SkyrimMod.CreateFromBinaryOverlay(
             new ModPath(patchKey, pluginPath), SkyrimRelease.SkyrimSE,
@@ -195,10 +246,10 @@ internal static partial class OutfitPatchBuilder
 
         var npcs = written.Npcs.ToDictionary(n => n.FormKey);
         var outfits = written.Outfits.ToDictionary(o => o.FormKey);
-        if (npcs.Count != built.Count || outfits.Count != built.Count)
+        if (npcs.Count != built.Count || outfits.Count != built.Count + standalone.Count)
         {
             throw new WorkerException(ErrorCodes.ValidationFailed,
-                $"Verification failed: expected {built.Count} NPC overrides and outfits, found {npcs.Count} and {outfits.Count}.");
+                $"Verification failed: expected {built.Count} NPC overrides and {built.Count + standalone.Count} outfits, found {npcs.Count} and {outfits.Count}.");
         }
 
         foreach (var assignment in built)
@@ -218,6 +269,17 @@ internal static partial class OutfitPatchBuilder
             {
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: {assignment.Outfit} is outside the ESL range.");
             }
+        }
+
+        foreach (var item in standalone)
+        {
+            if (!outfits.TryGetValue(item.Outfit, out var outfit))
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: standalone outfit {item.Outfit} is absent.");
+            var items = outfit.Items?.Select(i => i.FormKey.ToString()).ToArray() ?? [];
+            if (!items.SequenceEqual(item.Armors.Select(a => a.FormKey)))
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: standalone outfit {item.Outfit} items differ from the request.");
+            if (esl && item.Outfit.ID is < LightRangeMin or > LightRangeMax)
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: {item.Outfit} is outside the ESL range.");
         }
 
         foreach (var record in written.EnumerateMajorRecords())

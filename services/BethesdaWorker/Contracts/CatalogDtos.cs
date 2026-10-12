@@ -238,6 +238,8 @@ public sealed record ArmorSearchRequest
 {
     public string? Text { get; init; }
     public string? Plugin { get; init; }
+    public string? ArmorType { get; init; }
+    public bool SmpOnly { get; init; }
 
     /// <summary>Only armors that occupy at least one of these biped slots (bit N-30 = slot N).</summary>
     public uint? SlotMask { get; init; }
@@ -262,6 +264,7 @@ public sealed record ArmorSummary
     public string? MaleModel { get; init; }
     public string? FemaleModel { get; init; }
     public required int AddonCount { get; init; }
+    public bool HasSmp { get; init; }
 }
 
 public sealed record ArmorSearchResponse

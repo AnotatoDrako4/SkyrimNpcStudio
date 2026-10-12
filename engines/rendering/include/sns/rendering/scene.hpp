@@ -149,6 +149,11 @@ struct RenderPart {
   float material_alpha = 1.0f;
   nif::Vec2 uv_offset{0, 0}, uv_scale{1, 1};  // already applied to the vertex UVs
   std::string physics_xml;                   // SMP definition of the mesh, if any
+  std::string physics_xml_location;          // effective MO2/BSA provider, or "missing"
+  bool physics_xml_well_formed = false;       // syntactic XML check; not FSMP schema validation
+  std::string physics_xml_error;
+  std::vector<std::string> physics_bones;    // declared <bone name="..."> values
+  std::vector<std::string> collision_shapes; // names referenced by the XML, not a simulation result
 
   // Shapes the game does not draw are still listed (for the inspector) but start hidden and are
   // left out of the bounds: no shader property, the NIF Hidden flag, an untextured SMP collision
@@ -219,6 +224,7 @@ struct SceneOptions {
   std::shared_ptr<SceneCache> cache;            // optional; enables reuse across builds
   bool apply_skinning = false;  // CPU-skin skinned shapes with the race skeleton (reference pose)
   bool include_skeleton = true;
+  std::string pose_name = "reference";  // "reference", "apose", "relaxed", "combat"
   std::function<bool()> cancelled;
   // Preview texture policy: the DDS mip whose larger side fits is used (real file data, no
   // resampling); files without mips are box-filtered. Head textures are loaded first.
@@ -264,6 +270,9 @@ struct SkinningReport {
   std::vector<std::string> missing;
 };
 SkinningReport apply_skinning(nif::Shape& shape, const nif::Skeleton& skeleton);
+
+// Poses the reference skeleton for testing armors/dresses: reference/tpose, apose, relaxed, combat.
+nif::Skeleton pose_skeleton(const nif::Skeleton& base, std::string_view pose_name);
 
 // FaceGen composition of BSLightingShader's FaceTint path (as reimplemented by Community Shaders):
 // result = (base^2 + 2*tint*base*(1-base)) * detail * 3.984375. Neutral tint is 0.5, neutral

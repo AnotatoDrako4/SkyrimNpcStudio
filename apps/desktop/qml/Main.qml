@@ -214,7 +214,13 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         NpcBrowser { studio: window.studio }
                         ModBrowser { studio: window.studio }
-                        ArmorCatalog { studio: window.studio }
+                        ArmorCatalog {
+                            studio: window.studio
+                            onPreviewRequested: (formKey) => {
+                                window.studio.armorPreview.selectArmor(formKey)
+                                centerTabs.currentIndex = 2
+                            }
+                        }
                     }
                 }
             }
@@ -228,6 +234,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     TabButton { text: qsTr("Vista 3D") }
                     TabButton { text: qsTr("Registro NPC") }
+                    TabButton { text: qsTr("Estudio de prendas") }
                 }
                 StackLayout {
                     Layout.fillWidth: true
@@ -235,6 +242,11 @@ ApplicationWindow {
                     currentIndex: centerTabs.currentIndex
                     CharacterViewport { studio: window.studio }
                     NpcOverview { studio: window.studio }
+                    CharacterViewport {
+                        studio: window.studio
+                        sceneOverride: window.studio.armorPreview
+                        previewMode: true
+                    }
                 }
             }
 

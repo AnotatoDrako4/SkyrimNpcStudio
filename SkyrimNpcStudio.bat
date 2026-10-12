@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================================
-rem  Skyrim NPC Studio Ultimate — Character Creator 3.0
-rem  FaceGen Fidelity + Outfit Designer (Release autónomo / Debug dev)
+rem  Skyrim NPC Studio Ultimate — Outfit Studio 3D + Character Creator 3.0
+rem  FaceGen Fidelity + Outfit Designer + HDT-SMP / FSMP (Release autónomo / Debug dev)
 rem ============================================================================
-title Skyrim NPC Studio Ultimate — Character Creator 3.0
+title Skyrim NPC Studio Ultimate — Outfit Studio 3D + Character Creator 3.0
 setlocal
 
 cd /d "%~dp0"

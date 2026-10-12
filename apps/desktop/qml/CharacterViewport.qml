@@ -9,7 +9,9 @@ Rectangle {
     id: root
     objectName: "characterViewport"
     required property StudioController studio
-    readonly property var scene: studio.scene
+    property var sceneOverride: null
+    property bool previewMode: false
+    readonly property var scene: sceneOverride ?? studio.scene
     color: Theme.bg
     property bool skeletonVisible: false
     property bool uvMode: false
@@ -100,6 +102,20 @@ Rectangle {
                 model: [qsTr("Cuerpo entero"), qsTr("Frontal"), qsTr("Lateral"), qsTr("Posterior"), qsTr("Rostro")]
                 onActivated: root.applyCameraPreset(currentIndex)
             }
+            ComboBox {
+                visible: root.previewMode
+                width: 170
+                model: [qsTr("Prenda aislada"), qsTr("Maniquí"), qsTr("Probar en NPC"), qsTr("Outfit completo")]
+                onActivated: root.scene.setPreviewMode(["piece", "mannequin", "npc", "outfit"][currentIndex])
+            }
+            ComboBox {
+                id: poseBox
+                width: 130
+                model: [qsTr("Pose T (Ref)"), qsTr("A-Pose"), qsTr("Relajada"), qsTr("Combate")]
+                onActivated: root.scene.pose = ["reference", "apose", "relaxed", "combat"][currentIndex]
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Postura de prueba (T-Pose, A-Pose, Relajada, Combate)")
+            }
             ToolButton {
                 text: "↻"
                 onClicked: root.reset()
@@ -111,7 +127,7 @@ Rectangle {
                 onClicked: { const p = root.scene.selectedBounds(); root.frame(p.center, p.radius, 0) }
                 ToolTip.visible: hovered; ToolTip.text: qsTr("Encuadrar pieza seleccionada")
             }
-            CheckBox { text: qsTr("Original"); checked: root.scene.original; onToggled: root.scene.original = checked }
+            CheckBox { visible: !root.previewMode; text: qsTr("Original"); checked: root.scene.original; onToggled: root.scene.original = checked }
             CheckBox { text: qsTr("Huesos"); checked: root.skeletonVisible; onToggled: root.skeletonVisible = checked }
             CheckBox {
                 text: "UV"; checked: root.uvMode
@@ -269,7 +285,7 @@ Rectangle {
                 BusyIndicator { anchors.centerIn: parent; running: root.scene.loading; visible: running }
                 Text {
                     anchors.centerIn: parent; width: Math.min(320,parent.width - 30)
-                    text: root.scene.status || qsTr("Selecciona un NPC")
+                    text: root.scene.status || (root.previewMode ? qsTr("Selecciona una prenda") : qsTr("Selecciona un NPC"))
                     color: Theme.textDim; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter
                     visible: !root.scene.loading && root.scene.parts.length === 0
                 }
@@ -356,7 +372,37 @@ Rectangle {
                                    + (parent.info.tangentsSwapped ? qsTr(" · tangente/bitangente intercambiadas") : "")
                                    + (parent.info.modelSpaceNormals ? qsTr(" · normales en espacio de modelo") : "")
                         }
-                        KeyValue { label: qsTr("Física SMP"); value: parent.info.physicsXml ?? ""; mono: true }
+                        SectionHeader { title: qsTr("Inspector SMP"); detail: parent.info.physicsDetected ? qsTr("referencia detectada") : qsTr("sin referencia XML") }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            StatusBadge {
+                                text: !parent.parent.info.physicsDetected ? qsTr("SIN FÍSICAS")
+                                      : (parent.parent.info.physicsXmlFound && parent.parent.info.physicsXmlWellFormed && (parent.parent.info.bonesMissing ?? 0) === 0)
+                                        ? qsTr("SMP VÁLIDO")
+                                        : (parent.parent.info.bonesMissing ?? 0) > 0 ? qsTr("SMP INCOMPLETO") : qsTr("SMP ROTO")
+                                tone: !parent.parent.info.physicsDetected ? Theme.textDim
+                                      : (parent.parent.info.physicsXmlFound && parent.parent.info.physicsXmlWellFormed && (parent.parent.info.bonesMissing ?? 0) === 0)
+                                        ? Theme.ok
+                                        : (parent.parent.info.bonesMissing ?? 0) > 0 ? Theme.warn : Theme.error
+                            }
+                        }
+                        KeyValue { label: qsTr("Malla cargada"); value: parent.info.vertices > 0 ? qsTr("sí, pose de referencia") : qsTr("no") }
+                        KeyValue { label: qsTr("XML físico"); value: parent.info.physicsXml || qsTr("no detectado"); mono: true }
+                        KeyValue { label: qsTr("Proveedor XML"); value: parent.info.physicsXmlProvider || qsTr("sin resolver") }
+                        KeyValue { label: qsTr("Dependencia XML"); value: !parent.info.physicsDetected ? qsTr("no declarada") : parent.info.physicsXmlWellFormed ? qsTr("XML bien formado; esquema FSMP sin validar") : parent.info.physicsXmlFound ? qsTr("XML inválido") : qsTr("faltante") }
+                        KeyValue { visible: !!parent.info.physicsXmlError; label: qsTr("Error XML"); value: parent.info.physicsXmlError ?? ""; valueColor: Theme.warn }
+                        KeyValue { label: qsTr("Huesos auxiliares"); value: parent.info.bonesFromMesh || qsTr("ninguno detectado") }
+                        KeyValue { label: qsTr("Huesos declarados XML"); value: (parent.info.physicsBones ?? []).join(", ") || qsTr("ninguno detectado") }
+                        KeyValue { label: qsTr("Shapes de colisión XML"); value: (parent.info.collisionShapes ?? []).join(", ") || qsTr("ninguno detectado") }
+                        KeyValue { label: qsTr("Referencia estática"); value: parent.info.staticCompatible ? qsTr("malla y huesos presentes") : qsTr("incompleta") }
+                        KeyValue { label: qsTr("Simulación"); value: qsTr("Estática en visor (FSMP se ejecuta en Skyrim)"); valueColor: Theme.accent }
+                        KeyValue {
+                            label: qsTr("FSMP en MO2")
+                            value: root.studio.outfit.compatibilityReport.smpRuntime?.present
+                                   ? qsTr("DLL encontrada: ") + root.studio.outfit.compatibilityReport.smpRuntime.provider
+                                   : qsTr("DLL no encontrada en archivos sueltos del perfil")
+                        }
+                        KeyValue { label: qsTr("Dentro de Skyrim"); value: qsTr("pendiente de verificar") }
                         KeyValue {
                             visible: (parent.info.hiddenReason ?? "") !== ""
                             label: qsTr("Oculta por defecto"); value: parent.info.hiddenReason ?? ""; valueColor: Theme.warn

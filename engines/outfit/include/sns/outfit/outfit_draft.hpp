@@ -33,6 +33,7 @@ class OutfitDraft {
   Piece erase(std::size_t index);
   [[nodiscard]] std::ptrdiff_t index_of(const std::string& form_key) const;
   void assign(std::vector<Piece> pieces) { pieces_ = std::move(pieces); }
+  void clear() { pieces_.clear(); }
 
  private:
   std::vector<Piece> pieces_;

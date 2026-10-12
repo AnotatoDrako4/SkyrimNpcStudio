@@ -14,6 +14,34 @@ ScrollView {
     clip: true
     contentWidth: availableWidth
 
+    Dialog {
+        id: presetNameDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: action === "save" ? qsTr("Guardar outfit como preset") : action === "duplicate" ? qsTr("Duplicar preset") : qsTr("Renombrar preset")
+        standardButtons: Dialog.Save | Dialog.Cancel
+        property string action: "save"
+        property string presetId: ""
+        onAccepted: {
+            const name = presetNameField.text.trim()
+            if (action === "save") root.outfit.saveCurrentPreset(name)
+            else if (action === "duplicate") root.outfit.duplicatePreset(presetId, name)
+            else root.outfit.renamePreset(presetId, name)
+        }
+        TextField { id: presetNameField; width: 320; placeholderText: qsTr("Nombre del conjunto") }
+    }
+
+    Dialog {
+        id: deletePresetDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: qsTr("Eliminar preset propio")
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        property string presetId: ""
+        onAccepted: root.outfit.deletePreset(presetId)
+        Label { text: qsTr("Se eliminará este preset de tu biblioteca personal.") }
+    }
+
     ColorDialog {
         id: materialColorDialog
         title: qsTr("Elegir color de tinte para la pieza")
@@ -166,12 +194,24 @@ ScrollView {
 
         SectionHeader { title: qsTr("Atuendo"); detail: root.outfit.npcLabel }
 
-        Text {
+        ColumnLayout {
             visible: root.outfit.npcFormKey.length === 0
-            text: qsTr("Selecciona un NPC para editar su atuendo predeterminado.")
-            color: Theme.textDim
-            font.pixelSize: Theme.small
+            Layout.fillWidth: true
             Layout.margins: 8
+            spacing: 8
+            Text {
+                text: qsTr("Selecciona un NPC para editar su atuendo, o crea un conjunto independiente directamente:")
+                color: Theme.textDim
+                font.pixelSize: Theme.small
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Button {
+                text: qsTr("✨ Crear Outfit Autónomo (desde cero)")
+                highlighted: true
+                Layout.fillWidth: true
+                onClicked: root.outfit.createNewOutfit()
+            }
         }
 
         ColumnLayout {
@@ -202,18 +242,27 @@ ScrollView {
                 Button { text: qsTr("Vaciar"); onClicked: root.outfit.clearPieces() }
             }
 
-            Button {
-                text: qsTr("Guardar NPC en proyecto actual")
+            RowLayout {
                 Layout.fillWidth: true
-                onClicked: root.outfit.addCurrentToProject()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Añade o actualiza este NPC en la lista del proyecto para exportar en lote")
+                Button {
+                    text: qsTr("✨ Nuevo Outfit")
+                    onClicked: root.outfit.createNewOutfit()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Comenzar a diseñar un nuevo conjunto independiente desde cero")
+                }
+                Button {
+                    text: qsTr("Guardar en proyecto")
+                    Layout.fillWidth: true
+                    onClicked: root.outfit.addCurrentToProject()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Añade o actualiza este NPC en la lista del proyecto para exportar en lote")
+                }
             }
 
             // Presets de Vestuario Canónicos
             SectionHeader {
                 title: qsTr("Presets de Vestuario")
-                detail: root.outfit.outfitPresets.length + qsTr(" arquetipos")
+                detail: root.outfit.outfitPresets.length + qsTr(" conjuntos")
             }
 
             RowLayout {
@@ -242,6 +291,62 @@ ScrollView {
                 font.pixelSize: Theme.small
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: qsTr("Guardar actual")
+                    enabled: root.outfit.exportable
+                    onClicked: {
+                        presetNameDialog.action = "save"
+                        presetNameDialog.presetId = ""
+                        presetNameField.text = ""
+                        presetNameDialog.open()
+                    }
+                }
+                Button {
+                    text: qsTr("Duplicar")
+                    enabled: presetCombo.currentIndex >= 0
+                    onClicked: {
+                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
+                        presetNameDialog.action = "duplicate"
+                        presetNameDialog.presetId = preset.id
+                        presetNameField.text = preset.name + qsTr(" (copia)")
+                        presetNameDialog.open()
+                    }
+                }
+                Button {
+                    text: qsTr("Renombrar")
+                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
+                    onClicked: {
+                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
+                        presetNameDialog.action = "rename"
+                        presetNameDialog.presetId = preset.id
+                        presetNameField.text = preset.name
+                        presetNameDialog.open()
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: qsTr("Favorito")
+                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
+                    checkable: true
+                    checked: presetCombo.currentIndex >= 0 && !!root.outfit.outfitPresets[presetCombo.currentIndex]?.favorite
+                    onClicked: {
+                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
+                        root.outfit.setPresetFavorite(preset.id, !preset.favorite)
+                    }
+                }
+                Button {
+                    text: qsTr("Eliminar preset")
+                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
+                    onClicked: {
+                        deletePresetDialog.presetId = root.outfit.outfitPresets[presetCombo.currentIndex].id
+                        deletePresetDialog.open()
+                    }
+                }
             }
 
             SectionHeader {
@@ -370,7 +475,7 @@ ScrollView {
 
             // Compatibility Guardian
             SectionHeader {
-                title: qsTr("Guardian de Compatibilidad")
+                title: qsTr("Guardian de Compatibilidad (evaluación preliminar)")
                 detail: root.outfit.compatibilityReport.badgeText ?? ""
             }
 
@@ -399,7 +504,7 @@ ScrollView {
                         Item { Layout.fillWidth: true }
                         Text {
                             text: (root.outfit.compatibilityReport.body?.name ?? "Vanilla")
-                                  + (root.outfit.compatibilityReport.body?.physicsEnabled ? qsTr(" · Físicas FSMP") : "")
+                                  + (root.outfit.compatibilityReport.body?.physicsEnabled ? qsTr(" · indicio de físicas; sin verificar") : "")
                             color: Theme.accent
                             font.pixelSize: Theme.small
                             font.bold: true

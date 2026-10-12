@@ -46,6 +46,31 @@ TEST_CASE("Outfit presets: save and load custom preset from directory", "[outfit
   CHECK(found->pieces[0].form_key == "013922:Skyrim.esm");
 }
 
+TEST_CASE("Custom outfit presets retain material assets and favorites", "[outfit][presets]") {
+  test::TempDir dir;
+  OutfitPreset preset;
+  preset.id = "custom_material";
+  preset.name = "Custom material";
+  preset.category = "Custom";
+  preset.favorite = true;
+  Piece piece{.form_key = "013922:Skyrim.esm", .name = "Armor", .plugin = "Skyrim.esm", .slot_mask = slot_bit(32)};
+  projects::PieceMaterialOverride material;
+  material.name = "Red";
+  material.tint_color = projects::ColorRgb{144, 12, 63};
+  material.diffuse_override = "textures\\custom\\armor_d.dds";
+  material.normal_override = "textures\\custom\\armor_n.dds";
+  piece.material = material;
+  preset.pieces.push_back(piece);
+  REQUIRE(save_outfit_preset_to_file(dir.path() / "custom_material.json", preset));
+  const auto loaded = load_outfit_presets_from_dir(dir.path());
+  const auto it = std::find_if(loaded.begin(), loaded.end(), [](const auto& p) { return p.id == "custom_material"; });
+  REQUIRE(it != loaded.end());
+  CHECK(it->favorite);
+  REQUIRE(it->pieces.size() == 1);
+  REQUIRE(it->pieces[0].material.has_value());
+  CHECK(it->pieces[0].material == material);
+}
+
 TEST_CASE("Biped slot helpers: display names and category classification", "[outfit][slots]") {
   CHECK(slot_bit(30) == (1u << 0));
   CHECK(slot_bit(32) == (1u << 2));

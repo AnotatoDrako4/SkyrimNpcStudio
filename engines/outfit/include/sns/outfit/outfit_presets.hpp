@@ -14,6 +14,7 @@ struct OutfitPreset {
   std::string name;
   std::string category;     // e.g. "Warrior", "Mage", "Hunter", "Noble", "Casual", "Armor"
   std::string description;
+  bool favorite = false;
   std::vector<Piece> pieces;
 
   bool operator==(const OutfitPreset&) const = default;

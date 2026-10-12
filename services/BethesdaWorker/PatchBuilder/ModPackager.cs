@@ -220,6 +220,12 @@ internal static class ModPackager
             outfitEditorId = string.IsNullOrEmpty(a.OutfitEditorId) ? null : a.OutfitEditorId,
             armors = a.Armors.Select(x => new { formKey = x.FormKey, editorId = x.EditorId, name = x.Name, plugin = x.WinningPlugin, slots = x.Slots }),
         }),
+        standaloneOutfits = (built.StandaloneOutfits ?? []).Select(a => new
+        {
+            outfit = a.Outfit.ToString(),
+            outfitEditorId = a.EditorId,
+            armors = a.Armors.Select(x => new { formKey = x.FormKey, editorId = x.EditorId, name = x.Name, plugin = x.WinningPlugin, slots = x.Slots }),
+        }),
         // "generated": every bundled file was produced by the studio (FaceGen), nothing is copied
         // from other mods; "dependent": the plugin only references assets of its masters.
         dependencyMode = bundledAssets.Count > 0 ? "generated" : "dependent",
@@ -260,6 +266,7 @@ internal static class ModPackager
         sb.AppendLine().AppendLine("## Contenido").AppendLine();
         sb.AppendLine(CultureInfo.InvariantCulture, $"- `{pluginName}` — {(built.EslFlagged ? "ESP con flag ESL (no ocupa índice de carga completo)" : "ESP")}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"- {built.Assignments.Count} override(s) de NPC.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- {(built.StandaloneOutfits ?? []).Count} outfit(s) OTFT independientes.");
         if (bundledAssets.Count > 0)
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"- {bundledAssets.Count} archivo(s) FaceGen regenerados por Skyrim NPC Studio a partir del registro exportado (no copiados de otros mods).");

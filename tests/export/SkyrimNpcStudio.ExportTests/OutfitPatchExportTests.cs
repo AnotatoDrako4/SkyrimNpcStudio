@@ -91,6 +91,56 @@ public sealed class OutfitPatchExportTests : IDisposable
     }
 
     [Fact]
+    public void Export_StandaloneOutfit_WritesVerifiedOtftWithoutNpcOverride()
+    {
+        var response = Export(new ExportOutfitPatchRequest
+        {
+            PluginName = "SkyrimNpcStudio_Standalone.esp",
+            OutputDirectory = _out,
+            EslFlag = true,
+            Assignments = [],
+            StandaloneOutfits =
+            [
+                new StandaloneOutfit
+                {
+                    Name = "Crimson Mix",
+                    ArmorFormKeys = [_lo.CrimsonCuirass.ToString(), SyntheticLoadOrder.SteelBoots.ToString()],
+                },
+            ],
+        });
+
+        using var mod = ReadBack(response.PluginPath);
+        Assert.Empty(mod.Npcs);
+        var outfit = Assert.Single(mod.Outfits);
+        Assert.Equal([_lo.CrimsonCuirass, SyntheticLoadOrder.SteelBoots], outfit.Items!.Select(i => i.FormKey));
+        Assert.Contains(response.Records, r => r.RecordType == "OTFT" && r.FormKey == outfit.FormKey.ToString());
+        using var manifest = JsonDocument.Parse(File.ReadAllText(response.ManifestPath));
+        Assert.Single(manifest.RootElement.GetProperty("standaloneOutfits").EnumerateArray());
+    }
+
+    [Fact]
+    public void Export_StandaloneOutfit_RejectsOverlappingSlotsBeforeWriting()
+    {
+        var request = new ExportOutfitPatchRequest
+        {
+            PluginName = "SkyrimNpcStudio_Conflict.esp",
+            OutputDirectory = _out,
+            Assignments = [],
+            StandaloneOutfits =
+            [
+                new StandaloneOutfit
+                {
+                    Name = "Invalid",
+                    ArmorFormKeys = [_lo.CrimsonCuirass.ToString(), SyntheticLoadOrder.SteelCuirass.ToString()],
+                },
+            ],
+        };
+
+        Assert.Throws<WorkerException>(() => Export(request));
+        Assert.False(Directory.Exists(Path.Combine(_out, "SkyrimNpcStudio_Conflict")));
+    }
+
+    [Fact]
     public void Export_OverrideIsCopiedFromTheWinningRecord()
     {
         var response = Export(LydiaRequest());

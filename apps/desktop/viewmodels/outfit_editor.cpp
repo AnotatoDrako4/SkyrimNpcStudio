@@ -5,6 +5,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
+#include <QUuid>
 
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
@@ -37,6 +38,19 @@ outfit::Piece piece_from(const QVariantMap& armor) {
   p.slot_mask = armor.value("slotMask").toUInt();
   return p;
 }
+
+std::filesystem::path preset_directory() {
+  return std::filesystem::path((QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/OutfitPresets").toStdWString());
+}
+
+bool custom_preset_id(const QString& id) {
+  static const QRegularExpression safe_id("^[A-Za-z0-9_-]+$");
+  if (!safe_id.match(id).hasMatch()) return false;
+  const auto builtin = outfit::builtin_outfit_presets();
+  return std::none_of(builtin.begin(), builtin.end(), [&](const auto& p) { return p.id == ss(id); });
+}
+
+std::filesystem::path preset_file(const QString& id) { return preset_directory() / (ss(id) + ".json"); }
 
 }  // namespace
 
@@ -133,6 +147,9 @@ int OutfitEditor::project_npc_count() const {
 }
 
 void OutfitEditor::setTarget(const QVariantMap& npc) {
+  ++validation_serial_;
+  ++preset_serial_;
+  validating_ = false;
   const auto summary = npc.value("summary").toMap();
   target_ = {ss(summary.value("formKey").toString()), ss(summary.value("editorId").toString()),
              ss(summary.value("name").toString()), ss(summary.value("winningPlugin").toString()),
@@ -152,6 +169,7 @@ void OutfitEditor::setTarget(const QVariantMap& npc) {
   }
   last_pieces_.clear();
   validation_.clear();
+  emit validationChanged();
   emit targetChanged();
   after_change();
 }
@@ -167,14 +185,48 @@ void OutfitEditor::push(std::unique_ptr<projects::Command> command) {
 void OutfitEditor::after_change() {
   emit changed();
   if (target_.form_key.empty()) return;
-  if (draft_.outfit().pieces() != last_pieces_ || validation_.isEmpty()) {
+  const bool pieces_changed = draft_.outfit().pieces() != last_pieces_;
+  if (pieces_changed) {
     last_pieces_ = draft_.outfit().pieces();
+    ++validation_serial_;  // discard a response for the previous set of pieces
+    validation_.clear();
+    validating_ = true;
+    emit validationChanged();
+  }
+  if (pieces_changed || validation_.isEmpty()) {
     debounce_.start();
   }
 }
 
+void OutfitEditor::createNewOutfit(const QString& name) {
+  const auto effective_name = name.trimmed().isEmpty() ? QStringLiteral("Nuevo Outfit") : name.trimmed();
+  target_ = {
+    .form_key = "000A2C8E:Skyrim.esm",
+    .editor_id = "SNS_" + ss(effective_name).substr(0, 16),
+    .name = ss(effective_name),
+    .winning_plugin = "Skyrim.esm",
+    .override_count = 1
+  };
+  current_.clear();
+  draft_.set_initial_outfit({});
+  draft_.outfit().clear();
+  history_->clear();
+  after_change();
+  emit targetChanged();
+  emit changed();
+}
+
 void OutfitEditor::addPiece(const QVariantMap& armor, bool replace_conflicting) {
-  if (target_.form_key.empty()) return;
+  if (target_.form_key.empty()) {
+    target_ = {
+      .form_key = "000A2C8E:Skyrim.esm",
+      .editor_id = "CustomStandaloneOutfit",
+      .name = "Outfit personalizado",
+      .winning_plugin = "Skyrim.esm",
+      .override_count = 1
+    };
+    emit targetChanged();
+  }
   try {
     push(outfit::make_add_piece(draft_.outfit(), piece_from(armor), replace_conflicting));
   } catch (const std::exception& ex) {
@@ -197,6 +249,11 @@ void OutfitEditor::clearPieces() { push(outfit::make_set_pieces(draft_.outfit(),
 void OutfitEditor::undo() { history_->undo(); }
 
 void OutfitEditor::redo() { history_->redo(); }
+
+void OutfitEditor::exportStandaloneOutfit(const QString& name, const QString& plugin_name, const QString& output_dir_or_url,
+                                          bool esl, bool zip, const QString& description) {
+  exportPatch(plugin_name, output_dir_or_url, esl, zip, description, false, false, true, name);
+}
 
 QVariantList OutfitEditor::asset_issues(const Json& validation) const {
   QVariantList issues;
@@ -247,7 +304,7 @@ void OutfitEditor::validate() {
 
 void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output_dir_or_url, bool esl, bool zip,
                                const QString& description, bool also_set_sleeping,
-                               bool export_all_project_npcs) {
+                               bool export_all_project_npcs, bool standalone, const QString& standalone_name) {
   if (exporting_ || target_.form_key.empty()) return;
   const auto output = QDir::toNativeSeparators(local_path(output_dir_or_url));
   const auto snap = snapshot_();
@@ -282,7 +339,7 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
   };
 
   Json assignments = Json::array();
-  if (export_all_project_npcs && project_ && project_->npcs.size() > 1) {
+  if (!standalone && export_all_project_npcs && project_ && project_->npcs.size() > 1) {
     auto it = std::find_if(project_->npcs.begin(), project_->npcs.end(),
                            [this](const projects::NpcEdit& e) { return e.target.form_key == target_.form_key; });
     projects::NpcEdit current_edit;
@@ -300,7 +357,7 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
           edit.target.form_key, edit.outfit->pieces,
           (edit.target.form_key == target_.form_key) ? also_set_sleeping : edit.outfit->also_sleeping));
     }
-  } else {
+  } else if (!standalone) {
     assignments.push_back(build_assignment(target_.form_key, draft_.outfit().pieces(), also_set_sleeping));
   }
 
@@ -314,6 +371,25 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
   emit exportingChanged();
   console_->append("info", "export", tr("Exportando %1 (%2 asignaciones de NPC) en %3…")
                                          .arg(plugin_name).arg(assignments.size()).arg(output));
+  Json standalone_outfits = Json::array();
+  if (standalone) {
+    Json armors = Json::array();
+    Json materials = Json::array();
+    for (const auto& p : draft_.outfit().pieces()) {
+      armors.push_back(p.form_key);
+      if (p.material) {
+        Json mat{{"armorFormKey", p.form_key}};
+        if (!p.material->diffuse_override.empty()) mat["diffusePath"] = p.material->diffuse_override;
+        if (!p.material->normal_override.empty()) mat["normalPath"] = p.material->normal_override;
+        if (!p.material->name.empty()) mat["materialName"] = p.material->name;
+        if (p.material->tint_color) {
+          mat["customTintColor"] = {{"r", p.material->tint_color->r}, {"g", p.material->tint_color->g}, {"b", p.material->tint_color->b}};
+        }
+        materials.push_back(std::move(mat));
+      }
+    }
+    standalone_outfits.push_back(Json{{"name", ss(standalone_name.trimmed())}, {"armorFormKeys", armors}, {"materialOverrides", materials}});
+  }
   worker_->call(
       method::kExportOutfitPatch,
       Json{{"pluginName", ss(plugin_name)},
@@ -322,7 +398,8 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
            {"createZip", zip},
            {"description", ss(description)},
            {"pluginProviders", providers},
-           {"assignments", assignments}},
+           {"assignments", assignments},
+           {"standaloneOutfits", standalone_outfits}},
       5min, this,
       [this](const Json& r) {
         exporting_ = false;
@@ -476,33 +553,115 @@ bool OutfitEditor::openProject(const QString& folder_or_url) {
 
 QVariantList OutfitEditor::outfit_presets() const {
   QVariantList list;
-  for (const auto& p : outfit::builtin_outfit_presets()) {
+  const auto builtin = outfit::builtin_outfit_presets();
+  for (const auto& p : outfit::load_outfit_presets_from_dir(preset_directory())) {
+    const bool is_builtin = std::any_of(builtin.begin(), builtin.end(), [&](const auto& b) { return b.id == p.id; });
     list.push_back(QVariantMap{
         {"id", qs(p.id)},
         {"name", qs(p.name)},
         {"category", qs(p.category)},
         {"description", qs(p.description)},
+        {"builtin", is_builtin},
+        {"favorite", p.favorite},
         {"pieceCount", static_cast<int>(p.pieces.size())}});
   }
   return list;
 }
 
 void OutfitEditor::applyPreset(const QString& preset_id) {
-  const auto presets = outfit::builtin_outfit_presets();
+  if (target_.form_key.empty()) return;
+  const auto presets = outfit::load_outfit_presets_from_dir(preset_directory());
   auto it = std::find_if(presets.begin(), presets.end(),
                          [&](const outfit::OutfitPreset& p) { return p.id == ss(preset_id); });
   if (it == presets.end()) return;
-
-  std::vector<outfit::Piece> pieces;
-  for (const auto& pr : it->pieces) {
-    pieces.push_back(outfit::Piece{
-        .form_key = pr.form_key,
-        .name = pr.name,
-        .plugin = pr.plugin,
-        .slot_mask = pr.slot_mask,
+  const auto preset = *it;
+  Json keys = Json::array();
+  for (const auto& p : preset.pieces) keys.push_back(p.form_key);
+  const int serial = ++preset_serial_;
+  const auto npc_key = target_.form_key;
+  worker_->call(method::kValidateOutfit, Json{{"npcFormKey", npc_key}, {"armorFormKeys", keys}}, 30s, this,
+    [this, serial, npc_key, preset](const Json& result) {
+      if (serial != preset_serial_ || target_.form_key != npc_key) return;
+      std::vector<outfit::Piece> resolved;
+      for (const auto& row : result.value("pieces", Json::array())) {
+        const auto armor = to_map(row.value("armor", Json::object()));
+        auto piece = piece_from(armor);
+        auto saved = std::find_if(preset.pieces.begin(), preset.pieces.end(), [&](const auto& p) { return p.form_key == piece.form_key; });
+        if (saved != preset.pieces.end()) piece.material = saved->material;
+        if (!piece.form_key.empty()) resolved.push_back(std::move(piece));
+      }
+      if (resolved.size() != preset.pieces.size()) {
+        console_->append("error", "outfit", tr("El preset '%1' contiene FormKeys ausentes del load order activo.").arg(qs(preset.name)));
+        return;
+      }
+      push(outfit::make_set_pieces(draft_.outfit(), std::move(resolved), "Aplicar preset: " + preset.name));
+    },
+    [this, serial](int, const QString& message, const Json&) {
+      if (serial == preset_serial_) console_->append("error", "outfit", tr("No se pudo resolver el preset: %1").arg(message));
     });
-  }
-  history_->push(outfit::make_set_pieces(draft_.outfit(), std::move(pieces), "Aplicar preset: " + it->name));
+}
+
+bool OutfitEditor::saveCurrentPreset(const QString& name) {
+  if (name.trimmed().isEmpty() || !exportable()) return false;
+  outfit::OutfitPreset preset;
+  preset.id = "custom_" + ss(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  preset.name = ss(name.trimmed());
+  preset.category = "Custom";
+  preset.pieces = draft_.outfit().pieces();
+  if (!outfit::save_outfit_preset_to_file(preset_file(qs(preset.id)), preset)) return false;
+  emit presetsChanged();
+  return true;
+}
+
+bool OutfitEditor::duplicatePreset(const QString& preset_id, const QString& name) {
+  if (name.trimmed().isEmpty()) return false;
+  const auto presets = outfit::load_outfit_presets_from_dir(preset_directory());
+  const auto it = std::find_if(presets.begin(), presets.end(), [&](const auto& p) { return p.id == ss(preset_id); });
+  if (it == presets.end()) return false;
+  auto copy = *it;
+  copy.id = "custom_" + ss(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  copy.name = ss(name.trimmed());
+  copy.category = "Custom";
+  copy.favorite = false;
+  if (!outfit::save_outfit_preset_to_file(preset_file(qs(copy.id)), copy)) return false;
+  emit presetsChanged();
+  return true;
+}
+
+bool OutfitEditor::renamePreset(const QString& preset_id, const QString& name) {
+  if (!custom_preset_id(preset_id) || name.trimmed().isEmpty()) return false;
+  const auto path = preset_file(preset_id);
+  if (!std::filesystem::exists(path)) return false;
+  const auto presets = outfit::load_outfit_presets_from_dir(preset_directory());
+  const auto it = std::find_if(presets.begin(), presets.end(), [&](const auto& p) { return p.id == ss(preset_id); });
+  if (it == presets.end()) return false;
+  auto updated = *it;
+  updated.name = ss(name.trimmed());
+  if (!outfit::save_outfit_preset_to_file(path, updated)) return false;
+  emit presetsChanged();
+  return true;
+}
+
+bool OutfitEditor::deletePreset(const QString& preset_id) {
+  if (!custom_preset_id(preset_id)) return false;
+  std::error_code ec;
+  if (!std::filesystem::remove(preset_file(preset_id), ec) || ec) return false;
+  emit presetsChanged();
+  return true;
+}
+
+bool OutfitEditor::setPresetFavorite(const QString& preset_id, bool favorite) {
+  if (!custom_preset_id(preset_id)) return false;
+  const auto path = preset_file(preset_id);
+  if (!std::filesystem::exists(path)) return false;
+  const auto presets = outfit::load_outfit_presets_from_dir(preset_directory());
+  const auto it = std::find_if(presets.begin(), presets.end(), [&](const auto& p) { return p.id == ss(preset_id); });
+  if (it == presets.end()) return false;
+  auto updated = *it;
+  updated.favorite = favorite;
+  if (!outfit::save_outfit_preset_to_file(path, updated)) return false;
+  emit presetsChanged();
+  return true;
 }
 
 QVariantMap OutfitEditor::compatibility_report() const {
@@ -517,8 +676,11 @@ QVariantMap OutfitEditor::compatibility_report() const {
   QVariantMap out;
   out["badge"] = (report.badge == appearance::HealthBadge::Verified) ? "verified"
                  : (report.badge == appearance::HealthBadge::ExportableWarning) ? "warning" : "error";
-  out["badgeText"] = (report.badge == appearance::HealthBadge::Verified) ? tr("Verificado (Compatible)")
-                     : (report.badge == appearance::HealthBadge::ExportableWarning) ? tr("Exportable con Advertencias") : tr("Error Bloqueante");
+  // Guardian currently receives plugin names but no inventory of winning body meshes. Its body
+  // classification is advisory; record and asset validation happens separately before export.
+  out["badgeText"] = (report.badge == appearance::HealthBadge::Verified) ? tr("Preliminar: sin errores detectados")
+                     : (report.badge == appearance::HealthBadge::ExportableWarning) ? tr("Preliminar: advertencias") : tr("Error Bloqueante");
+  out["verificationLevel"] = "preliminary";
   out["summary"] = qs(report.summary);
   out["canExport"] = report.can_export;
   out["errorCount"] = report.error_count();
@@ -530,6 +692,16 @@ QVariantMap OutfitEditor::compatibility_report() const {
   body["physicsEnabled"] = report.body_inspection.physics_enabled;
   body["details"] = qs(report.body_inspection.details);
   out["body"] = body;
+
+  QVariantMap smp_runtime{{"file", "SKSE/Plugins/hdtSMP64.dll"}, {"present", false}, {"provider", QString()}};
+  if (snap) {
+    if (const auto runtime = snap->vfs.resolve("SKSE/Plugins/hdtSMP64.dll")) {
+      smp_runtime["present"] = true;
+      if (runtime->provider < snap->vfs.providers().size())
+        smp_runtime["provider"] = qs(snap->vfs.providers()[runtime->provider].name);
+    }
+  }
+  out["smpRuntime"] = smp_runtime;
 
   QVariantList issues;
   for (const auto& issue : report.issues) {

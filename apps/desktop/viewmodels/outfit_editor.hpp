@@ -46,7 +46,7 @@ class OutfitEditor : public QObject {
   Q_PROPERTY(QString defaultExportDirectory READ default_export_directory CONSTANT)
   Q_PROPERTY(QVariantList projectNpcs READ project_npcs NOTIFY projectChanged)
   Q_PROPERTY(int projectNpcCount READ project_npc_count NOTIFY projectChanged)
-  Q_PROPERTY(QVariantList outfitPresets READ outfit_presets CONSTANT)
+  Q_PROPERTY(QVariantList outfitPresets READ outfit_presets NOTIFY presetsChanged)
   Q_PROPERTY(QVariantMap compatibilityReport READ compatibility_report NOTIFY changed)
 
  public:
@@ -86,6 +86,7 @@ class OutfitEditor : public QObject {
   // Takes the NPC details (catalog.getNpc + studio fields) and starts from its current outfit.
   void setTarget(const QVariantMap& npc_details);
 
+  Q_INVOKABLE void createNewOutfit(const QString& name = {});
   Q_INVOKABLE void addPiece(const QVariantMap& armor, bool replace_conflicting = true);
   Q_INVOKABLE void removePiece(const QString& form_key);
   Q_INVOKABLE void resetToCurrent();
@@ -95,7 +96,10 @@ class OutfitEditor : public QObject {
   Q_INVOKABLE void validate();
   Q_INVOKABLE void exportPatch(const QString& plugin_name, const QString& output_dir_or_url, bool esl, bool zip,
                                const QString& description, bool also_set_sleeping = false,
-                               bool export_all_project_npcs = true);
+                               bool export_all_project_npcs = true, bool standalone = false,
+                               const QString& standalone_name = {});
+  Q_INVOKABLE void exportStandaloneOutfit(const QString& name, const QString& plugin_name, const QString& output_dir_or_url,
+                                          bool esl, bool zip, const QString& description);
   Q_INVOKABLE void addCurrentToProject();
   Q_INVOKABLE void removeNpcFromProject(const QString& form_key);
   Q_INVOKABLE void loadNpcFromProject(const QString& form_key);
@@ -103,6 +107,11 @@ class OutfitEditor : public QObject {
   [[nodiscard]] QVariantMap compatibility_report() const;
 
   Q_INVOKABLE void applyPreset(const QString& preset_id);
+  Q_INVOKABLE bool saveCurrentPreset(const QString& name);
+  Q_INVOKABLE bool duplicatePreset(const QString& preset_id, const QString& name);
+  Q_INVOKABLE bool renamePreset(const QString& preset_id, const QString& name);
+  Q_INVOKABLE bool deletePreset(const QString& preset_id);
+  Q_INVOKABLE bool setPresetFavorite(const QString& preset_id, bool favorite);
   Q_INVOKABLE void setPieceMaterial(const QString& form_key, const QColor& tint_color, const QString& diffuse_path,
                                     const QString& normal_path, const QString& material_name);
   Q_INVOKABLE void clearPieceMaterial(const QString& form_key);
@@ -115,6 +124,7 @@ class OutfitEditor : public QObject {
   void validationChanged();
   void exportingChanged();
   void projectChanged();
+  void presetsChanged();
   void exported(const QVariantMap& result);
   void exportFailed(const QString& message, const QVariantList& issues);
   // Asks the studio to load the NPC of a reopened project.
@@ -137,6 +147,7 @@ class OutfitEditor : public QObject {
   bool validating_ = false;
   bool exporting_ = false;
   int validation_serial_ = 0;
+  int preset_serial_ = 0;
   QTimer debounce_;
   QString project_path_;
   std::optional<projects::Project> project_;

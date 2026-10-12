@@ -14,6 +14,7 @@
 #include "sns/mo2/vfs.hpp"
 #include "sns/nif/mesh.hpp"
 #include "sns/rendering/scene.hpp"
+#include "sns/rendering/smp_xml.hpp"
 #include "sns/textures/dds.hpp"
 
 namespace {
@@ -269,6 +270,19 @@ TEST_CASE("SMP XML collision shapes and why the game would not draw a shape", "[
   s.has_shader = true; s.hidden = true; CHECK(sns::rendering::hidden_reason(s, {}).find("Hidden") != std::string::npos);
 }
 
+TEST_CASE("SMP XML parser rejects malformed, DTD and oversized input", "[scene][smp]") {
+  const auto valid = sns::rendering::parse_smp_xml(
+      "<system><bone name='A-S-000001'/><per-triangle-shape name='CPhy'/></system>");
+  REQUIRE(valid.well_formed);
+  CHECK(valid.bones == std::vector<std::string>{"A-S-000001"});
+  CHECK(valid.collision_shapes == std::vector<std::string>{"CPhy"});
+
+  CHECK_FALSE(sns::rendering::parse_smp_xml("<system><bone></system>").well_formed);
+  CHECK_FALSE(sns::rendering::parse_smp_xml(
+      "<!DOCTYPE system [<!ENTITY x SYSTEM 'file:///C:/secret'>]><system>&x;</system>").well_formed);
+  CHECK_FALSE(sns::rendering::parse_smp_xml(std::string(4u * 1024u * 1024u + 1, 'x')).well_formed);
+}
+
 TEST_CASE("A zero-filled BSA is diagnosed as damaged with an external repair hint", "[assets]") {
   sns::test::TempDir dir;
   const auto broken = dir.write("Broken.bsa", std::string(256 * 1024, '\0'));
@@ -344,6 +358,8 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   CHECK(pixel(*scene.textures.at("textures\\test\\plate_d.dds"), 0) == Rgba{0, 0, 255, 255});
   CHECK(part_named(scene, "Plate").addon_form_key == "000801:Test.esp");
   CHECK(part_named(scene, "Plate").physics_xml == "meshes\\test\\armor.xml");
+  CHECK(part_named(scene, "Plate").physics_xml_location == "loose:Base Mod");
+  CHECK(part_named(scene, "Plate").collision_shapes == std::vector<std::string>{"CPhy", "Skirt", "VirtualGround"});
   // Alpha: decided by the NIF flags and by the alpha measured on the decoded texture.
   CHECK(part_named(scene, "Cloth").alpha_mode == AlphaMode::BlendWithDepthPrepass);
   CHECK(part_named(scene, "Plate").alpha_mode == AlphaMode::Opaque);  // test flag, opaque texels
@@ -386,4 +402,87 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   CHECK(hair_part.alpha_mode == AlphaMode::Mask); CHECK(hair_part.alpha_cutoff == Catch::Approx(200 / 255.0f));
   REQUIRE(hair_part.tint.has_value()); CHECK(hair_part.tint->g == Catch::Approx(0.25f));
   CHECK(std::none_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) { return i.severity == "error"; }));
+
+  // Missing XML is a dependency warning; the NIF still loads in its reference pose.
+  std::filesystem::remove(dir.path() / "Base Mod/meshes/test/armor.xml");
+  const auto missing_vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}, {"Override Mod", dir.path() / "Override Mod"}});
+  sns::assets::AssetResolver missing_resolver(missing_vfs, {});
+  const auto missing_scene = sns::rendering::build_character_scene(a, missing_resolver, {});
+  CHECK(part_named(missing_scene, "Plate").physics_xml_location == "missing");
+  CHECK(std::any_of(missing_scene.issues.begin(), missing_scene.issues.end(), [](const auto& i) {
+    return i.code == "PhysicsXmlMissing" && i.severity == "warning";
+  }));
 }
+
+TEST_CASE("Skeleton posing engine supports Reference, A-Pose, Relaxed, and Combat presets", "[scene][pose]") {
+  sns::nif::Skeleton skel;
+
+  auto add_bone = [&](std::string name, int parent, sns::nif::Vec3 pos) {
+    sns::nif::Bone b;
+    b.name = std::move(name);
+    b.parent = parent;
+    b.to_global.translation = pos;
+    b.to_global.rotation = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+    b.to_global.scale = 1.0f;
+    skel.bones.push_back(b);
+    return static_cast<int>(skel.bones.size() - 1);
+  };
+
+  const int root = add_bone("NPC Root [Root]", -1, {0, 0, 0});
+  const int spine = add_bone("NPC Spine1 [Spn1]", root, {0, 0, 100});
+  const int l_arm = add_bone("NPC L UpperArm [LUar]", spine, {20, 0, 120});
+  const int l_forearm = add_bone("NPC L Forearm [LLar]", l_arm, {40, 0, 120});
+  const int r_arm = add_bone("NPC R UpperArm [RUar]", spine, {-20, 0, 120});
+  const int r_forearm = add_bone("NPC R Forearm [RLar]", r_arm, {-40, 0, 120});
+  const int l_thigh = add_bone("NPC L Thigh [LThg]", root, {10, 0, 80});
+  const int r_thigh = add_bone("NPC R Thigh [RThg]", root, {-10, 0, 80});
+
+  SECTION("Reference / TPose preserves original positions and rotations") {
+    const auto ref = sns::rendering::pose_skeleton(skel, "reference");
+    REQUIRE(ref.bones.size() == skel.bones.size());
+    for (std::size_t i = 0; i < skel.bones.size(); ++i) {
+      CHECK(ref.bones[i].to_global.translation.x == Catch::Approx(skel.bones[i].to_global.translation.x));
+      CHECK(ref.bones[i].to_global.translation.y == Catch::Approx(skel.bones[i].to_global.translation.y));
+      CHECK(ref.bones[i].to_global.translation.z == Catch::Approx(skel.bones[i].to_global.translation.z));
+      CHECK(ref.bones[i].to_global.rotation[0][0] == Catch::Approx(1.0f));
+    }
+
+    const auto tpose = sns::rendering::pose_skeleton(skel, "tpose");
+    CHECK(tpose.bones[l_forearm].to_global.translation.x == Catch::Approx(40.0f));
+  }
+
+  SECTION("A-Pose drops upper arms and moves forearm descendants accordingly") {
+    const auto apose = sns::rendering::pose_skeleton(skel, "apose");
+    // Root and spine unaffected
+    CHECK(apose.bones[root].to_global.translation.z == Catch::Approx(0.0f));
+    CHECK(apose.bones[spine].to_global.translation.z == Catch::Approx(100.0f));
+
+    // Upper arm pivot translation remains the same
+    CHECK(apose.bones[l_arm].to_global.translation.x == Catch::Approx(20.0f));
+    CHECK(apose.bones[l_arm].to_global.translation.z == Catch::Approx(120.0f));
+
+    // Upper arm rotation changed from identity
+    CHECK(apose.bones[l_arm].to_global.rotation[0][0] != Catch::Approx(1.0f));
+
+    // Forearm translation moved: dx = 20, rot_y(-0.70f): x = 20 + cos(-0.7)*20, z = 120 - sin(-0.7)*20
+    CHECK(apose.bones[l_forearm].to_global.translation.x < 40.0f);
+    CHECK(apose.bones[l_forearm].to_global.translation.z < 120.0f);
+
+    // Right arm symmetrically rotated
+    CHECK(apose.bones[r_forearm].to_global.translation.x > -40.0f);
+    CHECK(apose.bones[r_forearm].to_global.translation.z < 120.0f);
+  }
+
+  SECTION("Relaxed and Combat poses modify upper body and leg descendants") {
+    const auto relaxed = sns::rendering::pose_skeleton(skel, "relaxed");
+    CHECK(relaxed.bones[l_forearm].to_global.translation.z < 120.0f);
+
+    const auto combat = sns::rendering::pose_skeleton(skel, "combat");
+    // Spine rotates around X, moving everything above it
+    CHECK(combat.bones[spine].to_global.rotation[1][1] != Catch::Approx(1.0f));
+    // Thighs rotated
+    CHECK(combat.bones[l_thigh].to_global.rotation[1][1] != Catch::Approx(1.0f));
+    CHECK(combat.bones[r_thigh].to_global.rotation[1][1] != Catch::Approx(1.0f));
+  }
+}
+

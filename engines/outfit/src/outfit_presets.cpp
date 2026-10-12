@@ -170,6 +170,7 @@ std::vector<OutfitPreset> load_outfit_presets_from_dir(const std::filesystem::pa
         preset.name = j.value("name", preset.id);
         preset.category = j.value("category", "Custom");
         preset.description = j.value("description", "");
+        preset.favorite = j.value("favorite", false);
         if (j.contains("pieces") && j["pieces"].is_array()) {
           for (const auto& item : j["pieces"]) {
             Piece p;
@@ -177,6 +178,21 @@ std::vector<OutfitPreset> load_outfit_presets_from_dir(const std::filesystem::pa
             p.name = item.value("name", "");
             p.plugin = item.value("plugin", "");
             p.slot_mask = item.value("slotMask", 0u);
+            if (item.contains("material") && item["material"].is_object()) {
+              const auto& mj = item["material"];
+              projects::PieceMaterialOverride material;
+              material.name = mj.value("name", "");
+              material.glossiness = mj.value("glossiness", 1.0f);
+              material.diffuse_override = mj.value("diffuseOverride", "");
+              material.normal_override = mj.value("normalOverride", "");
+              if (mj.contains("tintColor") && mj["tintColor"].is_object()) {
+                const auto& color = mj["tintColor"];
+                material.tint_color = projects::ColorRgb{
+                    static_cast<std::uint8_t>(color.value("r", 255)), static_cast<std::uint8_t>(color.value("g", 255)),
+                    static_cast<std::uint8_t>(color.value("b", 255))};
+              }
+              p.material = std::move(material);
+            }
             if (!p.form_key.empty()) {
               preset.pieces.push_back(std::move(p));
             }
@@ -200,11 +216,13 @@ bool save_outfit_preset_to_file(const std::filesystem::path& file_path, const Ou
     j["name"] = preset.name;
     j["category"] = preset.category;
     j["description"] = preset.description;
+    j["favorite"] = preset.favorite;
     Json pieces_arr = Json::array();
     for (const auto& p : preset.pieces) {
       Json pj = {{"formKey", p.form_key}, {"name", p.name}, {"plugin", p.plugin}, {"slotMask", p.slot_mask}};
       if (p.material) {
-        Json mj = {{"name", p.material->name}, {"glossiness", p.material->glossiness}};
+        Json mj = {{"name", p.material->name}, {"glossiness", p.material->glossiness},
+                   {"diffuseOverride", p.material->diffuse_override}, {"normalOverride", p.material->normal_override}};
         if (p.material->tint_color.has_value()) {
           const auto& tc = *p.material->tint_color;
           mj["tintColor"] = {{"r", tc.r}, {"g", tc.g}, {"b", tc.b}};

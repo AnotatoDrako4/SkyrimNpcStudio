@@ -479,6 +479,17 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             parameters.Add(("$plugin", request.Plugin.Trim()));
         }
 
+        if (!string.IsNullOrWhiteSpace(request.ArmorType))
+        {
+            where.Append(" AND a.armor_type = $armorType COLLATE NOCASE");
+            parameters.Add(("$armorType", request.ArmorType.Trim()));
+        }
+
+        if (request.SmpOnly)
+        {
+            where.Append(" AND (a.search_text LIKE '%smp%' OR a.search_text LIKE '%hdt%' OR a.search_text LIKE '%physics%' OR a.male_model LIKE '%smp%' OR a.female_model LIKE '%smp%')");
+        }
+
         if (request.SlotMask is { } mask and not 0)
         {
             where.Append(" AND (a.slot_mask & $mask) != 0");
@@ -543,21 +554,28 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
     {
         var mask = (uint)r.GetInt64(5);
         var formKey = r.GetString(0);
+        var editorId = Str(r, 1);
+        var name = Str(r, 2);
+        var male = Str(r, 8);
+        var female = Str(r, 9);
+        var combined = $"{editorId} {name} {male} {female}".ToLowerInvariant();
+        var hasSmp = combined.Contains("smp") || combined.Contains("hdt") || combined.Contains("physics");
         return new ArmorSummary
         {
             FormKey = formKey,
             FormId = session.FormatFormId(FormKey.Factory(formKey)),
-            EditorId = Str(r, 1),
-            Name = Str(r, 2),
+            EditorId = editorId,
+            Name = name,
             OriginPlugin = r.GetString(3),
             WinningPlugin = r.GetString(4),
             SlotMask = mask,
             Slots = BipedSlots.ToSlots(mask),
             ArmorType = r.GetString(6),
             NonPlayable = r.GetInt32(7) != 0,
-            MaleModel = Str(r, 8),
-            FemaleModel = Str(r, 9),
+            MaleModel = male,
+            FemaleModel = female,
             AddonCount = (JsonSerializer.Deserialize<string[]>(r.GetString(10)) ?? []).Length,
+            HasSmp = hasSmp,
         };
     }
 

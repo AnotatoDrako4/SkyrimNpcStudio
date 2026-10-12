@@ -88,6 +88,7 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, draft_, history_, this);
   appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
+  armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
 
   // Project save/open: the face travels with the outfit in the same .snps.
   outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {
@@ -201,6 +202,7 @@ void StudioController::loadProfile(const QString& profile) {
 
   set_phase(Phase::Scanning);
   scene_->clear();
+  armor_preview_->clear();
   snapshot_.reset();
   set_progress(tr("Leyendo perfil '%1'…").arg(profile), -1.0);
   scan_cancel_ = std::make_shared<std::atomic<bool>>(false);
@@ -595,13 +597,15 @@ void StudioController::selectNpc(const QString& form_key) {
   });
 }
 
-void StudioController::searchArmors(const QString& text, int slot, const QString& plugin) {
+void StudioController::searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type, bool smp_only) {
   if (phase_ != Phase::Ready) return;
   if (armor_search_cancel_) *armor_search_cancel_ = true;
   Json params = {{"limit", 500}};
   if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
   if (slot >= 30 && slot <= 61) params["slotMask"] = 1u << (slot - 30);
   if (!plugin.trimmed().isEmpty()) params["plugin"] = ss(plugin.trimmed());
+  if (!armor_type.trimmed().isEmpty() && armor_type != "all") params["armorType"] = ss(armor_type.trimmed());
+  if (smp_only) params["smpOnly"] = true;
   const int serial = ++armor_search_serial_;
   armor_search_cancel_ = worker_->call(method::kSearchArmors, params, 30s, this, [this, serial](const Json& r) {
     if (serial != armor_search_serial_) return;
@@ -612,6 +616,22 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
       QStringList slot_list;
       for (const auto& s : row.value("slots").toList()) slot_list << s.toString();
       row["slots"] = slot_list.join(", ");
+
+      const auto male_model = row.value("maleModel").toString();
+      const auto female_model = row.value("femaleModel").toString();
+      const auto effective_model = !female_model.isEmpty() ? female_model : male_model;
+      bool nif_found = false;
+      if (!effective_model.isEmpty() && snapshot_) {
+        const auto resolved = snapshot_->vfs.resolve(ss(effective_model));
+        nif_found = resolved.has_value();
+      }
+      row["nifFound"] = nif_found;
+
+      if (!row.contains("hasSmp")) {
+        const auto combined = (row.value("name").toString() + " " + row.value("editorId").toString() + " " + effective_model).toLower();
+        row["hasSmp"] = combined.contains("smp") || combined.contains("hdt") || combined.contains("physics");
+      }
+
       rows.push_back(row);
     }
     armor_results_->reset(rows);

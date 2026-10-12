@@ -51,6 +51,13 @@ public sealed record OutfitAssignment
     public IReadOnlyList<PieceMaterialDto>? MaterialOverrides { get; init; }
 }
 
+public sealed record StandaloneOutfit
+{
+    public required string Name { get; init; }
+    public required IReadOnlyList<string> ArmorFormKeys { get; init; }
+    public IReadOnlyList<PieceMaterialDto>? MaterialOverrides { get; init; }
+}
+
 public sealed record ExportOutfitPatchRequest
 {
     /// <summary>Plugin file name, e.g. "SkyrimNpcStudio_Lydia.esp". Also used as the mod folder name.</summary>
@@ -60,6 +67,7 @@ public sealed record ExportOutfitPatchRequest
     public required string OutputDirectory { get; init; }
 
     public required IReadOnlyList<OutfitAssignment> Assignments { get; init; }
+    public IReadOnlyList<StandaloneOutfit> StandaloneOutfits { get; init; } = [];
 
     public bool EslFlag { get; init; }
     public bool CreateZip { get; init; } = true;

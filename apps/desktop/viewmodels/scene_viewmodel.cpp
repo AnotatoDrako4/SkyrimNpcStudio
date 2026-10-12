@@ -101,6 +101,10 @@ QVariantMap inspector(const rendering::RenderPart& p, const rendering::Character
   for (std::size_t i = 0; i < std::min<std::size_t>(p.bones_from_mesh.size(), 6); ++i) bones_mesh << qs(p.bones_from_mesh[i]);
   QStringList warnings;
   for (const auto& w : p.warnings) warnings << qs(w);
+  QStringList collisions;
+  for (const auto& name : p.collision_shapes) collisions << qs(name);
+  QStringList physics_bones;
+  for (const auto& name : p.physics_bones) physics_bones << qs(name);
   const auto tris = static_cast<qlonglong>(p.indices.size() / 3);
   return {
       {"shape", qs(p.shape_name)}, {"piece", qs(p.label)}, {"group", qs(p.group)},
@@ -128,12 +132,23 @@ QVariantMap inspector(const rendering::RenderPart& p, const rendering::Character
       {"bonesMissing", static_cast<qlonglong>(p.bones_missing.size())},
       {"vertexColors", p.vertex_colors}, {"tangentsSwapped", p.tangents_swapped}, {"modelSpaceNormals", p.model_space_normals},
       {"weightBlended", p.weight_blended}, {"physicsXml", qs(p.physics_xml)},
+      {"physicsXmlProvider", qs(p.physics_xml_location)},
+      {"physicsDetected", !p.physics_xml.empty()},
+      {"physicsXmlFound", !p.physics_xml.empty() && p.physics_xml_location != "missing"},
+      {"physicsXmlWellFormed", p.physics_xml_well_formed},
+      {"physicsXmlError", qs(p.physics_xml_error)},
+      {"physicsBones", physics_bones},
+      {"collisionShapes", collisions},
+      {"staticCompatible", !p.mesh_path.empty() && p.bones_missing.empty() &&
+           (p.physics_xml.empty() || p.physics_xml_well_formed)},
       {"hiddenReason", qs(p.hidden_reason)}, {"warnings", warnings}};
 }
 }
 
-SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent)
-    : QObject(parent), worker_(worker), outfit_(outfit), appearance_(appearance), snapshot_(std::move(snapshot)) {
+SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot,
+                               QObject* parent, bool armor_preview)
+    : QObject(parent), worker_(worker), outfit_(outfit), appearance_(appearance), snapshot_(std::move(snapshot)),
+      armor_preview_(armor_preview) {
   pool_.setMaxThreadCount(1);
   debounce_.setSingleShot(true);
   debounce_.setInterval(200);
@@ -175,15 +190,44 @@ void SceneViewModel::setOriginal(bool value) {
   if (original_ == value) return;
   original_ = value; emit originalChanged(); reload();
 }
+void SceneViewModel::setPose(const QString& pose) {
+  if (pose_ == pose) return;
+  pose_ = pose;
+  emit poseChanged();
+  reload();
+}
 void SceneViewModel::reload() {
   cancel();
   const auto snapshot = snapshot_();
-  if (!snapshot || outfit_->npc_form_key().isEmpty()) return;
+  QString effective_npc = outfit_->npc_form_key();
+  if (effective_npc.isEmpty() && armor_preview_) {
+    effective_npc = QStringLiteral("000A2C8E:Skyrim.esm");
+  }
+  if (!snapshot || effective_npc.isEmpty() || (armor_preview_ && selected_armor_.isEmpty())) {
+    if (armor_preview_) {
+      status_ = selected_armor_.isEmpty() ? tr("Selecciona una prenda del catálogo para inspeccionarla")
+                                          : tr("Selecciona un NPC como referencia de cuerpo, raza y esqueleto");
+      emit loadingChanged();
+    }
+    return;
+  }
   const int serial = serial_;
   cancel_ = std::make_shared<std::atomic<bool>>(false);
   loading_ = true; status_ = tr("Cargando recursos 3D..."); emit loadingChanged();
-  Json params{{"npcFormKey", ss(outfit_->npc_form_key())}};
-  if (preview_armor_) {
+  Json params{{"npcFormKey", ss(effective_npc)}};
+  if (armor_preview_ && preview_mode_ == "outfit") {
+    params["armorFormKeys"] = Json::array();
+    for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
+  } else if (armor_preview_ && preview_mode_ == "npc") {
+    params["armorFormKeys"] = Json::array();
+    params["armorFormKeys"].push_back(ss(selected_armor_));
+    for (const auto& p : outfit_->pieces()) {
+      const auto fk = ss(p.toMap().value("formKey").toString());
+      if (fk != ss(selected_armor_)) params["armorFormKeys"].push_back(fk);
+    }
+  } else if (armor_preview_) {
+    params["armorFormKeys"] = Json::array({ss(selected_armor_)});
+  } else if (preview_armor_) {
     params["armorFormKeys"] = Json::array();
     for (const auto& key : *preview_armor_) params["armorFormKeys"].push_back(ss(key));
   } else if (!original_) {
@@ -192,9 +236,11 @@ void SceneViewModel::reload() {
   }
   // "Original" shows the profile as it is: no face overlay, record weight/height/colors.
   const FacePreview preview = (!original_ && appearance_) ? appearance_->preview() : FacePreview{};
-  auto build = [this, snapshot, serial, preview, cancel = cancel_](const Json& data) {
+  const QString display_mode = armor_preview_ ? preview_mode_ : QString();
+  const QString current_pose = pose_;
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, cancel = cancel_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview] {
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose] {
       rendering::CharacterScene scene;
       QString error;
       QElapsedTimer timer; timer.start();
@@ -210,10 +256,26 @@ void SceneViewModel::reload() {
         const auto context = ResourceContext::for_snapshot(snapshot);
         rendering::SceneOptions options;
         options.apply_skinning = true;
+        options.pose_name = current_pose.toStdString();
         options.cancelled = cancelled;
         options.cache = context->scene_cache;
         options.overlay = preview.overlay;
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
+        if (display_mode == "piece" || display_mode == "mannequin") {
+          std::erase_if(scene.parts, [&](const rendering::RenderPart& part) {
+            return display_mode == "piece" ? part.group != "outfit" : part.group == "head";
+          });
+          if (display_mode == "piece") scene.skeleton_lines.clear();
+          bool first = true;
+          for (const auto& part : scene.parts) {
+            if (!part.shown_by_default) continue;
+            for (int i = 0; i < 3; ++i) {
+              if (first) { scene.min[i] = part.min[i]; scene.max[i] = part.max[i]; }
+              else { scene.min[i] = std::min(scene.min[i], part.min[i]); scene.max[i] = std::max(scene.max[i], part.max[i]); }
+            }
+            first = false;
+          }
+        }
       } catch (const std::exception& e) { error = qs(e.what()); }
       if (cancel->load()) return;
       const auto elapsed = timer.elapsed();
@@ -337,6 +399,18 @@ void SceneViewModel::restoreVisibility() {
 void SceneViewModel::setPreviewArmor(const QVariant& formKeys) {
   if (formKeys.isNull() || !formKeys.isValid()) preview_armor_.reset();
   else preview_armor_ = formKeys.toStringList();
+  reload();
+}
+void SceneViewModel::selectArmor(const QString& formKey) {
+  if (!armor_preview_ || formKey.isEmpty()) return;
+  selected_armor_ = formKey;
+  emit previewModeChanged();
+  reload();
+}
+void SceneViewModel::setPreviewMode(const QString& mode) {
+  if (!armor_preview_ || (mode != "piece" && mode != "mannequin" && mode != "npc" && mode != "outfit") || mode == preview_mode_) return;
+  preview_mode_ = mode;
+  emit previewModeChanged();
   reload();
 }
 QVariantMap SceneViewModel::selectedPart() const {

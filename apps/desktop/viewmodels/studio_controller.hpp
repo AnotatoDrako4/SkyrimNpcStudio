@@ -30,6 +30,7 @@ class StudioController : public QObject {
   Q_PROPERTY(AppearanceEditor* appearance READ appearance CONSTANT)
   Q_PROPERTY(EditHistory* history READ history CONSTANT)
   Q_PROPERTY(SceneViewModel* scene READ scene CONSTANT)
+  Q_PROPERTY(SceneViewModel* armorPreview READ armor_preview CONSTANT)
   Q_PROPERTY(VariantListModel* instances READ instances CONSTANT)
   Q_PROPERTY(VariantListModel* mods READ mods CONSTANT)
   Q_PROPERTY(VariantListModel* diagnostics READ diagnostics CONSTANT)
@@ -61,6 +62,7 @@ class StudioController : public QObject {
   [[nodiscard]] AppearanceEditor* appearance() const { return appearance_; }
   [[nodiscard]] EditHistory* history() const { return history_; }
   [[nodiscard]] SceneViewModel* scene() const { return scene_; }
+  [[nodiscard]] SceneViewModel* armor_preview() const { return armor_preview_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
   [[nodiscard]] VariantListModel* diagnostics() const { return diagnostics_; }
@@ -96,7 +98,7 @@ class StudioController : public QObject {
 
   Q_INVOKABLE void searchNpcs(const QString& text, const QString& sex, const QString& kind, const QString& plugin);
   Q_INVOKABLE void selectNpc(const QString& form_key);
-  Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin);
+  Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type = {}, bool smp_only = false);
   Q_INVOKABLE void filterMods(const QString& text, bool enabled_only);
   Q_INVOKABLE QVariantMap modDetails(const QString& mod_name) const;
   Q_INVOKABLE QString providerOf(const QString& plugin) const;
@@ -131,6 +133,7 @@ class StudioController : public QObject {
   OutfitEditor* outfit_;
   AppearanceEditor* appearance_ = nullptr;
   SceneViewModel* scene_ = nullptr;
+  SceneViewModel* armor_preview_ = nullptr;
   VariantListModel* instances_;
   VariantListModel* mods_;
   VariantListModel* diagnostics_;

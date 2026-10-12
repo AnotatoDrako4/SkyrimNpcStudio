@@ -36,8 +36,12 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QString status READ status NOTIFY loadingChanged)
   Q_PROPERTY(QString selected READ selected NOTIFY selectionChanged)
   Q_PROPERTY(bool original READ original WRITE setOriginal NOTIFY originalChanged)
+  Q_PROPERTY(QString previewMode READ preview_mode NOTIFY previewModeChanged)
+  Q_PROPERTY(QString selectedArmor READ selected_armor NOTIFY previewModeChanged)
+  Q_PROPERTY(QString pose READ pose WRITE setPose NOTIFY poseChanged)
  public:
-  SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent);
+  SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent,
+                 bool armor_preview = false);
   ~SceneViewModel() override;
   QVariantList parts() const { return parts_; }
   QVariantMap visibility() const { return visibility_; }
@@ -50,6 +54,10 @@ class SceneViewModel : public QObject {
   QString status() const { return status_; }
   QString selected() const { return selected_; }
   bool original() const { return original_; }
+  QString preview_mode() const { return preview_mode_; }
+  QString selected_armor() const { return selected_armor_; }
+  QString pose() const { return pose_; }
+  void setPose(const QString& pose);
   void setOriginal(bool value);
   Q_INVOKABLE void reload();
   Q_INVOKABLE void cancel();
@@ -64,12 +72,16 @@ class SceneViewModel : public QObject {
   // Preview-only armor list (FormKeys; [] = skin only); null follows the outfit editor again.
   // Used by viewport verification; it never touches the project, the outfit or undo/redo.
   Q_INVOKABLE void setPreviewArmor(const QVariant& formKeys);
+  Q_INVOKABLE void selectArmor(const QString& formKey);
+  Q_INVOKABLE void setPreviewMode(const QString& mode);
  signals:
   void changed();
   void visibilityChanged();
   void loadingChanged();
   void selectionChanged();
   void originalChanged();
+  void previewModeChanged();
+  void poseChanged();
   void ready();
  private:
   void install(const rendering::CharacterScene& scene);
@@ -85,6 +97,10 @@ class SceneViewModel : public QObject {
   int serial_ = 0;
   bool loading_ = false;
   bool original_ = false;
+  bool armor_preview_ = false;
+  QString preview_mode_ = "piece";
+  QString selected_armor_;
+  QString pose_ = "reference";
   QString status_;
   QString selected_;
   std::optional<QStringList> preview_armor_;

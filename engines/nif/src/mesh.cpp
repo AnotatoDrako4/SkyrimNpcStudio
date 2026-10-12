@@ -136,14 +136,37 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
   nifly::NifFile nif;
   load_nif(nif, bytes, label);
   MeshFile file;
-  if (auto* root = nif.GetRootNode()) {
-    for (auto& ref : root->extraDataRefs) {
+
+  auto check_extra_data = [&](auto& refs) {
+    if (!file.physics_xml.empty()) return;
+    for (const auto& ref : refs) {
       const auto* data = nif.GetHeader().GetBlock<nifly::NiStringExtraData>(ref);
-      if (data && text::iequals_ascii(data->name.get(), "HDT Skinned Mesh Physics Object")) {
-        auto xml = text::data_path_key(text::trim(data->stringData.get()));
+      if (!data) continue;
+      const auto name = data->name.get();
+      const auto val = data->stringData.get();
+      const auto name_lower = text::to_lower_ascii(name);
+      const auto val_lower = text::to_lower_ascii(val);
+      if (name_lower.find("hdt") != std::string::npos ||
+          name_lower.find("smp") != std::string::npos ||
+          name_lower.find("physics") != std::string::npos ||
+          val_lower.ends_with(".xml")) {
+        auto xml = text::data_path_key(text::trim(val));
         if (xml.starts_with("data\\")) xml.erase(0, 5);
-        file.physics_xml = xml;
+        if (!xml.empty() && xml.ends_with(".xml")) {
+          file.physics_xml = xml;
+          break;
+        }
       }
+    }
+  };
+
+  if (auto* root = nif.GetRootNode()) {
+    check_extra_data(root->extraDataRefs);
+  }
+  if (file.physics_xml.empty()) {
+    for (auto* node : nif.GetNodes()) {
+      check_extra_data(node->extraDataRefs);
+      if (!file.physics_xml.empty()) break;
     }
   }
 

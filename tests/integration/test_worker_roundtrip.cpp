@@ -104,7 +104,7 @@ TEST_CASE("First use case on synthetic data: Lydia's outfit exported as a mod", 
                                       {"cacheDirectory", text::path_to_utf8(w.dir.path() / "cache")},
                                       {"plugins", plugins}},
                                  120s);
-  CHECK(index["npcCount"] == 3);
+  CHECK(index["npcCount"] == 4);
   CHECK(progress_events > 0);
 
   // 5-6. Find Lydia and identify the winning record.

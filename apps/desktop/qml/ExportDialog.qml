@@ -19,7 +19,7 @@ Dialog {
     modal: true
     anchors.centerIn: Overlay.overlay
     width: 620
-    title: qsTr("Guardar mod — parche de atuendo")
+    title: standalone.checked ? qsTr("Guardar mod — outfit independiente") : qsTr("Guardar mod — parche de atuendo")
     standardButtons: Dialog.Close
 
     Settings { id: prefs; category: "export"; property string lastDirectory: "" }
@@ -31,6 +31,7 @@ Dialog {
         installMessage = ""
         installSuccess = false
         pluginName.text = outfit.suggestedPluginName
+        standaloneName.text = outfit.npcLabel.length > 0 ? outfit.npcLabel.split(" (")[0] + " Outfit" : "Outfit personalizado"
         if (outputDir.text.length === 0) outputDir.text = prefs.lastDirectory.length > 0 ? prefs.lastDirectory : outfit.defaultExportDirectory
     }
 
@@ -51,14 +52,26 @@ Dialog {
         spacing: 8
 
         CheckBox {
+            id: standalone
+            text: qsTr("Crear OTFT independiente, sin modificar el NPC")
+            checked: false
+        }
+        TextField {
+            id: standaloneName
+            visible: standalone.checked
+            Layout.fillWidth: true
+            placeholderText: qsTr("Nombre del outfit")
+        }
+
+        CheckBox {
             id: exportAll
-            visible: root.outfit.projectNpcCount > 1
+            visible: !standalone.checked && root.outfit.projectNpcCount > 1
             text: qsTr("Exportar todos los NPCs del proyecto (%1 NPCs)").arg(root.outfit.projectNpcCount)
             checked: true
         }
 
         KeyValue {
-            visible: !exportAll.visible || !exportAll.checked
+            visible: !standalone.checked && (!exportAll.visible || !exportAll.checked)
             label: qsTr("NPC")
             value: root.outfit.npcLabel
         }
@@ -68,7 +81,7 @@ Dialog {
             value: root.outfit.pieces.map(p => p.name).join(", ")
         }
         KeyValue {
-            visible: exportAll.visible && exportAll.checked
+            visible: !standalone.checked && exportAll.visible && exportAll.checked
             label: qsTr("NPCs incluidos")
             value: root.outfit.projectNpcs.map(n => n.name + " (" + n.piecesCount + " piezas)").join(", ")
         }
@@ -85,7 +98,7 @@ Dialog {
 
         CheckBox { id: esl; text: qsTr("Marcar como ESL (ESP-FE, no ocupa índice de carga completo)"); checked: true }
         CheckBox { id: zip; text: qsTr("Crear ZIP instalable en MO2"); checked: true }
-        CheckBox { id: sleepOutfit; text: qsTr("Asignar también como atuendo para dormir (SOFT)"); checked: false }
+        CheckBox { id: sleepOutfit; visible: !standalone.checked; text: qsTr("Asignar también como atuendo para dormir (SOFT)"); checked: false }
         TextField { id: description; Layout.fillWidth: true; placeholderText: qsTr("Descripción (opcional)") }
 
         Text {
@@ -101,12 +114,15 @@ Dialog {
             text: root.outfit.exporting ? qsTr("Exportando…") : qsTr("Exportar")
             highlighted: true
             enabled: !root.outfit.exporting && pluginName.acceptableInput && outputDir.text.length > 0 && root.outfit.exportable
+                     && (!standalone.checked || standaloneName.text.trim().length > 0)
             Layout.alignment: Qt.AlignRight
             onClicked: {
                 root.exportResult = null
                 root.failure = ""
                 prefs.lastDirectory = outputDir.text
-                root.outfit.exportPatch(pluginName.text, outputDir.text, esl.checked, zip.checked, description.text, sleepOutfit.checked, exportAll.visible ? exportAll.checked : false)
+                root.outfit.exportPatch(pluginName.text, outputDir.text, esl.checked, zip.checked, description.text,
+                                        sleepOutfit.checked, exportAll.visible ? exportAll.checked : false,
+                                        standalone.checked, standaloneName.text)
             }
         }
 
