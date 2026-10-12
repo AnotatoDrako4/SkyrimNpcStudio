@@ -34,7 +34,27 @@ try {
     if (-not $full.StartsWith($dist, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Destination must be inside $root\dist"
     }
-    if (Test-Path $full) { Remove-Item -LiteralPath $full -Recurse -Force }
+
+    # Terminar cualquier proceso previo que tenga archivos abiertos en dist\
+    Get-Process -Name SkyrimNpcStudio, BethesdaWorker -ErrorAction SilentlyContinue |
+        Where-Object {
+            try { $_.Path -and $_.Path.StartsWith($dist, [StringComparison]::OrdinalIgnoreCase) } catch { $true }
+        } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+
+    if (Test-Path $full) {
+        $attempts = 0
+        while ((Test-Path $full) -and ($attempts -lt 5)) {
+            try {
+                Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+                break
+            } catch {
+                $attempts++
+                Start-Sleep -Milliseconds 800
+            }
+        }
+    }
     New-Item -ItemType Directory -Force $full | Out-Null
 
     Write-Host '[2/4] Copiando el ejecutable y el runtime de Qt...'
