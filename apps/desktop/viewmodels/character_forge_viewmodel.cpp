@@ -3,6 +3,7 @@
 #include <QRegularExpression>
 #include <QUrl>
 #include <filesystem>
+#include <stdexcept>
 #include <utility>
 
 namespace sns::app {
@@ -82,6 +83,8 @@ bool CharacterForgeViewModel::saveProject(const QString& folder_or_url) {
   if (!has_project_) return false;
   try {
     auto folder = std::filesystem::path(local_path(folder_or_url).toStdWString());
+    if (folder.extension() == L".snps")
+      throw std::invalid_argument("Cannot create Character Forge inside an existing .snps project");
     if (folder.extension() != L".sncf") {
       folder /= (safe_stem(project_name()) + QStringLiteral(".sncf")).toStdWString();
     }
