@@ -10,6 +10,7 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/variant_list_model.cpp viewmodels/variant_list_model.hpp
   viewmodels/worker_client.cpp viewmodels/worker_client.hpp
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
+  viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp)
 
@@ -36,6 +37,14 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/KeyValue.qml
     qml/components/IssueList.qml
     qml/components/StatusBadge.qml
+    qml/charactercreator/FaceSliderGroup.qml
+    qml/charactercreator/FaceCustomizer.qml
+    qml/charactercreator/PresetManager.qml
+    qml/charactercreator/HairEyeCustomizer.qml
+    qml/charactercreator/BodyCustomizer.qml
+    qml/charactercreator/CharacterToolbar.qml
+    qml/charactercreator/ExportWizardDialog.qml
+    qml/charactercreator/CharacterCreator.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
     qml/shaders/alpha_channel.frag)
@@ -49,6 +58,7 @@ target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D
   sns::ipc sns::mo2 sns::projects sns::outfit
+  sns::appearance sns::presets sns::face
   sns::rendering
   sns::compile_options)
 

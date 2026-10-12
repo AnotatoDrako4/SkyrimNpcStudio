@@ -269,3 +269,27 @@ public sealed record ArmorSearchResponse
     public required int Total { get; init; }
     public required IReadOnlyList<ArmorSummary> Items { get; init; }
 }
+
+public sealed record HeadPartSummary
+{
+    public required string FormKey { get; init; }
+    public string? EditorId { get; init; }
+    public string? Name { get; init; }
+    public required string Type { get; init; }
+    public string? ModelPath { get; init; }
+    public required string Plugin { get; init; }
+}
+
+public sealed record SearchHeadPartsRequest
+{
+    public string? Type { get; init; }
+    public string? Text { get; init; }
+    public string? Plugin { get; init; }
+    public int Limit { get; init; } = 200;
+}
+
+public sealed record SearchHeadPartsResponse
+{
+    public required int Total { get; init; }
+    public required IReadOnlyList<HeadPartSummary> Items { get; init; }
+}

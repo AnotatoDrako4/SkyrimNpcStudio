@@ -56,15 +56,28 @@ Adelantada respecto al orden del documento porque no depende del visor 3D.
 - [x] Atuendo para dormir desde la UI (`alsoSetSleepingOutfit` en `ExportDialog` y vista de estado)
 - [x] Multi-NPC en la UI (soporte de lote de NPCs en proyecto `.snps`, lista interactiva y exportación consolidada en un solo plugin)
 
-## Fase 4 — Edición facial ⏳
+## Fase 4 — Edición facial y Character Creator 2.0 ✅
 
-Head parts, morphs, tintes, presets RaceMenu, pipeline FaceGen y validación de coherencia registro↔FaceGen (los datos para detectar el *dark face* ya están: el estudio avisa si la FaceGen ganadora viene de un mod distinto al plugin ganador; las HeadParts activas se muestran en la ficha del NPC).
+- [x] Motor facial (`engines/face/`): sliders y morphs estándar de Skyrim (nariz, mandíbula, mejillas, ojos, cejas, labios, barbilla), HeadParts y validaciones.
+- [x] Motor de presets (`engines/presets/`): parser RaceMenu `.jslot` en VFS de MO2, compatibilidad por raza/sexo/mallas, informes de discrepancias.
+- [x] Borrador de apariencia unificada (`engines/appearance/`): `AppearanceDraft` con stack de comandos (deshacer/rehacer), paleta de colores, tono de piel, peso y altura.
+- [x] Formato de proyecto `.snps` v2: persistencia unificada de atuendo y personalización facial (`FaceConfig`, `HeadPartRef`, `ColorRgb`) con compatibilidad bidireccional v1/v2.
+- [x] Pipeline BethesdaWorker: RPCs `appearance.getDonorAppearance`, `catalog.searchHeadParts`, `export.faceOverhaul`, `export.completeOverhaul`.
+- [x] Donantes y NPC Replacers: transferencia de apariencia de NPC instalados, copia atómica de mallas FaceGen NIF y texturas FaceTint DDS al NPC objetivo.
+- [x] Exportador de parches de rostro (`FacePatchBuilder` & `ModPackager`): Modos B (Face Overhaul) y C (Complete Overhaul con Atuendo), generación de ESP/ESL, `manifest.json`, `meta.ini` y ZIP para MO2.
+- [x] UI de Character Creator 2.0 (`apps/desktop/qml/charactercreator/`):
+  - Nuevo workspace "PERSONALIZAR PERSONAJE" con conmutador en barra superior.
+  - Toolbar 3D con presets de cámara (Rostro, Cuerpo, Frontal, Lateral, Posterior, Reset).
+  - Comparador antes/después en tiempo real con alternancia visual fluida.
+  - Pestañas: Presets (.jslot y catálogo), Rostro (sliders anatómicos), Cabello y Ojos (paleta y HeadParts), Cuerpo y Piel (peso, altura, tono), y Vestuario.
+  - Selector de Modo Fácil vs Modo Avanzado.
+  - Asistente de exportación (`ExportWizardDialog`) con Modos A, B y C.
 
 ## Fases 5–7 ⏳
 
-Personalización de prendas (variantes, recoloreado, BodySlide), estudio completo (comparador, batch) y expansiones (SPID, Blender, poses). No se abordan hasta estabilizar el núcleo.
+Personalización avanzada de prendas (variantes de texturas, BodySlide directo), exportador SPID y poses dinámicas.
 
 ## Siguiente paso recomendado
 
-1. Probar en el juego el parche generado (pasos 17–18) y registrar el resultado.
-2. Fase 4: Integración del motor de edición facial (`engines/face/`), morphs/tints y validadores de coherencia FaceGen.
+1. Probar en el juego Skyrim SE/AE los mods generados con Modo B (Face Overhaul) y Modo C (Overhaul Completo).
+2. Continuar con integraciones adicionales de animaciones y poses para el viewport 3D.

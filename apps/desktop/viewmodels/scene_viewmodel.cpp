@@ -6,6 +6,7 @@
 #include <QtQuick3D/QQuick3DTextureData>
 #include <algorithm>
 #include <cmath>
+#include "appearance_editor.hpp"
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/ipc/protocol.hpp"
 
@@ -130,13 +131,16 @@ QVariantMap inspector(const rendering::RenderPart& p, const rendering::Character
 }
 }
 
-SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, std::function<SnapshotPtr()> snapshot, QObject* parent)
-    : QObject(parent), worker_(worker), outfit_(outfit), snapshot_(std::move(snapshot)) {
+SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent)
+    : QObject(parent), worker_(worker), outfit_(outfit), appearance_(appearance), snapshot_(std::move(snapshot)) {
   pool_.setMaxThreadCount(1);
   debounce_.setSingleShot(true);
   debounce_.setInterval(200);
   connect(&debounce_, &QTimer::timeout, this, &SceneViewModel::reload);
   connect(outfit_, &OutfitEditor::changed, this, [this] { cancel(); debounce_.start(); });
+  if (appearance_) {
+    connect(appearance_, &AppearanceEditor::appearanceChanged, this, [this] { cancel(); debounce_.start(); });
+  }
 }
 SceneViewModel::~SceneViewModel() { cancel(); pool_.waitForDone(); }
 void SceneViewModel::cancel() {
@@ -172,6 +176,12 @@ void SceneViewModel::reload() {
   } else if (!original_) {
     params["armorFormKeys"] = Json::array();
     for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
+  }
+  if (!original_ && appearance_ && appearance_->has_face_edits()) {
+    auto donor_json = appearance_->build_donor_override_json();
+    if (!donor_json.is_null()) {
+      params["donorOverride"] = std::move(donor_json);
+    }
   }
   request_cancel_ = worker_->call(ipc::protocol::method::kGetAppearance, params, std::chrono::seconds(30), this,
     [this, snapshot, serial, cancel = cancel_](const Json& data) {

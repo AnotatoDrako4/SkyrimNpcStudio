@@ -85,7 +85,23 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
                                            "femaleModel", "addonCount"},
                                           this)) {
   outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, this);
-  scene_ = new SceneViewModel(worker_, outfit_, [this] { return snapshot_; }, this);
+  appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, this);
+  scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
+
+  outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {
+    if (appearance_ && appearance_->npc_form_key().toStdString() == form_key && appearance_->draft().is_face_dirty()) {
+      return appearance_->draft().face().config;
+    }
+    return std::nullopt;
+  });
+
+  outfit_->set_face_loaded_handler([this](const std::string& form_key, const std::optional<projects::FaceConfig>& face) {
+    if (appearance_) {
+      projects::NpcTarget target;
+      target.form_key = form_key;
+      appearance_->set_target(target, face);
+    }
+  });
 
   connect(worker_, &WorkerClient::logLine, this,
           [this](const QString& level, const QString& text) { console_->append(level, "worker", text); });
@@ -564,6 +580,13 @@ void StudioController::selectNpc(const QString& form_key) {
     npc_loading_ = false;
     emit npcChanged();
     outfit_->setTarget(details);
+    const auto sum = details.value("summary").toMap();
+    projects::NpcTarget target{
+        .form_key = ss(sum.value("formKey").toString()),
+        .editor_id = ss(sum.value("editorId").toString()),
+        .name = ss(sum.value("name").toString()),
+    };
+    appearance_->set_target(target);
   }, [this, form_key](int, const QString& message, const Json&) {
     if (form_key != pending_npc_) return;
     npc_loading_ = false;

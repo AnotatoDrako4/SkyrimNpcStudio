@@ -9,6 +9,7 @@
 #include "console_model.hpp"
 #include "mo2_snapshot.hpp"
 #include "outfit_editor.hpp"
+#include "appearance_editor.hpp"
 #include "variant_list_model.hpp"
 #include "worker_client.hpp"
 #include "scene_viewmodel.hpp"
@@ -24,6 +25,7 @@ class StudioController : public QObject {
   Q_PROPERTY(WorkerClient* worker READ worker CONSTANT)
   Q_PROPERTY(ConsoleModel* console READ console CONSTANT)
   Q_PROPERTY(OutfitEditor* outfit READ outfit CONSTANT)
+  Q_PROPERTY(AppearanceEditor* appearance READ appearance CONSTANT)
   Q_PROPERTY(SceneViewModel* scene READ scene CONSTANT)
   Q_PROPERTY(VariantListModel* instances READ instances CONSTANT)
   Q_PROPERTY(VariantListModel* mods READ mods CONSTANT)
@@ -53,6 +55,7 @@ class StudioController : public QObject {
   [[nodiscard]] WorkerClient* worker() const { return worker_; }
   [[nodiscard]] ConsoleModel* console() const { return console_; }
   [[nodiscard]] OutfitEditor* outfit() const { return outfit_; }
+  [[nodiscard]] AppearanceEditor* appearance() const { return appearance_; }
   [[nodiscard]] SceneViewModel* scene() const { return scene_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
@@ -119,6 +122,7 @@ class StudioController : public QObject {
   WorkerClient* worker_;
   ConsoleModel* console_;
   OutfitEditor* outfit_;
+  AppearanceEditor* appearance_ = nullptr;
   SceneViewModel* scene_ = nullptr;
   VariantListModel* instances_;
   VariantListModel* mods_;

@@ -43,8 +43,13 @@ class OutfitEditor : public QObject {
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
+  using FaceProvider = std::function<std::optional<projects::FaceConfig>(const std::string& form_key)>;
+  using FaceLoadedHandler = std::function<void(const std::string& form_key, const std::optional<projects::FaceConfig>& face)>;
 
   OutfitEditor(WorkerClient* worker, ConsoleModel* console, SnapshotProvider snapshot, QObject* parent = nullptr);
+
+  void set_face_provider(FaceProvider provider) { face_provider_ = std::move(provider); }
+  void set_face_loaded_handler(FaceLoadedHandler handler) { face_loaded_handler_ = std::move(handler); }
 
   [[nodiscard]] QString npc_form_key() const { return qs(target_.form_key); }
   [[nodiscard]] QString npc_label() const;
@@ -116,6 +121,8 @@ class OutfitEditor : public QObject {
   QString project_path_;
   std::optional<projects::Project> project_;
   std::vector<outfit::Piece> pending_project_pieces_;
+  FaceProvider face_provider_;
+  FaceLoadedHandler face_loaded_handler_;
 };
 
 }  // namespace sns::app

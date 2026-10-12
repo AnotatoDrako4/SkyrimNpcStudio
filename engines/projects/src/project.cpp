@@ -61,6 +61,64 @@ void from_json(const Json& j, ExportOptions& v) {
   v.create_zip = j.value("createZip", true);
   v.output_directory = j.value("outputDirectory", "");
 }
+void to_json(Json& j, const HeadPartRef& v) {
+  j = {{"formKey", v.form_key}, {"editorId", v.editor_id}, {"type", v.type}, {"meshPath", v.mesh_path}};
+}
+void from_json(const Json& j, HeadPartRef& v) {
+  v.form_key = j.value("formKey", "");
+  v.editor_id = j.value("editorId", "");
+  v.type = j.value("type", "");
+  v.mesh_path = j.value("meshPath", "");
+}
+void to_json(Json& j, const ColorRgb& v) {
+  j = {{"r", v.r}, {"g", v.g}, {"b", v.b}};
+}
+void from_json(const Json& j, ColorRgb& v) {
+  v.r = j.value("r", static_cast<std::uint8_t>(255));
+  v.g = j.value("g", static_cast<std::uint8_t>(255));
+  v.b = j.value("b", static_cast<std::uint8_t>(255));
+}
+void to_json(Json& j, const TintLayerConfig& v) {
+  j = {{"index", v.index}, {"color", v.color}, {"alpha", v.alpha}, {"preset", v.preset}};
+}
+void from_json(const Json& j, TintLayerConfig& v) {
+  v.index = j.value("index", 0u);
+  if (j.contains("color")) v.color = j["color"].get<ColorRgb>();
+  v.alpha = j.value("alpha", 1.0f);
+  v.preset = j.value("preset", 0u);
+}
+void to_json(Json& j, const FaceConfig& v) {
+  j = {{"presetId", v.preset_id},
+       {"presetName", v.preset_name},
+       {"presetSource", v.preset_source},
+       {"donorNpcFormKey", v.donor_npc_form_key},
+       {"donorPlugin", v.donor_plugin},
+       {"donorFacegenMesh", v.donor_facegen_mesh},
+       {"donorFacegenTint", v.donor_facegen_tint},
+       {"headParts", v.head_parts},
+       {"morphSliders", v.morph_sliders},
+       {"tintLayers", v.tint_layers},
+       {"weight", v.weight},
+       {"height", v.height}};
+  if (v.hair_color) j["hairColor"] = *v.hair_color;
+  if (v.skin_tone) j["skinTone"] = *v.skin_tone;
+}
+void from_json(const Json& j, FaceConfig& v) {
+  v.preset_id = j.value("presetId", "");
+  v.preset_name = j.value("presetName", "");
+  v.preset_source = j.value("presetSource", "");
+  v.donor_npc_form_key = j.value("donorNpcFormKey", "");
+  v.donor_plugin = j.value("donorPlugin", "");
+  v.donor_facegen_mesh = j.value("donorFacegenMesh", "");
+  v.donor_facegen_tint = j.value("donorFacegenTint", "");
+  v.head_parts = j.value("headParts", std::vector<HeadPartRef>{});
+  v.morph_sliders = j.value("morphSliders", std::map<std::string, float>{});
+  v.tint_layers = j.value("tintLayers", std::vector<TintLayerConfig>{});
+  v.weight = j.value("weight", 100.0f);
+  v.height = j.value("height", 1.0f);
+  if (j.contains("hairColor")) v.hair_color = j["hairColor"].get<ColorRgb>();
+  if (j.contains("skinTone")) v.skin_tone = j["skinTone"].get<ColorRgb>();
+}
 void to_json(Json& j, const HistoryEntry& v) { j = {{"utc", v.utc}, {"action", v.action}}; }
 void from_json(const Json& j, HistoryEntry& v) {
   v.utc = j.value("utc", "");
@@ -72,6 +130,7 @@ namespace {
 constexpr const char* kProjectFile = "project.json";
 constexpr const char* kNpcFile = "npc.json";
 constexpr const char* kOutfitFile = "outfit.json";
+constexpr const char* kFaceFile = "face.json";
 constexpr const char* kDependenciesFile = "dependencies.json";
 
 Json read_json(const fs::path& path) {
@@ -94,7 +153,7 @@ void snapshot_previous(const fs::path& dir) {
   std::replace(stamp.begin(), stamp.end(), ':', '-');
   const auto target = dir / "versions" / text::path_from_utf8(stamp);
   fs::create_directories(target, ec);
-  for (const char* name : {kProjectFile, kNpcFile, kOutfitFile, kDependenciesFile}) {
+  for (const char* name : {kProjectFile, kNpcFile, kOutfitFile, kFaceFile, kDependenciesFile}) {
     if (fs::exists(dir / name, ec)) fs::copy_file(dir / name, target / name, fs::copy_options::overwrite_existing, ec);
   }
   auto versions = ProjectStore::list_versions(dir);
@@ -130,12 +189,24 @@ void ProjectStore::save(const fs::path& dir, Project& project) {
   std::vector<std::string> deps;
   Json npcs = Json::array();
   Json outfits = Json::object();
+  Json faces = Json::object();
+  bool has_faces = false;
   for (const auto& edit : project.npcs) {
     npcs.push_back(edit.target);
     deps.push_back(edit.target.form_key.substr(edit.target.form_key.find(':') + 1));
     if (edit.outfit) {
       outfits[edit.target.form_key] = *edit.outfit;
       for (const auto& piece : edit.outfit->pieces) deps.push_back(piece.form_key.substr(piece.form_key.find(':') + 1));
+    }
+    if (edit.face) {
+      has_faces = true;
+      faces[edit.target.form_key] = *edit.face;
+      if (!edit.face->donor_plugin.empty()) deps.push_back(edit.face->donor_plugin);
+      for (const auto& part : edit.face->head_parts) {
+        if (const auto pos = part.form_key.find(':'); pos != std::string::npos) {
+          deps.push_back(part.form_key.substr(pos + 1));
+        }
+      }
     }
   }
   std::sort(deps.begin(), deps.end());
@@ -144,6 +215,9 @@ void ProjectStore::save(const fs::path& dir, Project& project) {
 
   write_json(dir / kNpcFile, {{"formatVersion", kProjectFormatVersion}, {"npcs", npcs}});
   write_json(dir / kOutfitFile, {{"formatVersion", kProjectFormatVersion}, {"outfits", outfits}});
+  if (has_faces) {
+    write_json(dir / kFaceFile, {{"formatVersion", kProjectFormatVersion}, {"faces", faces}});
+  }
   write_json(dir / kDependenciesFile, {{"formatVersion", kProjectFormatVersion}, {"plugins", deps}});
   // project.json last: it is the file that marks a complete save.
   write_json(dir / kProjectFile, {{"format", "skyrim-npc-studio/project"},
@@ -182,13 +256,19 @@ Project ProjectStore::load(const fs::path& dir) {
   std::error_code ec;
   if (fs::exists(dir / kNpcFile, ec)) {
     for (const auto& target : read_json(dir / kNpcFile).value("npcs", Json::array())) {
-      p.npcs.push_back({target.get<NpcTarget>(), std::nullopt});
+      p.npcs.push_back({target.get<NpcTarget>(), std::nullopt, std::nullopt});
     }
   }
   if (fs::exists(dir / kOutfitFile, ec)) {
     const auto outfits = read_json(dir / kOutfitFile).value("outfits", Json::object());
     for (auto& edit : p.npcs) {
       if (outfits.contains(edit.target.form_key)) edit.outfit = outfits[edit.target.form_key].get<OutfitConfig>();
+    }
+  }
+  if (fs::exists(dir / kFaceFile, ec)) {
+    const auto faces = read_json(dir / kFaceFile).value("faces", Json::object());
+    for (auto& edit : p.npcs) {
+      if (faces.contains(edit.target.form_key)) edit.face = faces[edit.target.form_key].get<FaceConfig>();
     }
   }
   if (fs::exists(dir / kDependenciesFile, ec)) {

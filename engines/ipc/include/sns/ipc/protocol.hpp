@@ -20,6 +20,10 @@ inline constexpr const char* kGetAppearance = "catalog.getAppearance";
 inline constexpr const char* kSearchArmors = "catalog.searchArmors";
 inline constexpr const char* kValidateOutfit = "outfit.validate";
 inline constexpr const char* kExportOutfitPatch = "export.outfitPatch";
+inline constexpr const char* kGetDonorAppearance = "appearance.getDonorAppearance";
+inline constexpr const char* kSearchHeadParts = "catalog.searchHeadParts";
+inline constexpr const char* kExportFacePatch = "export.faceOverhaul";
+inline constexpr const char* kExportCompleteNpc = "export.completeOverhaul";
 // Server -> client notification.
 inline constexpr const char* kIndexProgress = "catalog.progress";
 // Client -> server notification understood by StreamJsonRpc (same as LSP).

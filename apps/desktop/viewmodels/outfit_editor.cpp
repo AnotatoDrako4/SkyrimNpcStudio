@@ -335,6 +335,9 @@ void OutfitEditor::addCurrentToProject() {
   projects::NpcEdit edit;
   edit.target = target_;
   edit.outfit = projects::OutfitConfig{{}, draft_.pieces(), false};
+  if (face_provider_) {
+    edit.face = face_provider_(target_.form_key);
+  }
   if (it != project_->npcs.end()) {
     *it = std::move(edit);
   } else {
@@ -366,6 +369,9 @@ void OutfitEditor::loadNpcFromProject(const QString& form_key) {
     if (it->outfit) {
       pending_project_pieces_ = it->outfit->pieces;
     }
+    if (face_loaded_handler_) {
+      face_loaded_handler_(it->target.form_key, it->face);
+    }
     emit projectOpened(form_key);
   }
 }
@@ -391,6 +397,9 @@ bool OutfitEditor::saveProject(const QString& folder_or_url, const QString& name
     projects::NpcEdit edit;
     edit.target = target_;
     edit.outfit = projects::OutfitConfig{{}, draft_.pieces(), false};
+    if (face_provider_) {
+      edit.face = face_provider_(target_.form_key);
+    }
     if (it != project_->npcs.end()) {
       *it = std::move(edit);
     } else {
@@ -424,6 +433,9 @@ bool OutfitEditor::openProject(const QString& folder_or_url) {
     }
     const auto& edit = project.npcs.front();
     pending_project_pieces_ = edit.outfit ? edit.outfit->pieces : std::vector<outfit::Piece>{};
+    if (face_loaded_handler_) {
+      face_loaded_handler_(edit.target.form_key, edit.face);
+    }
     project_ = std::move(project);
     project_path_ = folder;
     emit projectChanged();

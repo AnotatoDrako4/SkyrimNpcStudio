@@ -23,10 +23,67 @@ internal static class ModPackager
     public static ExportResponse ExportOutfitPatch(
         LoadOrderSession session, CatalogQueries queries, ExportOutfitPatchRequest request, CancellationToken ct)
     {
-        var outputDir = ValidateOutputDirectory(request.OutputDirectory, session);
-        OutfitPatchBuilder.ValidatePluginName(request.PluginName, session);
+        return ExportCore(
+            session,
+            request.PluginName,
+            request.OutputDirectory,
+            request.CreateZip,
+            request.Author,
+            request.Description,
+            request.PluginProviders,
+            "outfit-patch",
+            (stagedPlugin, stagedModDir) => OutfitPatchBuilder.Build(session, queries, request, stagedPlugin, ct),
+            ct);
+    }
 
-        var modName = Path.GetFileNameWithoutExtension(request.PluginName);
+    public static ExportResponse ExportFaceOverhaul(
+        LoadOrderSession session, CatalogQueries queries, ExportFaceOverhaulRequest request, CancellationToken ct)
+    {
+        return ExportCore(
+            session,
+            request.PluginName,
+            request.OutputDirectory,
+            request.CreateZip,
+            request.Author,
+            request.Description,
+            request.PluginProviders,
+            "face-overhaul",
+            (stagedPlugin, stagedModDir) => FacePatchBuilder.BuildFaceOverhaul(session, queries, request, stagedPlugin, stagedModDir, ct),
+            ct);
+    }
+
+    public static ExportResponse ExportCompleteOverhaul(
+        LoadOrderSession session, CatalogQueries queries, ExportCompleteOverhaulRequest request, CancellationToken ct)
+    {
+        return ExportCore(
+            session,
+            request.PluginName,
+            request.OutputDirectory,
+            request.CreateZip,
+            request.Author,
+            request.Description,
+            request.PluginProviders,
+            "complete-overhaul",
+            (stagedPlugin, stagedModDir) => FacePatchBuilder.BuildCompleteOverhaul(session, queries, request, stagedPlugin, stagedModDir, ct),
+            ct);
+    }
+
+    private static ExportResponse ExportCore(
+        LoadOrderSession session,
+        string pluginName,
+        string outputDirectory,
+        bool createZip,
+        string author,
+        string? description,
+        IReadOnlyDictionary<string, string>? pluginProviders,
+        string mode,
+        Func<string, string, BuiltPatch> buildAction,
+        CancellationToken ct)
+    {
+        var outputDir = ValidateOutputDirectory(outputDirectory, session);
+        OutfitPatchBuilder.ValidatePluginName(pluginName, session);
+
+        var modName = Path.GetFileNameWithoutExtension(pluginName);
         var finalModDir = Path.Combine(outputDir, modName);
         var finalZip = Path.Combine(outputDir, modName + ".zip");
         if (Directory.Exists(finalModDir) || File.Exists(finalModDir))
@@ -34,7 +91,7 @@ internal static class ModPackager
             throw new WorkerException(ErrorCodes.OutputExists, $"'{finalModDir}' already exists; choose another name or folder.");
         }
 
-        if (request.CreateZip && File.Exists(finalZip))
+        if (createZip && File.Exists(finalZip))
         {
             throw new WorkerException(ErrorCodes.OutputExists, $"'{finalZip}' already exists; choose another name or folder.");
         }
@@ -45,18 +102,27 @@ internal static class ModPackager
         try
         {
             Directory.CreateDirectory(stagedModDir);
-            var stagedPlugin = Path.Combine(stagedModDir, request.PluginName);
-            var built = OutfitPatchBuilder.Build(session, queries, request, stagedPlugin, ct);
+            var stagedPlugin = Path.Combine(stagedModDir, pluginName);
+            var built = buildAction(stagedPlugin, stagedModDir);
             ct.ThrowIfCancellationRequested();
 
             var sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(stagedPlugin)));
-            var manifest = BuildManifest(session, request, built, sha256);
+
+            var bundledAssets = Directory.EnumerateFiles(stagedModDir, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(stagedModDir, f))
+                .Where(f => !f.EndsWith(".esp", StringComparison.OrdinalIgnoreCase)
+                         && !f.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
+                         && !f.Equals("README.md", StringComparison.OrdinalIgnoreCase)
+                         && !f.Equals("meta.ini", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            var manifest = BuildManifest(session, pluginName, author, description, mode, pluginProviders, built, sha256, bundledAssets);
             File.WriteAllText(Path.Combine(stagedModDir, "manifest.json"), JsonSerializer.Serialize(manifest, ManifestJson), Encoding.UTF8);
-            File.WriteAllText(Path.Combine(stagedModDir, "README.md"), BuildReadme(session, request, built), Encoding.UTF8);
-            File.WriteAllText(Path.Combine(stagedModDir, "meta.ini"), BuildMetaIni(request, modName), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(stagedModDir, "README.md"), BuildReadme(session, pluginName, description, mode, pluginProviders, built, bundledAssets), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(stagedModDir, "meta.ini"), BuildMetaIni(description, modName), Encoding.UTF8);
 
             string? stagedZip = null;
-            if (request.CreateZip)
+            if (createZip)
             {
                 stagedZip = Path.Combine(staging, modName + ".zip");
                 CreateZip(stagedModDir, stagedZip);
@@ -76,7 +142,7 @@ internal static class ModPackager
             return new ExportResponse
             {
                 ModDirectory = finalModDir,
-                PluginPath = Path.Combine(finalModDir, request.PluginName),
+                PluginPath = Path.Combine(finalModDir, pluginName),
                 ZipPath = stagedZip is null ? null : finalZip,
                 ManifestPath = Path.Combine(finalModDir, "manifest.json"),
                 Masters = built.Masters.Select(m => m.FileName.String).ToArray(),
@@ -90,7 +156,6 @@ internal static class ModPackager
         {
             if (movedModDir && Directory.Exists(finalModDir))
             {
-                // Roll back the first rename if the second one failed.
                 Directory.Move(finalModDir, stagedModDir);
             }
 
@@ -128,18 +193,21 @@ internal static class ModPackager
 
     private static readonly JsonSerializerOptions ManifestJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    private static object BuildManifest(LoadOrderSession session, ExportOutfitPatchRequest request, BuiltPatch built, string sha256) => new
+    private static object BuildManifest(
+        LoadOrderSession session, string pluginName, string author, string? description,
+        string mode, IReadOnlyDictionary<string, string>? pluginProviders,
+        BuiltPatch built, string sha256, IReadOnlyList<string> bundledAssets) => new
     {
         format = ManifestFormat,
         formatVersion = ManifestVersion,
         tool = new { name = "Skyrim NPC Studio", workerVersion = WorkerVersion, protocol = $"{Protocol.Major}.{Protocol.Minor}" },
         createdUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
-        mode = "outfit-patch",
-        plugin = new { fileName = request.PluginName, sha256, eslFlagged = built.EslFlagged },
+        mode,
+        plugin = new { fileName = pluginName, sha256, eslFlagged = built.EslFlagged },
         masters = built.Masters.Select(m => new
         {
             plugin = m.FileName.String,
-            providedBy = request.PluginProviders?.GetValueOrDefault(m.FileName.String),
+            providedBy = pluginProviders?.GetValueOrDefault(m.FileName.String),
             loadIndex = session.Find(m)?.LoadIndex,
         }),
         records = built.Records,
@@ -148,70 +216,57 @@ internal static class ModPackager
             npc = a.Npc.ToString(),
             npcEditorId = a.NpcEditorId,
             npcName = a.NpcName,
-            outfit = a.Outfit.ToString(),
-            outfitEditorId = a.OutfitEditorId,
+            outfit = a.Outfit.IsNull ? null : a.Outfit.ToString(),
+            outfitEditorId = string.IsNullOrEmpty(a.OutfitEditorId) ? null : a.OutfitEditorId,
             armors = a.Armors.Select(x => new { formKey = x.FormKey, editorId = x.EditorId, name = x.Name, plugin = x.WinningPlugin, slots = x.Slots }),
         }),
-        dependencyMode = "dependent",
-        bundledAssets = Array.Empty<string>(),
+        dependencyMode = bundledAssets.Count > 0 ? "hybrid" : "dependent",
+        bundledAssets,
         issues = built.Issues,
         inGameVerified = false,
     };
 
-    private static string BuildReadme(LoadOrderSession session, ExportOutfitPatchRequest request, BuiltPatch built)
+    private static string BuildReadme(
+        LoadOrderSession session, string pluginName, string? description,
+        string mode, IReadOnlyDictionary<string, string>? pluginProviders,
+        BuiltPatch built, IReadOnlyList<string> bundledAssets)
     {
         var sb = new StringBuilder();
-        var modName = Path.GetFileNameWithoutExtension(request.PluginName);
+        var modName = Path.GetFileNameWithoutExtension(pluginName);
         sb.AppendLine(CultureInfo.InvariantCulture, $"# {modName}");
         sb.AppendLine();
         sb.AppendLine(CultureInfo.InvariantCulture, $"Mod generado por Skyrim NPC Studio (worker {WorkerVersion}) el {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC.");
-        if (!string.IsNullOrWhiteSpace(request.Description))
+        sb.AppendLine(CultureInfo.InvariantCulture, $"Modo de exportación: `{mode}`.");
+        if (!string.IsNullOrWhiteSpace(description))
         {
-            sb.AppendLine().AppendLine(request.Description);
+            sb.AppendLine().AppendLine(description);
         }
 
         sb.AppendLine().AppendLine("## Contenido").AppendLine();
-        sb.AppendLine(CultureInfo.InvariantCulture, $"- `{request.PluginName}` — {(built.EslFlagged ? "ESP con flag ESL (no ocupa índice de carga completo)" : "ESP")}");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"- {built.Assignments.Count} atuendo(s) nuevo(s) (OTFT) y {built.Assignments.Count} override(s) de NPC.");
-        sb.AppendLine("- No incluye mallas ni texturas: usa los recursos de los mods que proporcionan cada prenda (mod dependiente).");
-
-        sb.AppendLine().AppendLine("## Cambios").AppendLine();
-        foreach (var a in built.Assignments)
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- `{pluginName}` — {(built.EslFlagged ? "ESP con flag ESL (no ocupa índice de carga completo)" : "ESP")}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- {built.Assignments.Count} override(s) de NPC.");
+        if (bundledAssets.Count > 0)
         {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"### {a.NpcName ?? a.NpcEditorId ?? a.Npc.ToString()} (`{session.FormatFormId(a.Npc)}` · `{a.Npc}`)");
-            sb.AppendLine();
-            sb.AppendLine(CultureInfo.InvariantCulture, $"Nuevo atuendo predeterminado `{a.OutfitEditorId}` (`{a.Outfit}`):");
-            foreach (var armor in a.Armors)
-            {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"- {armor.Name ?? armor.EditorId} (`{armor.FormKey}`, slots {string.Join(", ", armor.Slots)}) — {armor.WinningPlugin}");
-            }
-
-            sb.AppendLine();
+            sb.AppendLine(CultureInfo.InvariantCulture, $"- {bundledAssets.Count} archivo(s) de FaceGen (mallas y texturas) empaquetados directamente en el mod.");
         }
 
-        sb.AppendLine("## Requisitos (masters)").AppendLine();
+        sb.AppendLine().AppendLine("## Requisitos (masters)").AppendLine();
         sb.AppendLine("Deben estar activos y cargarse ANTES de este plugin:").AppendLine();
         foreach (var master in built.Masters)
         {
-            var provider = request.PluginProviders?.GetValueOrDefault(master.FileName.String);
+            var provider = pluginProviders?.GetValueOrDefault(master.FileName.String);
             sb.AppendLine(provider is null ? $"- {master.FileName}" : $"- {master.FileName} — mod de MO2 \"{provider}\"");
         }
 
         sb.AppendLine().AppendLine("## Instalación con Mod Organizer 2").AppendLine();
         sb.AppendLine(CultureInfo.InvariantCulture, $"1. En MO2, *Instalar mod desde archivo* y elige `{modName}.zip`.");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"2. Activa el mod y el plugin `{request.PluginName}`.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"2. Activa el mod y el plugin `{pluginName}`.");
         sb.AppendLine("3. Coloca el plugin después de sus masters y de cualquier otro mod que modifique a estos NPC.");
-
-        sb.AppendLine().AppendLine("## Limitaciones conocidas").AppendLine();
-        sb.AppendLine("- En partidas existentes, un NPC ya cargado puede conservar su equipamiento actual hasta que el juego lo reinicialice; no se garantiza la aplicación inmediata en todas las partidas.");
-        sb.AppendLine("- El override copia el registro ganador del perfil usado al exportar. Si después cambias mods que editan a estos NPC, vuelve a exportar.");
-        sb.AppendLine("- Validado estructuralmente (masters, referencias, slots, razas). La comprobación dentro del juego debe hacerla el usuario.");
         return sb.ToString();
     }
 
-    private static string BuildMetaIni(ExportOutfitPatchRequest request, string modName)
+    private static string BuildMetaIni(string? description, string modName)
     {
-        // Same keys MO2 writes for Skyrim SE mods; "installationFile" links the folder to its archive.
         var sb = new StringBuilder();
         sb.AppendLine("[General]");
         sb.AppendLine("gameName=SkyrimSE");
@@ -220,7 +275,7 @@ internal static class ModPackager
         sb.AppendLine(CultureInfo.InvariantCulture, $"installationFile={modName}.zip");
         sb.AppendLine("repository=");
         sb.AppendLine("comments=Generado por Skyrim NPC Studio");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"notes=\"{(request.Description ?? string.Empty).Replace("\"", "'", StringComparison.Ordinal)}\"");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"notes=\"{(description ?? string.Empty).Replace("\"", "'", StringComparison.Ordinal)}\"");
         return sb.ToString();
     }
 
@@ -250,7 +305,6 @@ internal static class ModPackager
         }
         catch (IOException)
         {
-            // Best effort: a leftover hidden ".sns-staging-*" folder is harmless and reported in logs.
         }
         catch (UnauthorizedAccessException)
         {

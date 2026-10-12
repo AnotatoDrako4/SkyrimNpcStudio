@@ -587,6 +587,85 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
         };
     }
 
+    public string WinningPluginOf(FormKey formKey)
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT winning_plugin FROM npc_winner WHERE form_key = $k";
+        cmd.Parameters.AddWithValue("$k", formKey.ToString());
+        return cmd.ExecuteScalar() as string ?? formKey.ModKey.FileName.String;
+    }
+
+    public SearchHeadPartsResponse SearchHeadParts(SearchHeadPartsRequest request)
+    {
+        var where = new StringBuilder(" WHERE rw.record_type = 'HDPT'");
+        var parameters = new List<(string, object)>();
+        if (!string.IsNullOrWhiteSpace(request.Text))
+        {
+            var text = request.Text.Trim();
+            where.Append(" AND (r.editor_id LIKE $text ESCAPE '\\' OR r.name LIKE $text ESCAPE '\\')");
+            parameters.Add(("$text", "%" + EscapeLike(text.ToLowerInvariant()) + "%"));
+        }
+        if (!string.IsNullOrWhiteSpace(request.Plugin))
+        {
+            where.Append(" AND p.file_name = $plugin COLLATE NOCASE");
+            parameters.Add(("$plugin", request.Plugin.Trim()));
+        }
+
+        var countSql = "SELECT COUNT(*) FROM record_winner rw JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key JOIN plugin_files p ON p.id = rw.plugin_id" + where;
+        int total;
+        using (var cmd = _db.CreateCommand())
+        {
+            cmd.CommandText = countSql;
+            foreach (var (k, v) in parameters) cmd.Parameters.AddWithValue(k, v);
+            total = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        var sql = "SELECT rw.form_key, r.editor_id, r.name, r.data, p.file_name FROM record_winner rw JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key JOIN plugin_files p ON p.id = rw.plugin_id" + where + " ORDER BY r.editor_id LIMIT " + Math.Clamp(request.Limit, 1, MaxLimit);
+        var items = new List<HeadPartSummary>();
+        using (var cmd = _db.CreateCommand())
+        {
+            cmd.CommandText = sql;
+            foreach (var (k, v) in parameters) cmd.Parameters.AddWithValue(k, v);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var formKey = reader.GetString(0);
+                var editorId = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var name = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var dataJson = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var plugin = reader.GetString(4);
+
+                string type = "Unknown";
+                string? model = null;
+                if (!string.IsNullOrEmpty(dataJson))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(dataJson);
+                        if (doc.RootElement.TryGetProperty("type", out var tProp)) type = tProp.GetString() ?? type;
+                        if (doc.RootElement.TryGetProperty("model", out var mProp)) model = mProp.GetString();
+                    }
+                    catch { }
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.Type) && !string.Equals(type, request.Type, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                items.Add(new HeadPartSummary
+                {
+                    FormKey = formKey,
+                    EditorId = editorId,
+                    Name = name,
+                    Type = type,
+                    ModelPath = model,
+                    Plugin = plugin,
+                });
+            }
+        }
+
+        return new SearchHeadPartsResponse { Items = items, Total = total };
+    }
+
     private RecordRef? RefOrNull(string? formKey) => formKey is null ? null : Ref(formKey);
 
     private string? RecordData(string formKey)

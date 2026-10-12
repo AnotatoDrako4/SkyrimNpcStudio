@@ -9,11 +9,14 @@ add_executable(sns_engine_tests
   unit/engines/test_instance_profile.cpp
   unit/engines/test_plugin_header.cpp
   unit/engines/test_vfs_load_order.cpp
-  unit/engines/test_projects_outfit.cpp)
+  unit/engines/test_projects_outfit.cpp
+  unit/engines/test_appearance_draft.cpp
+  unit/engines/test_presets.cpp
+  unit/engines/test_face_engine.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp)
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
-  sns::core sns::ipc sns::mo2 sns::projects sns::outfit sns::rendering nifly lz4 sns::compile_options Catch2::Catch2WithMain)
+  sns::core sns::ipc sns::mo2 sns::projects sns::outfit sns::appearance sns::presets sns::face sns::rendering nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
 
 # ---- Integration tests: real worker process over a real named pipe -----------------------------

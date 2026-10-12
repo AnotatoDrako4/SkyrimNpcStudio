@@ -15,13 +15,14 @@
 
 namespace sns::app {
 
+class OutfitEditor;
+class AppearanceEditor;
+
 class SceneViewModel : public QObject {
   Q_OBJECT
   QML_ELEMENT
   QML_UNCREATABLE("Owned by StudioController")
   Q_PROPERTY(QVariantList parts READ parts NOTIFY changed)
-  // id -> bool. Kept apart from `parts` so that showing or hiding a part never rebuilds the
-  // Repeater3D delegates (that would release and re-create their GPU resources).
   Q_PROPERTY(QVariantMap visibility READ visibility NOTIFY visibilityChanged)
   Q_PROPERTY(QVariantList issues READ issues NOTIFY changed)
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
@@ -33,7 +34,7 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QString selected READ selected NOTIFY selectionChanged)
   Q_PROPERTY(bool original READ original WRITE setOriginal NOTIFY originalChanged)
  public:
-  SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, std::function<SnapshotPtr()> snapshot, QObject* parent);
+  SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent);
   ~SceneViewModel() override;
   QVariantList parts() const { return parts_; }
   QVariantMap visibility() const { return visibility_; }
@@ -71,6 +72,7 @@ class SceneViewModel : public QObject {
   void install(const rendering::CharacterScene& scene);
   WorkerClient* worker_;
   OutfitEditor* outfit_;
+  AppearanceEditor* appearance_ = nullptr;
   std::function<SnapshotPtr()> snapshot_;
   QTimer debounce_;
   QThreadPool pool_;

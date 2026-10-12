@@ -64,6 +64,10 @@ ApplicationWindow {
         id: exportDialog
         studio: window.studio
     }
+    ExportWizardDialog {
+        id: exportWizardDialog
+        studio: window.studio
+    }
 
     Component.onCompleted: if (!ready) welcome.open()
 
@@ -136,10 +140,38 @@ ApplicationWindow {
         Menu {
             title: qsTr("E&xportar")
             Action {
+                text: qsTr("Exportar mod completo / rostro (Character Creator 2.0)…")
+                shortcut: "Ctrl+Shift+E"
+                enabled: window.ready && !window.studio.appearance.exporting
+                onTriggered: exportWizardDialog.open()
+            }
+            Action {
                 text: qsTr("Exportar parche de atuendo (Modo A)…")
                 shortcut: "Ctrl+E"
                 enabled: window.studio.outfit.exportable && !window.studio.outfit.exporting
                 onTriggered: exportDialog.open()
+            }
+        }
+    }
+
+    header: ToolBar {
+        background: Rectangle { color: Theme.header; border.color: Theme.border }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            spacing: 12
+            TabBar {
+                id: workspaceTabs
+                TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE (2.0)") }
+                TabButton { text: qsTr("👗 ESTUDIO DE ATUENDOS") }
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: qsTr("🚀 Exportar Mod…")
+                highlighted: true
+                enabled: window.ready
+                onClicked: exportWizardDialog.open()
             }
         }
     }
@@ -149,9 +181,17 @@ ApplicationWindow {
         anchors.fill: parent
         orientation: Qt.Vertical
 
-        SplitView {
+        StackLayout {
+            currentIndex: workspaceTabs.currentIndex
             SplitView.fillHeight: true
-            orientation: Qt.Horizontal
+
+            CharacterCreator {
+                studio: window.studio
+            }
+
+            SplitView {
+                SplitView.fillHeight: true
+                orientation: Qt.Horizontal
 
             Rectangle {
                 visible: leftToggle.checked
@@ -225,8 +265,9 @@ ApplicationWindow {
                 }
             }
         }
+    }
 
-        BottomPanel {
+    BottomPanel {
             visible: bottomToggle.checked
             studio: window.studio
             SplitView.preferredHeight: 220

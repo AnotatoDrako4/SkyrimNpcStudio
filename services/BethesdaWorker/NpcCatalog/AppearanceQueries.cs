@@ -57,21 +57,162 @@ internal static class AppearanceQueries
             foreach (var item in outfit.Items ?? [])
                 if (session.LinkCache.TryResolve<IArmorGetter>(item.FormKey, out _)) AddArmor(item.FormKey, "outfit");
         }
+
         var head = new List<AppearanceHeadPart>();
         foreach (var link in npc.HeadParts)
+        {
             if (session.LinkCache.TryResolve<IHeadPartGetter>(link.FormKey, out var part))
-                head.Add(new AppearanceHeadPart(part.EditorID ?? "", part.Type.ToString() ?? ""));
+            {
+                head.Add(new AppearanceHeadPart(
+                    part.EditorID ?? "",
+                    part.Type?.ToString() ?? "",
+                    part.FormKey.ToString(),
+                    MeshPath(part.Model?.File.GivenPath ?? "")));
+            }
+        }
+
+        var face = CatalogQueries.FaceGenFor(key);
+        var faceGeomPath = face.GeometryPath;
+        var faceTintPath = face.TintPath;
+
+        AppearanceColor? hairColor = null;
+        if (npc.HairColor.FormKeyNullable is { } colorKey
+            && session.LinkCache.TryResolve<IColorRecordGetter>(colorKey, out var color))
+            hairColor = new AppearanceColor(color.Color.R, color.Color.G, color.Color.B);
+
+        var skinTone = npc.TextureLighting is { } lighting
+            ? new AppearanceColor(lighting.R, lighting.G, lighting.B) : null;
+
+        var weight = npc.Weight;
+        if (request.DonorOverride is { } donor)
+        {
+            if (!string.IsNullOrEmpty(donor.DonorFaceGeometryPath)) faceGeomPath = donor.DonorFaceGeometryPath;
+            if (!string.IsNullOrEmpty(donor.DonorFaceTintPath)) faceTintPath = donor.DonorFaceTintPath;
+            if (donor.HairColor is not null) hairColor = donor.HairColor;
+            if (donor.SkinTone is not null) skinTone = donor.SkinTone;
+            if (donor.HeadParts is { Count: > 0 }) head = donor.HeadParts.ToList();
+            if (donor.Weight.HasValue) weight = donor.Weight.Value;
+        }
+
+        FaceMorphsDto? morphs = null;
+        if (npc.FaceMorph is { } fm)
+        {
+            morphs = new FaceMorphsDto(
+                fm.NoseLongVsShort, fm.NoseUpVsDown,
+                fm.JawUpVsDown, fm.JawNarrowVsWide, fm.JawForwardVsBack,
+                fm.CheeksUpVsDown, fm.CheeksForwardVsBack,
+                fm.EyesUpVsDown, fm.EyesInVsOut,
+                fm.BrowsUpVsDown, fm.BrowsInVsOut, fm.BrowsForwardVsBack,
+                fm.LipsUpVsDown, fm.LipsInVsOut,
+                fm.ChinNarrowVsWide, fm.ChinUpVsDown, fm.ChinUnderbiteVsOverbite,
+                fm.EyesForwardVsBack);
+        }
+
+        FacePartsDto? parts = null;
+        if (npc.FaceParts is { } fp)
+        {
+            parts = new FacePartsDto(fp.Nose, fp.Eyes, fp.Mouth);
+        }
+
+        var tints = new List<TintLayerDto>();
+        if (npc.TintLayers is { } tl)
+        {
+            foreach (var t in tl)
+            {
+                var c = t.Color;
+                var col = c.HasValue ? new AppearanceColor(c.Value.R, c.Value.G, c.Value.B) : new AppearanceColor(255, 255, 255);
+                tints.Add(new TintLayerDto(t.Index ?? 0, col, t.InterpolationValue ?? 1.0f, (uint)(t.Preset ?? 0)));
+            }
+        }
+
+        return new AppearanceResponse(key.ToString(), female ? "female" : "male", weight, npc.Height,
+            female ? race.Height.Female : race.Height.Male,
+            MeshPath((female ? race.SkeletalModel?.Female : race.SkeletalModel?.Male)?.File.GivenPath ?? ""),
+            faceGeomPath, faceTintPath, head, pieces, hairColor, skinTone,
+            morphs, parts, tints);
+    }
+
+    public static DonorAppearanceResponse GetDonor(LoadOrderSession session, CatalogQueries queries, DonorAppearanceRequest request)
+    {
+        if (!queries.TryParseAnyFormKey(request.NpcFormKey, out var key)
+            || !session.LinkCache.TryResolve<INpcGetter>(key, out var npc))
+            throw new WorkerException(ErrorCodes.RecordNotFound, "Donor NPC not found: " + request.NpcFormKey);
+        if (!session.LinkCache.TryResolve<IRaceGetter>(npc.Race.FormKey, out var race))
+            throw new WorkerException(ErrorCodes.RecordNotFound, "Donor NPC race is unresolved.");
+
+        var female = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
+        var head = new List<AppearanceHeadPart>();
+        foreach (var link in npc.HeadParts)
+        {
+            if (session.LinkCache.TryResolve<IHeadPartGetter>(link.FormKey, out var part))
+            {
+                head.Add(new AppearanceHeadPart(
+                    part.EditorID ?? "",
+                    part.Type?.ToString() ?? "",
+                    part.FormKey.ToString(),
+                    MeshPath(part.Model?.File.GivenPath ?? "")));
+            }
+        }
+
         var face = CatalogQueries.FaceGenFor(key);
         AppearanceColor? hairColor = null;
         if (npc.HairColor.FormKeyNullable is { } colorKey
             && session.LinkCache.TryResolve<IColorRecordGetter>(colorKey, out var color))
             hairColor = new AppearanceColor(color.Color.R, color.Color.G, color.Color.B);
+
         var skinTone = npc.TextureLighting is { } lighting
             ? new AppearanceColor(lighting.R, lighting.G, lighting.B) : null;
-        return new AppearanceResponse(key.ToString(), female ? "female" : "male", npc.Weight, npc.Height,
+
+        FaceMorphsDto? morphs = null;
+        if (npc.FaceMorph is { } fm)
+        {
+            morphs = new FaceMorphsDto(
+                fm.NoseLongVsShort, fm.NoseUpVsDown,
+                fm.JawUpVsDown, fm.JawNarrowVsWide, fm.JawForwardVsBack,
+                fm.CheeksUpVsDown, fm.CheeksForwardVsBack,
+                fm.EyesUpVsDown, fm.EyesInVsOut,
+                fm.BrowsUpVsDown, fm.BrowsInVsOut, fm.BrowsForwardVsBack,
+                fm.LipsUpVsDown, fm.LipsInVsOut,
+                fm.ChinNarrowVsWide, fm.ChinUpVsDown, fm.ChinUnderbiteVsOverbite,
+                fm.EyesForwardVsBack);
+        }
+
+        FacePartsDto? parts = null;
+        if (npc.FaceParts is { } fp)
+        {
+            parts = new FacePartsDto(fp.Nose, fp.Eyes, fp.Mouth);
+        }
+
+        var tints = new List<TintLayerDto>();
+        if (npc.TintLayers is { } tl)
+        {
+            foreach (var t in tl)
+            {
+                var c = t.Color;
+                var col = c.HasValue ? new AppearanceColor(c.Value.R, c.Value.G, c.Value.B) : new AppearanceColor(255, 255, 255);
+                tints.Add(new TintLayerDto(t.Index ?? 0, col, t.InterpolationValue ?? 1.0f, (uint)(t.Preset ?? 0)));
+            }
+        }
+
+        var winningPlugin = queries.WinningPluginOf(key);
+
+        return new DonorAppearanceResponse(
+            key.ToString(),
+            npc.EditorID ?? key.ToString(),
+            winningPlugin,
+            female ? "female" : "male",
+            npc.Weight,
+            npc.Height,
             female ? race.Height.Female : race.Height.Male,
             MeshPath((female ? race.SkeletalModel?.Female : race.SkeletalModel?.Male)?.File.GivenPath ?? ""),
-            face.GeometryPath, face.TintPath, head, pieces, hairColor, skinTone);
+            face.GeometryPath,
+            face.TintPath,
+            head,
+            hairColor,
+            skinTone,
+            morphs,
+            parts,
+            tints);
     }
 
     private static string MeshPath(string path) => string.IsNullOrEmpty(path) ? "" :

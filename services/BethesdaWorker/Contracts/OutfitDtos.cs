@@ -79,3 +79,51 @@ public sealed record ExportResponse
     public required IReadOnlyList<ExportedRecord> Records { get; init; }
     public required IReadOnlyList<Issue> Issues { get; init; }
 }
+
+public sealed record FaceAssignment
+{
+    public required string NpcFormKey { get; init; }
+    public string? DonorNpcFormKey { get; init; }
+    public string? DonorFaceGeometryPath { get; init; }
+    public string? DonorFaceTintPath { get; init; }
+    public IReadOnlyList<string>? HeadPartFormKeys { get; init; }
+    public AppearanceColor? HairColor { get; init; }
+    public AppearanceColor? SkinTone { get; init; }
+    public FaceMorphsDto? FaceMorphs { get; init; }
+    public FacePartsDto? FaceParts { get; init; }
+    public IReadOnlyList<TintLayerDto>? TintLayers { get; init; }
+    public float? Weight { get; init; }
+    public float? Height { get; init; }
+}
+
+public sealed record ExportFaceOverhaulRequest
+{
+    public required string PluginName { get; init; }
+    public required string OutputDirectory { get; init; }
+    public required IReadOnlyList<FaceAssignment> Assignments { get; init; }
+    public bool EslFlag { get; init; }
+    public bool CreateZip { get; init; } = true;
+    public string Author { get; init; } = "Skyrim NPC Studio";
+    public string? Description { get; init; }
+    public IReadOnlyDictionary<string, string>? PluginProviders { get; init; }
+}
+
+public sealed record CompleteNpcAssignment
+{
+    public required string NpcFormKey { get; init; }
+    public FaceAssignment? Face { get; init; }
+    public OutfitAssignment? Outfit { get; init; }
+}
+
+public sealed record ExportCompleteOverhaulRequest
+{
+    public required string PluginName { get; init; }
+    public required string OutputDirectory { get; init; }
+    public required IReadOnlyList<CompleteNpcAssignment> Assignments { get; init; }
+    public bool EslFlag { get; init; }
+    public bool CreateZip { get; init; } = true;
+    public string Author { get; init; } = "Skyrim NPC Studio";
+    public string? Description { get; init; }
+    public IReadOnlyDictionary<string, string>? PluginProviders { get; init; }
+}
+

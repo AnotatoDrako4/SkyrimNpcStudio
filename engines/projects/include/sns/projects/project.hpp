@@ -2,13 +2,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace sns::projects {
 
-inline constexpr int kProjectFormatVersion = 1;
+inline constexpr int kProjectFormatVersion = 2;
 inline constexpr const char* kProjectExtension = ".snps";
 
 // Which MO2 setup the project was made against. Paths are informational: the project resolves
@@ -33,6 +34,8 @@ struct OutfitPieceRef {
   std::string name;
   std::string plugin;
   std::uint32_t slot_mask = 0;
+
+  bool operator==(const OutfitPieceRef&) const = default;
 };
 
 struct OutfitConfig {
@@ -41,9 +44,53 @@ struct OutfitConfig {
   bool also_sleeping = false;
 };
 
+struct HeadPartRef {
+  std::string form_key;
+  std::string editor_id;
+  std::string type;
+  std::string mesh_path;
+
+  bool operator==(const HeadPartRef&) const = default;
+};
+
+struct ColorRgb {
+  std::uint8_t r = 255;
+  std::uint8_t g = 255;
+  std::uint8_t b = 255;
+
+  bool operator==(const ColorRgb&) const = default;
+};
+
+struct TintLayerConfig {
+  std::uint32_t index = 0;
+  ColorRgb color;
+  float alpha = 1.0f;
+  std::uint32_t preset = 0;
+
+  bool operator==(const TintLayerConfig&) const = default;
+};
+
+struct FaceConfig {
+  std::string preset_id;
+  std::string preset_name;
+  std::string preset_source;  // "donor", "jslot", "custom"
+  std::string donor_npc_form_key;
+  std::string donor_plugin;
+  std::string donor_facegen_mesh;
+  std::string donor_facegen_tint;
+  std::optional<ColorRgb> hair_color;
+  std::optional<ColorRgb> skin_tone;
+  std::vector<HeadPartRef> head_parts;
+  std::map<std::string, float> morph_sliders;
+  std::vector<TintLayerConfig> tint_layers;
+  float weight = 100.0f;
+  float height = 1.0f;
+};
+
 struct NpcEdit {
   NpcTarget target;
   std::optional<OutfitConfig> outfit;
+  std::optional<FaceConfig> face;
 };
 
 struct ExportOptions {

@@ -31,6 +31,10 @@ public static class Methods
 
     public const string ValidateOutfit = "outfit.validate";
     public const string ExportOutfitPatch = "export.outfitPatch";
+    public const string GetDonorAppearance = "appearance.getDonorAppearance";
+    public const string SearchHeadParts = "catalog.searchHeadParts";
+    public const string ExportFacePatch = "export.faceOverhaul";
+    public const string ExportCompleteNpc = "export.completeOverhaul";
 
     /// <summary>Server → client notification emitted while indexing.</summary>
     public const string IndexProgress = "catalog.progress";

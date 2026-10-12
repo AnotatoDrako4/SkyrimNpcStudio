@@ -34,7 +34,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             ProtocolMinor = Protocol.Minor,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
-            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch"],
+            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "appearance.donor", "catalog.headParts"],
         };
     }
 
@@ -79,6 +79,14 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     public AppearanceResponse GetAppearance(AppearanceRequest request) =>
         Guard(() => state.Read(c => AppearanceQueries.Get(c.Session, c.Queries, request)));
 
+    [JsonRpcMethod(Methods.GetDonorAppearance)]
+    public DonorAppearanceResponse GetDonorAppearance(DonorAppearanceRequest request) =>
+        Guard(() => state.Read(c => AppearanceQueries.GetDonor(c.Session, c.Queries, request)));
+
+    [JsonRpcMethod(Methods.SearchHeadParts)]
+    public SearchHeadPartsResponse SearchHeadParts(SearchHeadPartsRequest request) =>
+        Guard(() => state.Read(c => c.Queries.SearchHeadParts(request)));
+
     [JsonRpcMethod(Methods.ValidateOutfit)]
     public OutfitValidateResponse ValidateOutfit(OutfitValidateRequest request) =>
         Guard(() => state.Read(c => OutfitValidator.Validate(c.Session, c.Queries, request)));
@@ -89,6 +97,26 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
         {
             Log.Info($"exporting outfit patch {request.PluginName} to {request.OutputDirectory}");
             var response = state.Read(c => ModPackager.ExportOutfitPatch(c.Session, c.Queries, request, ct));
+            Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
+            return response;
+        }), ct);
+
+    [JsonRpcMethod(Methods.ExportFacePatch)]
+    public Task<ExportResponse> ExportFacePatch(ExportFaceOverhaulRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() =>
+        {
+            Log.Info($"exporting face overhaul {request.PluginName} to {request.OutputDirectory}");
+            var response = state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, ct));
+            Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
+            return response;
+        }), ct);
+
+    [JsonRpcMethod(Methods.ExportCompleteNpc)]
+    public Task<ExportResponse> ExportCompleteNpc(ExportCompleteOverhaulRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() =>
+        {
+            Log.Info($"exporting complete overhaul {request.PluginName} to {request.OutputDirectory}");
+            var response = state.Read(c => ModPackager.ExportCompleteOverhaul(c.Session, c.Queries, request, ct));
             Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
             return response;
         }), ct);
