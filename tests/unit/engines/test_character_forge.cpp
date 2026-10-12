@@ -62,3 +62,13 @@ TEST_CASE("Character Forge rejects incompatible, invalid and non-.sncf projects"
   draft.replace(std::move(project));
   CHECK_THROWS_AS(draft.set_editor_id("my invalid editor id!"), sns::Error);
 }
+
+TEST_CASE("Character Forge cannot overwrite another .sncf project", "[forge][projects][safety]") {
+  test::TempDir temp;
+  const auto path = temp.path() / "Shared.sncf";
+  auto first = ForgeProjectStore::create("First");
+  auto second = ForgeProjectStore::create("Second");
+  ForgeProjectStore::save(path, first);
+  CHECK_THROWS_AS(ForgeProjectStore::save(path, second), sns::Error);
+  CHECK(ForgeProjectStore::load(path).id == first.id);
+}
