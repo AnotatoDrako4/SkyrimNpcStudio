@@ -486,3 +486,19 @@ TEST_CASE("Skeleton posing engine supports Reference, A-Pose, Relaxed, and Comba
   }
 }
 
+TEST_CASE("AssetResolver locates assets packed inside BSA archives", "[assets]") {
+  sns::test::TempDir dir;
+  const auto bsa_path = dir.write("Skyrim - Meshes0.bsa", bsa("nif header bytes", false));
+  std::vector<sns::assets::ArchiveRef> archives = {
+    {"Skyrim - Meshes0.bsa", "<Game Data>", bsa_path, "ini"}
+  };
+  sns::mo2::VirtualFileSystem empty_vfs;
+  sns::assets::AssetResolver resolver(empty_vfs, archives);
+  const auto loc = resolver.locate("meshes/test.nif");
+  REQUIRE(loc.has_value());
+  CHECK(loc->kind == sns::assets::AssetLocation::Kind::Archive);
+  CHECK(loc->provider == "Skyrim - Meshes0.bsa");
+  CHECK(loc->archive_provider == "<Game Data>");
+  CHECK_FALSE(resolver.locate("meshes/nonexistent.nif").has_value());
+}
+

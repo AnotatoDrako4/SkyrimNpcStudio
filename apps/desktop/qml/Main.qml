@@ -15,8 +15,8 @@ ApplicationWindow {
     minimumHeight: 700
     visible: true
     color: Theme.bg
-    title: "Skyrim NPC Studio"
-           + (studio.selectedProfile.length > 0 ? " — " + studio.instanceName + " / " + studio.selectedProfile : "")
+    title: "Skyrim NPC Studio — Creative Workspace"
+           + (studio.selectedProfile.length > 0 ? " [" + studio.instanceName + " / " + studio.selectedProfile + "]" : "")
            + (studio.outfit.dirty ? "  •" : "")
 
     Settings {
@@ -28,11 +28,12 @@ ApplicationWindow {
         property alias showBottom: bottomToggle.checked
         property alias showLeft: leftToggle.checked
         property alias showRight: rightToggle.checked
+        property alias advancedMode: Theme.advancedMode
     }
 
     readonly property bool ready: studio.phase === StudioController.Ready
 
-    // ---------------------------------------------------------------- dialogs
+    // ---------------------------------------------------------------- DIÁLOGOS
     FileDialog {
         id: instanceDialog
         title: qsTr("Selecciona ModOrganizer.ini")
@@ -71,11 +72,11 @@ ApplicationWindow {
 
     Component.onCompleted: if (!ready) welcome.open()
 
-    // ---------------------------------------------------------------- menus
+    // ---------------------------------------------------------------- MENÚS
     menuBar: MenuBar {
         Menu {
             title: qsTr("&Proyecto")
-            Action { text: qsTr("Abrir proyecto…"); enabled: window.ready; onTriggered: openProjectDialog.open() }
+            Action { text: qsTr("Abrir proyecto (.snps)…"); enabled: window.ready; onTriggered: openProjectDialog.open() }
             Action {
                 text: qsTr("Guardar proyecto")
                 shortcut: StandardKey.Save
@@ -116,7 +117,14 @@ ApplicationWindow {
             title: qsTr("&Vista")
             Action { id: leftToggle; text: qsTr("Panel de exploración"); checkable: true; checked: true }
             Action { id: rightToggle; text: qsTr("Panel de propiedades"); checkable: true; checked: true }
-            Action { id: bottomToggle; text: qsTr("Consola y diagnósticos"); checkable: true; checked: true }
+            Action { id: bottomToggle; text: qsTr("Consola y diagnósticos"); checkable: true; checked: false }
+            MenuSeparator {}
+            Action {
+                text: qsTr("Modo avanzado")
+                checkable: true
+                checked: Theme.advancedMode
+                onTriggered: Theme.advancedMode = checked
+            }
         }
         Menu {
             title: qsTr("&Herramientas")
@@ -140,13 +148,13 @@ ApplicationWindow {
         Menu {
             title: qsTr("E&xportar")
             Action {
-                text: qsTr("Exportar mod completo / rostro (Character Creator 2.0)…")
+                text: qsTr("Exportar mod completo / rostro (Character Creator)…")
                 shortcut: "Ctrl+Shift+E"
                 enabled: window.ready && !window.studio.appearance.exporting
                 onTriggered: exportWizardDialog.open()
             }
             Action {
-                text: qsTr("Exportar parche de atuendo (Modo A)…")
+                text: qsTr("Exportar parche de atuendo (OTFT)…")
                 shortcut: "Ctrl+E"
                 enabled: window.studio.outfit.exportable && !window.studio.outfit.exporting
                 onTriggered: exportDialog.open()
@@ -154,29 +162,77 @@ ApplicationWindow {
         }
     }
 
+    // ---------------------------------------------------------------- TOOLBAR SUPERIOR
     header: ToolBar {
-        background: Rectangle { color: Theme.header; border.color: Theme.border }
+        implicitHeight: 44
+        background: Rectangle {
+            color: Theme.header
+            border.color: Theme.borderSubtle
+            border.width: 1
+        }
+
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 12
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 10
+
+            // Modos de trabajo principales
             TabBar {
                 id: workspaceTabs
-                TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE (2.0)") }
+                implicitHeight: 32
+                TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE") }
                 TabButton { text: qsTr("👗 ESTUDIO DE ATUENDOS") }
             }
+
+            Rectangle { width: 1; height: 22; color: Theme.borderSubtle }
+
+            // Acciones de proyecto
+            ToolButton {
+                text: "📁 " + qsTr("Abrir")
+                enabled: window.ready
+                implicitHeight: 28
+                onClicked: openProjectDialog.open()
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Abrir proyecto .snps existente")
+            }
+
+            ToolButton {
+                text: "💾 " + qsTr("Guardar")
+                enabled: window.studio.outfit.npcFormKey.length > 0
+                implicitHeight: 28
+                onClicked: window.studio.outfit.projectPath.length > 0
+                           ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
+                           : saveProjectDialog.open()
+                ToolTip.visible: hovered; ToolTip.text: qsTr("Guardar estado del proyecto actual")
+            }
+
             Item { Layout.fillWidth: true }
+
+            // Conmutador Modo Simple / Avanzado
+            Switch {
+                id: modeSwitch
+                text: Theme.advancedMode ? qsTr("Modo Avanzado") : qsTr("Modo Simple")
+                checked: Theme.advancedMode
+                onToggled: Theme.advancedMode = checked
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Alterna entre interfaz simplificada e inspector técnico con diagnósticos")
+            }
+
+            Rectangle { width: 1; height: 22; color: Theme.borderSubtle }
+
+            // Botón de exportación principal
             Button {
                 text: qsTr("🚀 Exportar Mod…")
                 highlighted: true
                 enabled: window.ready
+                implicitHeight: 32
+                font.bold: true
                 onClicked: exportWizardDialog.open()
             }
         }
     }
 
-    // ---------------------------------------------------------------- layout
+    // ---------------------------------------------------------------- CONTENIDO PRINCIPAL
     SplitView {
         anchors.fill: parent
         orientation: Qt.Vertical
@@ -185,118 +241,133 @@ ApplicationWindow {
             currentIndex: workspaceTabs.currentIndex
             SplitView.fillHeight: true
 
+            // Vista 1: Character Creator completo
             CharacterCreator {
                 studio: window.studio
             }
 
+            // Vista 2: Estudio de Atuendos dedicado (Layout 3 columnas: 24% | 56% | 20%)
             SplitView {
                 SplitView.fillHeight: true
                 orientation: Qt.Horizontal
 
-            Rectangle {
-                visible: leftToggle.checked
-                SplitView.preferredWidth: 380
-                SplitView.minimumWidth: 280
-                color: Theme.panel
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 0
-                    TabBar {
-                        id: leftTabs
-                        Layout.fillWidth: true
-                        TabButton { text: qsTr("NPC") }
-                        TabButton { text: qsTr("Mods") }
-                        TabButton { text: qsTr("Ropa y armaduras") }
-                    }
-                    StackLayout {
-                        currentIndex: leftTabs.currentIndex
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        NpcBrowser { studio: window.studio }
-                        ModBrowser { studio: window.studio }
-                        ArmorCatalog {
-                            studio: window.studio
-                            onPreviewRequested: (formKey) => {
-                                window.studio.armorPreview.selectArmor(formKey)
-                                centerTabs.currentIndex = 2
+                // Panel Izquierdo: Catálogo y Exploración (~24%)
+                Rectangle {
+                    visible: leftToggle.checked
+                    SplitView.preferredWidth: 380
+                    SplitView.minimumWidth: 280
+                    SplitView.maximumWidth: 500
+                    color: Theme.panel
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        TabBar {
+                            id: leftTabs
+                            Layout.fillWidth: true
+                            TabButton { text: qsTr("Prendas") }
+                            TabButton { text: qsTr("NPCs") }
+                            TabButton { text: qsTr("Mods") }
+                        }
+
+                        StackLayout {
+                            currentIndex: leftTabs.currentIndex
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+
+                            ArmorCatalog {
+                                studio: window.studio
+                                onPreviewRequested: (formKey) => {
+                                    window.studio.armorPreview.selectArmor(formKey)
+                                }
+                            }
+
+                            NpcBrowser {
+                                studio: window.studio
+                            }
+
+                            ModBrowser {
+                                studio: window.studio
                             }
                         }
                     }
                 }
-            }
 
-            ColumnLayout {
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 300
-                spacing: 0
-                TabBar {
-                    id: centerTabs
-                    Layout.fillWidth: true
-                    TabButton { text: qsTr("Vista 3D") }
-                    TabButton { text: qsTr("Registro NPC") }
-                    TabButton { text: qsTr("Estudio de prendas") }
-                }
-                StackLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    currentIndex: centerTabs.currentIndex
-                    CharacterViewport { studio: window.studio }
-                    NpcOverview { studio: window.studio }
+                // Panel Central: Visor 3D Dominante (~56%)
+                Rectangle {
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: 400
+                    color: Theme.surface
+
                     CharacterViewport {
+                        anchors.fill: parent
                         studio: window.studio
                         sceneOverride: window.studio.armorPreview
                         previewMode: true
                     }
                 }
-            }
 
-            Rectangle {
-                visible: rightToggle.checked
-                SplitView.preferredWidth: 440
-                SplitView.minimumWidth: 320
-                color: Theme.panel
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 0
-                    TabBar {
-                        id: rightTabs
-                        Layout.fillWidth: true
-                        TabButton { text: qsTr("Ropa") }
-                        TabButton { text: qsTr("Dependencias") }
-                    }
-                    StackLayout {
-                        currentIndex: rightTabs.currentIndex
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        OutfitPanel {
-                            studio: window.studio
-                            onExportRequested: exportDialog.open()
+                // Panel Derecho: Editor de Atuendos (~20%)
+                Rectangle {
+                    visible: rightToggle.checked
+                    SplitView.preferredWidth: 380
+                    SplitView.minimumWidth: 300
+                    SplitView.maximumWidth: 550
+                    color: Theme.panel
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        TabBar {
+                            id: rightTabs
+                            Layout.fillWidth: true
+                            TabButton { text: qsTr("Outfit Activo") }
+                            TabButton { text: qsTr("Dependencias") }
                         }
-                        DependenciesPanel { studio: window.studio }
+
+                        StackLayout {
+                            currentIndex: rightTabs.currentIndex
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+
+                            OutfitPanel {
+                                studio: window.studio
+                                onExportRequested: exportDialog.open()
+                            }
+
+                            DependenciesPanel {
+                                studio: window.studio
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
-    BottomPanel {
+        // Panel inferior colapsable para Consola y Diagnósticos
+        BottomPanel {
             visible: bottomToggle.checked
             studio: window.studio
-            SplitView.preferredHeight: 220
+            SplitView.preferredHeight: 200
             SplitView.minimumHeight: 120
         }
     }
 
-    // ---------------------------------------------------------------- status bar
+    // ---------------------------------------------------------------- STATUS BAR INFERIOR
     footer: Rectangle {
-        implicitHeight: 26
+        implicitHeight: 28
         color: Theme.header
-        border.color: Theme.border
+        border.color: Theme.borderSubtle
+        border.width: 1
+
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
             spacing: 12
+
             StatusBadge {
                 text: window.studio.worker.state === WorkerClient.Ready ? qsTr("WORKER OK")
                       : window.studio.worker.state === WorkerClient.Starting ? qsTr("WORKER…") : qsTr("WORKER OFF")
@@ -306,6 +377,7 @@ ApplicationWindow {
                 ToolTip.text: window.studio.worker.statusText
                 HoverHandler { id: workerHover }
             }
+
             Text {
                 text: window.studio.progressText
                 color: Theme.textDim
@@ -313,12 +385,14 @@ ApplicationWindow {
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
+
             ProgressBar {
                 visible: window.studio.phase === StudioController.Scanning || window.studio.phase === StudioController.Indexing
                 indeterminate: window.studio.progress < 0
                 value: Math.max(0, window.studio.progress)
-                Layout.preferredWidth: 220
+                Layout.preferredWidth: 200
             }
+
             Text {
                 visible: window.ready
                 text: qsTr("%1 NPC · %2 armaduras · %3 plugins · %4 archivos")
@@ -326,6 +400,20 @@ ApplicationWindow {
                       .arg(window.studio.summary.activePlugins ?? 0).arg(window.studio.summary.files ?? 0)
                 color: Theme.textDim
                 font.pixelSize: Theme.small
+            }
+
+            Rectangle { width: 1; height: 16; color: Theme.borderSubtle }
+
+            // Botón de alternancia de Consola y Diagnósticos
+            ToolButton {
+                text: "📟 " + qsTr("Consola & Diagnósticos") + (window.studio.diagnostics.count > 0 ? " (" + window.studio.diagnostics.count + ")" : "")
+                checkable: true
+                checked: bottomToggle.checked
+                implicitHeight: 22
+                font.pixelSize: Theme.micro
+                onClicked: bottomToggle.checked = !bottomToggle.checked
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Mostrar/ocultar panel de consola y diagnósticos técnicos")
             }
         }
     }

@@ -7,7 +7,7 @@ import SkyrimNpcStudio
 Item {
     id: root
     required property StudioController studio
-    property bool advancedMode: false
+    property bool advancedMode: Theme.advancedMode
 
     ExportWizardDialog {
         id: exportWizard
@@ -183,9 +183,9 @@ Item {
                     // Selector Modo Fácil vs Modo Avanzado
                     Switch {
                         id: modeSwitch
-                        text: root.advancedMode ? qsTr("Modo Avanzado") : qsTr("Modo Fácil")
-                        checked: root.advancedMode
-                        onToggled: root.advancedMode = checked
+                        text: Theme.advancedMode ? qsTr("Modo Avanzado") : qsTr("Modo Fácil")
+                        checked: Theme.advancedMode
+                        onToggled: Theme.advancedMode = checked
                     }
 
                     Rectangle { width: 1; height: 20; color: Theme.border }

@@ -104,6 +104,7 @@ class StudioController : public QObject {
   Q_INVOKABLE QString providerOf(const QString& plugin) const;
   Q_INVOKABLE QVariantMap resolveAsset(const QString& data_path) const;
   Q_INVOKABLE void openFolder(const QString& path) const;
+  Q_INVOKABLE void copyToClipboard(const QString& text);
   Q_INVOKABLE void log(const QString& level, const QString& text);
 
  signals:

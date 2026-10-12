@@ -9,15 +9,16 @@
 #endif
 
 #include <QCryptographicHash>
+#include <QClipboard>
 #include <QDesktopServices>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThreadPool>
 #include <QUrl>
-#include <chrono>
-
+#include "resource_context.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
 #include "sns/ipc/protocol.hpp"
@@ -609,6 +610,11 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
   const int serial = ++armor_search_serial_;
   armor_search_cancel_ = worker_->call(method::kSearchArmors, params, 30s, this, [this, serial](const Json& r) {
     if (serial != armor_search_serial_) return;
+    std::shared_ptr<const assets::AssetResolver> resolver;
+    if (snapshot_) {
+      const auto ctx = ResourceContext::for_snapshot(snapshot_);
+      if (ctx) resolver = ctx->resolver;
+    }
     QList<QVariantMap> rows;
     for (const auto& item : r.value("items", Json::array())) {
       auto row = to_map(item);
@@ -621,9 +627,16 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
       const auto female_model = row.value("femaleModel").toString();
       const auto effective_model = !female_model.isEmpty() ? female_model : male_model;
       bool nif_found = false;
-      if (!effective_model.isEmpty() && snapshot_) {
-        const auto resolved = snapshot_->vfs.resolve(ss(effective_model));
-        nif_found = resolved.has_value();
+      if (!effective_model.isEmpty()) {
+        if (resolver) {
+          const auto loc = resolver->locate(ss(effective_model));
+          nif_found = loc.has_value();
+          if (loc.has_value() && row.value("winningMod").toString().isEmpty()) {
+            row["winningMod"] = qs(loc->provider);
+          }
+        } else if (snapshot_) {
+          nif_found = snapshot_->vfs.resolve(ss(effective_model)).has_value();
+        }
       }
       row["nifFound"] = nif_found;
 
@@ -640,6 +653,12 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
   }, [this](int code, const QString& message, const Json&) {
     if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Catálogo de ropa: %1").arg(message));
   });
+}
+
+void StudioController::copyToClipboard(const QString& text) {
+  if (auto* cb = QGuiApplication::clipboard()) {
+    cb->setText(text);
+  }
 }
 
 }  // namespace sns::app

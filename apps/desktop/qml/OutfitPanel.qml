@@ -5,7 +5,7 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import SkyrimNpcStudio
 
-// Outfit editor for the selected NPC: pieces, presets, materials, guardian, undo/redo, validation and export.
+// Editor de atuendos para el NPC seleccionado (Creative Workspace).
 ScrollView {
     id: root
     required property StudioController studio
@@ -14,6 +14,22 @@ ScrollView {
     clip: true
     contentWidth: availableWidth
 
+    function getSlotIcon(slots) {
+        if (!slots) return "📦"
+        const s = String(slots)
+        if (s.indexOf("30") !== -1 || s.indexOf("42") !== -1) return "🪖"
+        if (s.indexOf("31") !== -1) return "💇"
+        if (s.indexOf("32") !== -1) return "🥋"
+        if (s.indexOf("33") !== -1 || s.indexOf("34") !== -1) return "🧤"
+        if (s.indexOf("37") !== -1 || s.indexOf("38") !== -1) return "👢"
+        if (s.indexOf("39") !== -1) return "🛡️"
+        if (s.indexOf("35") !== -1) return "📿"
+        if (s.indexOf("36") !== -1) return "💍"
+        if (s.indexOf("46") !== -1) return "🧣"
+        return "👕"
+    }
+
+    // ---------------------------------------------------------------- DIÁLOGOS
     Dialog {
         id: presetNameDialog
         modal: true
@@ -69,9 +85,9 @@ ScrollView {
             spacing: 8
 
             Text {
-                text: qsTr("Personaliza el material de esta armadura/ropa. Al exportar, se generarán registros reales TXST y ARMA vinculados a un nuevo ARMO en el plugin.")
+                text: qsTr("Personaliza el material de esta pieza. Al exportar, se generarán registros TXST y ARMA vinculados a un nuevo ARMO en el plugin.")
                 color: Theme.textDim
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
             }
@@ -90,7 +106,7 @@ ScrollView {
                 Rectangle {
                     width: 28
                     height: 28
-                    radius: 3
+                    radius: Theme.radiusSmall
                     color: materialDialog.selectedColor
                     border.color: Theme.border
                     border.width: 1
@@ -133,7 +149,7 @@ ScrollView {
                         ToolTip.visible: hovered
                         contentItem: Rectangle {
                             color: modelData.color
-                            radius: 2
+                            radius: Theme.radiusSmall
                             border.color: Theme.border
                         }
                         onClicked: materialDialog.selectedColor = Qt.color(modelData.color)
@@ -188,167 +204,211 @@ ScrollView {
         }
     }
 
+    // ---------------------------------------------------------------- CONTENIDO PRINCIPAL
     ColumnLayout {
         width: root.availableWidth
         spacing: 6
 
-        SectionHeader { title: qsTr("Atuendo"); detail: root.outfit.npcLabel }
+        // Cabecera del Atuendo
+        SectionHeader {
+            title: qsTr("Diseñador de Atuendos")
+            detail: root.outfit.npcLabel.length > 0 ? root.outfit.npcLabel : qsTr("Outfit independiente")
+        }
 
+        // Estado sin NPC seleccionado
         ColumnLayout {
             visible: root.outfit.npcFormKey.length === 0
             Layout.fillWidth: true
             Layout.margins: 8
             spacing: 8
-            Text {
-                text: qsTr("Selecciona un NPC para editar su atuendo, o crea un conjunto independiente directamente:")
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-                wrapMode: Text.Wrap
+
+            Rectangle {
                 Layout.fillWidth: true
-            }
-            Button {
-                text: qsTr("✨ Crear Outfit Autónomo (desde cero)")
-                highlighted: true
-                Layout.fillWidth: true
-                onClicked: root.outfit.createNewOutfit()
+                implicitHeight: noNpcCol.implicitHeight + 16
+                radius: Theme.radius
+                color: Theme.panelAlt
+                border.color: Theme.borderSubtle
+
+                ColumnLayout {
+                    id: noNpcCol
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    Text {
+                        text: qsTr("Modo Outfit Autónomo")
+                        color: Theme.accent
+                        font.bold: true
+                        font.pixelSize: Theme.normal
+                    }
+                    Text {
+                        text: qsTr("Diseña un conjunto de ropa/armadura sin necesidad de vincularlo previamente a un NPC específico:")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.small
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: qsTr("✨ Crear Nuevo Outfit Vacío")
+                        highlighted: true
+                        Layout.fillWidth: true
+                        onClicked: root.outfit.createNewOutfit()
+                    }
+                }
             }
         }
 
+        // Estado con NPC o Outfit activo
         ColumnLayout {
-            visible: root.outfit.npcFormKey.length > 0
+            visible: root.outfit.npcFormKey.length > 0 || root.outfit.pieces.length > 0
             Layout.fillWidth: true
             Layout.margins: 8
             spacing: 6
 
-            Text {
-                text: qsTr("Actual en el perfil: ") + (root.studio.npc.defaultOutfit?.outfit?.editorId ?? qsTr("ninguno"))
-                      + " (" + (root.studio.npc.defaultOutfit?.armors?.length ?? 0) + qsTr(" piezas)")
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-            }
-            Text {
-                visible: root.studio.npc.sleepingOutfit?.outfit?.editorId !== undefined
-                text: qsTr("Dormir (SOFT): ") + (root.studio.npc.sleepingOutfit?.outfit?.editorId ?? qsTr("ninguno"))
-                      + " (" + (root.studio.npc.sleepingOutfit?.armors?.length ?? 0) + qsTr(" piezas)")
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-            }
-
+            // Barra de acciones superiores: Deshacer / Rehacer / Vaciar
             RowLayout {
                 Layout.fillWidth: true
-                Button { text: qsTr("Deshacer"); enabled: root.outfit.canUndo; onClicked: root.outfit.undo(); ToolTip.visible: hovered && root.outfit.undoText; ToolTip.text: root.outfit.undoText }
-                Button { text: qsTr("Rehacer"); enabled: root.outfit.canRedo; onClicked: root.outfit.redo(); ToolTip.visible: hovered && root.outfit.redoText; ToolTip.text: root.outfit.redoText }
-                Button { text: qsTr("Restaurar actual"); onClicked: root.outfit.resetToCurrent() }
-                Button { text: qsTr("Vaciar"); onClicked: root.outfit.clearPieces() }
+                spacing: 4
+
+                Button {
+                    text: "↶ " + qsTr("Deshacer")
+                    enabled: root.outfit.canUndo
+                    implicitHeight: 26
+                    onClicked: root.outfit.undo()
+                    ToolTip.visible: hovered && root.outfit.undoText
+                    ToolTip.text: root.outfit.undoText
+                }
+
+                Button {
+                    text: "↷ " + qsTr("Rehacer")
+                    enabled: root.outfit.canRedo
+                    implicitHeight: 26
+                    onClicked: root.outfit.redo()
+                    ToolTip.visible: hovered && root.outfit.redoText
+                    ToolTip.text: root.outfit.redoText
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    text: qsTr("Restablecer")
+                    implicitHeight: 26
+                    onClicked: root.outfit.resetToCurrent()
+                }
+
+                Button {
+                    text: qsTr("Vaciar")
+                    implicitHeight: 26
+                    onClicked: root.outfit.clearPieces()
+                }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: qsTr("✨ Nuevo Outfit")
-                    onClicked: root.outfit.createNewOutfit()
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Comenzar a diseñar un nuevo conjunto independiente desde cero")
-                }
-                Button {
-                    text: qsTr("Guardar en proyecto")
-                    Layout.fillWidth: true
-                    onClicked: root.outfit.addCurrentToProject()
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Añade o actualiza este NPC en la lista del proyecto para exportar en lote")
-                }
-            }
-
-            // Presets de Vestuario Canónicos
+            // Galería de Presets de Vestuario
             SectionHeader {
                 title: qsTr("Presets de Vestuario")
-                detail: root.outfit.outfitPresets.length + qsTr(" conjuntos")
+                detail: root.outfit.outfitPresets.length + qsTr(" disponibles")
             }
 
-            RowLayout {
+            Rectangle {
                 Layout.fillWidth: true
-                spacing: 6
-                ComboBox {
-                    id: presetCombo
-                    Layout.fillWidth: true
-                    model: root.outfit.outfitPresets
-                    textRole: "name"
-                }
-                Button {
-                    text: qsTr("Aplicar Preset")
-                    onClicked: {
-                        if (presetCombo.currentIndex >= 0) {
-                            root.outfit.applyPreset(root.outfit.outfitPresets[presetCombo.currentIndex].id)
+                implicitHeight: presetCol.implicitHeight + 12
+                radius: Theme.radius
+                color: Theme.panelAlt
+                border.color: Theme.borderSubtle
+
+                ColumnLayout {
+                    id: presetCol
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        ComboBox {
+                            id: presetCombo
+                            Layout.fillWidth: true
+                            model: root.outfit.outfitPresets
+                            textRole: "name"
+                        }
+
+                        Button {
+                            text: qsTr("Aplicar")
+                            highlighted: true
+                            onClicked: {
+                                if (presetCombo.currentIndex >= 0) {
+                                    root.outfit.applyPreset(root.outfit.outfitPresets[presetCombo.currentIndex].id)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        visible: presetCombo.currentIndex >= 0 && root.outfit.outfitPresets.length > 0
+                        text: (root.outfit.outfitPresets[presetCombo.currentIndex]?.description ?? "")
+                              + " (" + (root.outfit.outfitPresets[presetCombo.currentIndex]?.pieceCount ?? 0) + qsTr(" piezas)")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.small
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+
+                    // Acciones de Preset
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+
+                        Button {
+                            text: qsTr("Guardar actual")
+                            enabled: root.outfit.exportable
+                            implicitHeight: 24
+                            onClicked: {
+                                presetNameDialog.action = "save"
+                                presetNameDialog.presetId = ""
+                                presetNameField.text = ""
+                                presetNameDialog.open()
+                            }
+                        }
+                        Button {
+                            text: qsTr("Duplicar")
+                            enabled: presetCombo.currentIndex >= 0
+                            implicitHeight: 24
+                            onClicked: {
+                                const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
+                                presetNameDialog.action = "duplicate"
+                                presetNameDialog.presetId = preset.id
+                                presetNameField.text = preset.name + qsTr(" (copia)")
+                                presetNameDialog.open()
+                            }
+                        }
+                        Button {
+                            text: "★ " + qsTr("Favorito")
+                            enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
+                            checkable: true
+                            checked: presetCombo.currentIndex >= 0 && !!root.outfit.outfitPresets[presetCombo.currentIndex]?.favorite
+                            implicitHeight: 24
+                            onClicked: {
+                                const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
+                                root.outfit.setPresetFavorite(preset.id, !preset.favorite)
+                            }
+                        }
+                        Button {
+                            text: "✕"
+                            enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
+                            implicitHeight: 24
+                            onClicked: {
+                                deletePresetDialog.presetId = root.outfit.outfitPresets[presetCombo.currentIndex].id
+                                deletePresetDialog.open()
+                            }
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Eliminar preset")
                         }
                     }
                 }
             }
-            Text {
-                visible: presetCombo.currentIndex >= 0 && root.outfit.outfitPresets.length > 0
-                text: (root.outfit.outfitPresets[presetCombo.currentIndex]?.description ?? "")
-                      + " (" + (root.outfit.outfitPresets[presetCombo.currentIndex]?.pieceCount ?? 0) + qsTr(" piezas)")
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: qsTr("Guardar actual")
-                    enabled: root.outfit.exportable
-                    onClicked: {
-                        presetNameDialog.action = "save"
-                        presetNameDialog.presetId = ""
-                        presetNameField.text = ""
-                        presetNameDialog.open()
-                    }
-                }
-                Button {
-                    text: qsTr("Duplicar")
-                    enabled: presetCombo.currentIndex >= 0
-                    onClicked: {
-                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
-                        presetNameDialog.action = "duplicate"
-                        presetNameDialog.presetId = preset.id
-                        presetNameField.text = preset.name + qsTr(" (copia)")
-                        presetNameDialog.open()
-                    }
-                }
-                Button {
-                    text: qsTr("Renombrar")
-                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
-                    onClicked: {
-                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
-                        presetNameDialog.action = "rename"
-                        presetNameDialog.presetId = preset.id
-                        presetNameField.text = preset.name
-                        presetNameDialog.open()
-                    }
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: qsTr("Favorito")
-                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
-                    checkable: true
-                    checked: presetCombo.currentIndex >= 0 && !!root.outfit.outfitPresets[presetCombo.currentIndex]?.favorite
-                    onClicked: {
-                        const preset = root.outfit.outfitPresets[presetCombo.currentIndex]
-                        root.outfit.setPresetFavorite(preset.id, !preset.favorite)
-                    }
-                }
-                Button {
-                    text: qsTr("Eliminar preset")
-                    enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
-                    onClicked: {
-                        deletePresetDialog.presetId = root.outfit.outfitPresets[presetCombo.currentIndex].id
-                        deletePresetDialog.open()
-                    }
-                }
-            }
 
+            // Piezas Equipadas
             SectionHeader {
                 title: qsTr("Piezas Equipadas")
                 detail: root.outfit.pieces.length + qsTr(" piezas")
@@ -360,24 +420,58 @@ ScrollView {
                     required property var modelData
                     Layout.fillWidth: true
                     implicitHeight: pieceCol.implicitHeight + 10
-                    radius: 3
+                    radius: Theme.radius
                     color: Theme.panelAlt
-                    border.color: modelData.hasMaterial ? Theme.accent : Theme.border
+                    border.color: modelData.hasMaterial ? Theme.accent : Theme.borderSubtle
+
                     ColumnLayout {
                         id: pieceCol
                         anchors.fill: parent
-                        anchors.margins: 5
-                        spacing: 2
+                        anchors.margins: 6
+                        spacing: 3
+
                         RowLayout {
                             Layout.fillWidth: true
+                            spacing: 8
+
+                            // Icono slot silhouette
+                            Rectangle {
+                                implicitWidth: 26
+                                implicitHeight: 26
+                                radius: Theme.radiusSmall
+                                color: Theme.surface
+                                border.color: Theme.borderSubtle
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: root.getSlotIcon(modelData.slots)
+                                    font.pixelSize: 13
+                                }
+                            }
+
                             ColumnLayout {
                                 spacing: 0
                                 Layout.fillWidth: true
-                                Text { text: modelData.name; color: Theme.text; font.pixelSize: Theme.normal; elide: Text.ElideRight; Layout.fillWidth: true }
-                                Text { text: qsTr("slots ") + modelData.slots + " · " + modelData.plugin; color: Theme.textDim; font.pixelSize: Theme.small; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                                Text {
+                                    text: modelData.name
+                                    color: Theme.text
+                                    font.pixelSize: Theme.normal
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                Text {
+                                    text: qsTr("Slot ") + modelData.slots + " · " + modelData.plugin
+                                    color: Theme.textDim
+                                    font.pixelSize: Theme.small
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
                             }
+
                             ToolButton {
                                 text: "🎨"
+                                implicitHeight: 26
+                                implicitWidth: 26
                                 onClicked: {
                                     materialDialog.targetPieceFormKey = modelData.formKey
                                     materialDialog.targetPieceName = modelData.name
@@ -390,13 +484,25 @@ ScrollView {
                                 ToolTip.visible: hovered
                                 ToolTip.text: qsTr("Personalizar textura / tinte de material (TXST/ARMA)")
                             }
-                            ToolButton { text: "✕"; onClicked: root.outfit.removePiece(modelData.formKey); ToolTip.visible: hovered; ToolTip.text: qsTr("Quitar pieza") }
+
+                            ToolButton {
+                                text: "✕"
+                                implicitHeight: 26
+                                implicitWidth: 26
+                                onClicked: root.outfit.removePiece(modelData.formKey)
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Quitar pieza del atuendo")
+                            }
                         }
+
+                        // Badge de Material TXST si aplica
                         RowLayout {
                             visible: modelData.hasMaterial
                             spacing: 4
                             Rectangle {
-                                width: 10; height: 10; radius: 2
+                                width: 10
+                                height: 10
+                                radius: 2
                                 color: modelData.tintColor !== undefined ? modelData.tintColor : "transparent"
                                 border.color: Theme.border
                                 border.width: 1
@@ -404,78 +510,34 @@ ScrollView {
                             Text {
                                 text: qsTr("Material TXST: ") + (modelData.materialName && modelData.materialName.length > 0 ? modelData.materialName : qsTr("Personalizado"))
                                 color: Theme.accent
-                                font.pixelSize: Theme.small - 1
+                                font.pixelSize: Theme.micro
                                 font.bold: true
                             }
                         }
                     }
                 }
             }
-            Text {
-                visible: root.outfit.pieces.length === 0
-                text: qsTr("Sin piezas. Añade prendas desde el catálogo «Prendas» o aplica un preset.")
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
 
-            SectionHeader {
-                visible: root.outfit.projectNpcCount > 0
-                title: qsTr("NPCs en el proyecto")
-                detail: root.outfit.projectNpcCount + qsTr(" NPCs")
-            }
-            Repeater {
-                visible: root.outfit.projectNpcCount > 0
-                model: root.outfit.projectNpcs
-                delegate: Rectangle {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    implicitHeight: projectRow.implicitHeight + 8
-                    radius: 3
-                    color: modelData.isCurrent ? Theme.panel : Theme.panelAlt
-                    border.color: modelData.isCurrent ? Theme.accent : Theme.border
-                    RowLayout {
-                        id: projectRow
-                        anchors.fill: parent
-                        anchors.margins: 4
-                        ColumnLayout {
-                            spacing: 0
-                            Layout.fillWidth: true
-                            Text {
-                                text: modelData.name + (modelData.isCurrent ? qsTr(" (actual)") : "")
-                                color: modelData.isCurrent ? Theme.accent : Theme.text
-                                font.bold: modelData.isCurrent
-                                font.pixelSize: Theme.normal
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                text: modelData.editorId + " · " + modelData.piecesCount + qsTr(" piezas")
-                                color: Theme.textDim
-                                font.pixelSize: Theme.small
-                                elide: Text.ElideRight
-                            }
-                        }
-                        ToolButton {
-                            visible: !modelData.isCurrent
-                            text: "↗"
-                            onClicked: root.outfit.loadNpcFromProject(modelData.formKey)
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Cargar este NPC en el editor")
-                        }
-                        ToolButton {
-                            text: "✕"
-                            onClicked: root.outfit.removeNpcFromProject(modelData.formKey)
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Quitar del proyecto")
-                        }
-                    }
+            // Mensaje si no hay piezas
+            Rectangle {
+                visible: root.outfit.pieces.length === 0
+                Layout.fillWidth: true
+                implicitHeight: 60
+                radius: Theme.radius
+                color: Theme.panelAlt
+                border.color: Theme.borderSubtle
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("Sin piezas equipadas.\nAñade prendas desde el catálogo o aplica un preset.")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.small
+                    horizontalAlignment: Text.AlignHCenter
                 }
             }
 
-            // Compatibility Guardian
+            // Guardian de Compatibilidad
             SectionHeader {
-                title: qsTr("Guardian de Compatibilidad (evaluación preliminar)")
+                title: qsTr("Guardián de Compatibilidad")
                 detail: root.outfit.compatibilityReport.badgeText ?? ""
             }
 
@@ -483,7 +545,7 @@ ScrollView {
                 Layout.fillWidth: true
                 implicitHeight: guardianCol.implicitHeight + 12
                 color: Theme.panelAlt
-                radius: 4
+                radius: Theme.radius
                 border.color: root.outfit.compatibilityReport.badge === "verified" ? Theme.ok
                               : root.outfit.compatibilityReport.badge === "warning" ? Theme.warn : Theme.error
                 border.width: 1
@@ -504,7 +566,7 @@ ScrollView {
                         Item { Layout.fillWidth: true }
                         Text {
                             text: (root.outfit.compatibilityReport.body?.name ?? "Vanilla")
-                                  + (root.outfit.compatibilityReport.body?.physicsEnabled ? qsTr(" · indicio de físicas; sin verificar") : "")
+                                  + (root.outfit.compatibilityReport.body?.physicsEnabled ? qsTr(" · Físicas detectadas") : "")
                             color: Theme.accent
                             font.pixelSize: Theme.small
                             font.bold: true
@@ -525,14 +587,14 @@ ScrollView {
                             required property var modelData
                             Layout.fillWidth: true
                             implicitHeight: issueRow.implicitHeight + 8
-                            radius: 3
+                            radius: Theme.radiusSmall
                             color: Theme.panel
                             border.color: Theme.severityColor(modelData.severity)
 
                             RowLayout {
                                 id: issueRow
                                 anchors.fill: parent
-                                anchors.margins: 4
+                                anchors.margins: 6
                                 spacing: 6
                                 Text {
                                     text: modelData.severity === "error" ? "✖" : modelData.severity === "warning" ? "⚠" : "ℹ"
@@ -544,7 +606,7 @@ ScrollView {
                                     Layout.fillWidth: true
                                     spacing: 2
                                     Text {
-                                        text: "<b>" + modelData.code + "</b> (" + modelData.component + "): " + modelData.message
+                                        text: "<b>" + modelData.code + "</b>: " + modelData.message
                                         color: Theme.text
                                         font.pixelSize: Theme.small
                                         wrapMode: Text.Wrap
@@ -554,7 +616,7 @@ ScrollView {
                                         visible: modelData.remediation && modelData.remediation.length > 0
                                         text: "→ " + modelData.remediation
                                         color: Theme.textDim
-                                        font.pixelSize: Theme.small - 1
+                                        font.pixelSize: Theme.micro
                                         font.italic: true
                                         wrapMode: Text.Wrap
                                         Layout.fillWidth: true
@@ -566,31 +628,29 @@ ScrollView {
                 }
             }
 
-            SectionHeader {
-                title: qsTr("Validación de Plugins")
-                detail: root.outfit.validating ? qsTr("comprobando…") : root.outfit.exportable ? qsTr("exportable") : qsTr("no exportable")
-            }
-            StatusBadge {
-                text: root.outfit.validating ? qsTr("VALIDANDO") : root.outfit.exportable ? qsTr("LISTO PARA EXPORTAR") : qsTr("BLOQUEADO")
-                tone: root.outfit.validating ? Theme.textDim : root.outfit.exportable ? Theme.ok : Theme.error
-            }
-            IssueList {
-                issues: root.outfit.validation.issues ?? []
-                emptyText: root.outfit.validating ? "" : qsTr("Sin incidencias")
-            }
-
-            Button {
-                text: root.outfit.exporting ? qsTr("Exportando…") : qsTr("GUARDAR MOD (parche de atuendo)…")
-                highlighted: true
-                enabled: root.outfit.exportable && !root.outfit.exporting
+            // Botones de acción principales
+            RowLayout {
                 Layout.fillWidth: true
-                onClicked: root.exportRequested()
-            }
+                spacing: 6
+                Layout.topMargin: 4
 
-            SectionHeader { title: qsTr("Historial de cambios"); detail: root.outfit.dirty ? qsTr("sin guardar") : qsTr("guardado") }
-            Repeater {
-                model: root.outfit.history
-                delegate: Text { required property string modelData; text: "• " + modelData; color: Theme.textDim; font.pixelSize: Theme.small; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Button {
+                    text: qsTr("💾 Guardar en Proyecto")
+                    Layout.fillWidth: true
+                    implicitHeight: 32
+                    onClicked: root.outfit.addCurrentToProject()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Añade este atuendo al proyecto para exportación individual o por lotes")
+                }
+
+                Button {
+                    text: root.outfit.exporting ? qsTr("Exportando…") : qsTr("🚀 Exportar Mod…")
+                    highlighted: true
+                    enabled: root.outfit.exportable && !root.outfit.exporting
+                    Layout.fillWidth: true
+                    implicitHeight: 32
+                    onClicked: root.exportRequested()
+                }
             }
         }
     }
