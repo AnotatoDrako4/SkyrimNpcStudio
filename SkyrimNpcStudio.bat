@@ -6,6 +6,11 @@ rem ============================================================================
 title Skyrim NPC Studio Ultimate — Outfit Studio 3D + Character Creator 3.0
 setlocal
 
+rem UTF-8 console: a Spanish MSVC writes its /showIncludes notes in the console code page and
+rem Ninja only recognises them in UTF-8. Without it, header changes stop recompiling the files
+rem that include them (stale objects, memory corruption). See docs/CRASH_DIAGNOSTICS.md.
+chcp 65001 >nul
+
 cd /d "%~dp0"
 set "DIST=%~dp0dist\SkyrimNpcStudio"
 set "RELEASE_APP=%DIST%\SkyrimNpcStudio.exe"
@@ -55,6 +60,7 @@ echo  Preparando Skyrim NPC Studio (Character Creator 3.0)
 echo  Compilando Release y desplegando runtime en dist\SkyrimNpcStudio...
 echo =======================================================================
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package.ps1"
+if %errorlevel% EQU 3 goto ALREADY_RUNNING
 if errorlevel 1 (
     echo.
     echo [ERROR] No se pudo empaquetar la aplicacion.
@@ -68,6 +74,7 @@ echo =======================================================================
 echo  Recompilando Release y empaquetando dist\SkyrimNpcStudio...
 echo =======================================================================
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package.ps1"
+if %errorlevel% EQU 3 goto ALREADY_RUNNING
 if errorlevel 1 (
     echo.
     echo [ERROR] Fallo la reconstruccion del paquete Release.
@@ -75,6 +82,13 @@ if errorlevel 1 (
     exit /b 1
 )
 goto LAUNCH_RELEASE
+
+:ALREADY_RUNNING
+echo.
+echo [AVISO] Skyrim NPC Studio ya esta abierto: no se cierra para no perder cambios sin guardar.
+echo         Cierralo y vuelve a ejecutar este archivo para actualizar el paquete.
+pause
+exit /b 0
 
 :BUILD_DEBUG
 echo =======================================================================

@@ -7,6 +7,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -29,7 +31,12 @@ struct ResourceContext;
 // What the 3D view needs from the face draft: the regenerated FaceGen files (as an in-memory
 // overlay of their Data paths) and the record values that change the body (weight, height, colors).
 struct FacePreview {
+  std::string npc_form_key;  // the NPC this preview belongs to ("" when none is loaded)
   std::shared_ptr<const rendering::AssetOverlay> overlay;  // null: show the profile's own FaceGen
+  // Changes whenever the overlay changes what the viewer draws (geometry, textures). A hair color
+  // patch only rewrites the HairTint value inside the NIF, which the viewer takes from hair_color,
+  // so it keeps the revision: the view recolors the hair without rebuilding the scene.
+  std::uint64_t geometry_revision = 0;
   float weight = 50.0f;
   float height = 1.0f;
   std::optional<face::Rgb8> hair_color;
@@ -165,12 +172,21 @@ class AppearanceEditor : public QObject {
 
  private:
   struct Build;
+  // One FaceGen job in flight. Builds run one at a time; an edit made meanwhile cancels it
+  // (cooperatively, between head parts) and a new build of the latest draft starts when it returns.
+  struct Job {
+    std::uint64_t task = 0;
+    std::string npc;
+    std::shared_ptr<std::atomic<bool>> cancel;
+  };
   void edit(appearance::FaceState next, const QString& description, const QString& merge_key = {});
   void request_recipe(bool initial);
   void on_recipe(const Json& json, bool initial, int serial);
   void analyse_existing_facegen();
   void schedule_build();
   void start_build();
+  void finish_build(const std::shared_ptr<Build>& build);
+  void cancel_jobs();
   void export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip);
   void finish_export(bool ok, const QString& message, const QString& mod_dir, const QString& zip, const QVariantMap& extra = {});
   std::shared_ptr<ResourceContext> context() const;
@@ -203,11 +219,14 @@ class AppearanceEditor : public QObject {
   // Latest regenerated FaceGen (preview == export bytes).
   QThreadPool pool_;
   QTimer build_timer_;
-  int build_serial_ = 0;
   bool building_ = false;
+  std::optional<Job> running_;
+  bool rebuild_pending_ = false;
+  std::shared_ptr<std::atomic<bool>> analysis_cancel_;
   std::shared_ptr<Build> build_;
   QVariantMap facegen_report_;
   std::shared_ptr<const rendering::AssetOverlay> overlay_;
+  std::uint64_t geometry_revision_ = 0;
 
   QVariantList presets_list_;
   bool exporting_ = false;

@@ -18,6 +18,7 @@
 #include <QStandardPaths>
 #include <QThreadPool>
 #include <QUrl>
+#include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
@@ -548,6 +549,7 @@ void StudioController::searchNpcs(const QString& text, const QString& sex, const
 
 void StudioController::selectNpc(const QString& form_key) {
   if (phase_ != Phase::Ready || form_key.isEmpty()) return;
+  diag::record("studio", ("selectNpc " + form_key).toStdString());
   npc_loading_ = true;
   pending_npc_ = form_key;
   emit npcChanged();

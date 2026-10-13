@@ -8,6 +8,20 @@
 | `integration` | Catch2: worker real lanzado con Job Object, named pipe real, verificación del dueño del pipe, caso de uso completo | `ctest --preset debug -R integration:` |
 | `fixtures` | Biblioteca .NET que genera con Mutagen un load order sintético (Skyrim.esm sintético, dos overrides de Lydia —uno pierde la edición del otro— y un pack de armaduras ESL) | usada por todo lo anterior y por `tools/FixtureGen` |
 
+## Regresión de Character Creator
+
+Con el perfil MO2 local disponible, la aplicación puede ejecutar 18 escenarios en una ventana
+real: cambios de cabello aislados y rápidos, paleta QML, FaceGen de replacer, cambio de NPC,
+vestuario durante una construcción, rechazo de material sin recursos, undo/redo, cierre durante un trabajo, exportación y reapertura
+de `.snps`. La exportación de prueba se escribe en `out/stress-work`, nunca en MO2.
+
+```powershell
+.\dist\SkyrimNpcStudio\SkyrimNpcStudio.exe --instance D:\Apps\ModOrganizer.ini --profile Default --npc 0A2C8E:Skyrim.esm --stress-appearance all
+```
+
+`docs/CRASH_DIAGNOSTICS.md` documenta los escenarios, la prueba de minidumps y la ejecución con
+AddressSanitizer. El paquete no se considera probado dentro de Skyrim por pasar estas pruebas.
+
 ## Pruebas locales con tu instalación real
 
 Se registran en CTest y se marcan *Skipped* si no hay configuración. Nunca modifican MO2 ni Skyrim.

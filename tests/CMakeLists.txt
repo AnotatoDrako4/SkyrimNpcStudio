@@ -22,6 +22,24 @@ target_link_libraries(sns_engine_tests PRIVATE
   sns::core sns::ipc sns::mo2 sns::projects sns::outfit sns::appearance sns::presets sns::face sns::rendering nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
 
+# ---- Build tree: every first-party object has its header dependencies recorded ---------------
+if(CMAKE_GENERATOR MATCHES "Ninja")
+  add_test(NAME "build:header dependencies recorded"
+    COMMAND ${CMAKE_COMMAND} -DNINJA=${CMAKE_MAKE_PROGRAM} -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -P ${PROJECT_SOURCE_DIR}/cmake/CheckHeaderDeps.cmake)
+endif()
+
+# ---- Desktop app: the crash handler writes a report and a minidump ----------------------------
+if(SNS_BUILD_APP AND WIN32)
+  foreach(kind access-violation terminate abort)
+    add_test(NAME "app:crash report and minidump (${kind})"
+      COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:SkyrimNpcStudio> -DKIND=${kind}
+              -DWORK=${CMAKE_CURRENT_BINARY_DIR}/crash-selftest-${kind}
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/app/crash_selftest.cmake)
+    set_tests_properties("app:crash report and minidump (${kind})" PROPERTIES TIMEOUT 180)
+  endforeach()
+endif()
+
 # ---- Integration tests: real worker process over a real named pipe -----------------------------
 if(SNS_BUILD_WORKER)
   set(SNS_FIXTURE_GEN_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fixturegen)

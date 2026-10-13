@@ -123,7 +123,7 @@ ScrollView {
             delegate: Rectangle {
                 width: ListView.view.width
                 height: 42
-                color: index % 2 === 0 ? "transparent" : Theme.rowAlt
+                color: index % 2 === 0 ? "transparent" : Theme.panelAlt
                 border.color: Theme.border
 
                 RowLayout {
@@ -210,7 +210,7 @@ ScrollView {
             delegate: Rectangle {
                 width: ListView.view.width
                 height: 38
-                color: index % 2 === 0 ? "transparent" : Theme.rowAlt
+                color: index % 2 === 0 ? "transparent" : Theme.panelAlt
                 border.color: Theme.border
 
                 RowLayout {

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include "sns/appearance/compatibility_guardian.hpp"
 
@@ -110,5 +111,23 @@ TEST_CASE("CompatibilityGuardian: Draft evaluation", "[compatibility]") {
     REQUIRE(report.badge == HealthBadge::Verified);
     REQUIRE(report.can_export);
     REQUIRE(report.error_count() == 0);
+  }
+
+  SECTION("Blocks a material edit whose Skyrim resources are not generated") {
+    draft.set_target(projects::NpcTarget{.form_key = "000A2C8E:Skyrim.esm", .name = "Lydia"});
+    projects::OutfitPieceRef cuirass{.form_key = "013952:Skyrim.esm", .name = "Steel Cuirass",
+                                      .plugin = "Skyrim.esm", .slot_mask = 1u << (32 - 30)};
+    projects::PieceMaterialOverride material;
+    material.name = "Dark steel";
+    material.tint_color = projects::ColorRgb{32, 32, 32};
+    cuirass.material = material;
+    draft.outfit().assign({cuirass});
+
+    const auto report = CompatibilityGuardian::evaluate(draft);
+    REQUIRE_FALSE(report.can_export);
+    REQUIRE(report.badge == HealthBadge::BlockingError);
+    REQUIRE(report.error_count() == 1);
+    REQUIRE(std::any_of(report.issues.begin(), report.issues.end(),
+                        [](const auto& issue) { return issue.code == "MaterialVariantPreviewOnly"; }));
   }
 }

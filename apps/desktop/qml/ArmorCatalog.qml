@@ -353,8 +353,10 @@ Item {
                 required property string slots
                 required property string armorType
                 required property bool nonPlayable
-                property bool nifFound: (typeof model.nifFound !== "undefined") ? Boolean(model.nifFound) : false
-                property bool hasSmp: (typeof model.hasSmp !== "undefined") ? Boolean(model.hasSmp) : false
+                // Roles of StudioController.armorResults (a delegate with required properties has no
+                // implicit `model`, so they are declared like the others).
+                required property bool nifFound
+                required property bool hasSmp
 
                 width: armorListView.width - 6
                 x: 3
@@ -563,8 +565,8 @@ Item {
                 required property string slots
                 required property string armorType
                 required property bool nonPlayable
-                property bool nifFound: (typeof model.nifFound !== "undefined") ? Boolean(model.nifFound) : false
-                property bool hasSmp: (typeof model.hasSmp !== "undefined") ? Boolean(model.hasSmp) : false
+                required property bool nifFound
+                required property bool hasSmp
 
                 width: armorGridView.cellWidth - 6
                 height: armorGridView.cellHeight - 6

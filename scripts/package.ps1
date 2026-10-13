@@ -9,7 +9,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Destination = ""
+    [string]$Destination = "",
+    # Close a studio running from dist\ instead of stopping. Never the default: the open studio
+    # may hold unsaved edits, and being killed looks like a crash (no error report is left).
+    [switch]$CloseRunning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +25,18 @@ if ([string]::IsNullOrWhiteSpace($Destination)) {
 
 Push-Location $root
 try {
+    $distRoot = [IO.Path]::GetFullPath((Join-Path $root 'dist')).TrimEnd('\') + '\'
+    $running = @(Get-Process -Name SkyrimNpcStudio -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and $_.Path.StartsWith($distRoot, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    })
+    if ($running.Count -gt 0 -and -not $CloseRunning) {
+        Write-Host ''
+        Write-Host "Skyrim NPC Studio esta abierto desde dist\ (PID $($running.Id -join ', '))."
+        Write-Host 'No se cierra automaticamente: podria tener cambios sin guardar. Cierralo y vuelve a ejecutar,'
+        Write-Host 'o usa -CloseRunning para cerrarlo a la fuerza.'
+        exit 3
+    }
+
     # Evitar bloqueos de DLLs por demonios en segundo plano de .NET
     dotnet build-server shutdown | Out-Null
     Stop-Process -Name VBCSCompiler -Force -ErrorAction SilentlyContinue
@@ -29,8 +44,21 @@ try {
     Write-Host '[1/4] Compilando (Release)...'
     cmake --preset package | Out-Null
     if ($LASTEXITCODE) { throw "cmake configure failed ($LASTEXITCODE)" }
-    cmake --build --preset package
+    # Builds launched from a CP850 console recorded no header dependencies (see dev-env.ps1), so the
+    # objects of earlier packages may be stale: the first package after that fix is built clean.
+    $packageDir = Join-Path $root 'build\package'
+    $marker = Join-Path $packageDir '.sns-header-deps-v1'
+    $clean = @()
+    if (-not (Test-Path $marker)) {
+        Write-Host '      Reconstruccion completa (una sola vez): objetos de paquetes anteriores no fiables.'
+        $clean = @('--clean-first')
+    }
+    cmake --build --preset package @clean
     if ($LASTEXITCODE) { throw "cmake build failed ($LASTEXITCODE)" }
+    # Every first-party object must know its headers, or a later header change would leave it stale.
+    cmake "-DNINJA=$((Get-Command ninja).Source)" "-DBUILD_DIR=$packageDir" -P (Join-Path $root 'cmake\CheckHeaderDeps.cmake')
+    if ($LASTEXITCODE) { throw 'Hay objetos sin dependencias de cabeceras registradas: el paquete no seria fiable.' }
+    Set-Content -Path $marker -Value "header dependencies verified $(Get-Date -Format s)"
 
     # dist/ is a build output owned by this script: it is recreated from scratch every time.
     $full = [IO.Path]::GetFullPath($Destination)
@@ -39,11 +67,18 @@ try {
         throw "Destination must be inside $root\dist"
     }
 
-    # Terminar cualquier proceso previo que tenga archivos abiertos en dist\
-    Get-Process -Name SkyrimNpcStudio, BethesdaWorker -ErrorAction SilentlyContinue |
-        Where-Object {
-            try { $_.Path -and $_.Path.StartsWith($dist, [StringComparison]::OrdinalIgnoreCase) } catch { $true }
-        } |
+    # Only with -CloseRunning: the studio itself. Workers whose studio is gone (they normally exit
+    # with it) are always cleaned up, since they would lock files in dist\.
+    $studios = @(Get-Process -Name SkyrimNpcStudio -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and $_.Path.StartsWith($dist, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    })
+    if ($studios.Count -gt 0) {
+        if (-not $CloseRunning) { throw 'Skyrim NPC Studio se abrio desde dist\ durante la compilacion; cierralo y vuelve a empaquetar.' }
+        Write-Host "Cerrando Skyrim NPC Studio (PID $($studios.Id -join ', ')) por -CloseRunning..."
+        $studios | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Get-Process -Name SkyrimNpcStudio.BethesdaWorker -ErrorAction SilentlyContinue |
+        Where-Object { try { $_.Path -and $_.Path.StartsWith($dist, [StringComparison]::OrdinalIgnoreCase) } catch { $false } } |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
 

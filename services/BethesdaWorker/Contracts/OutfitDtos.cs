@@ -29,6 +29,10 @@ public sealed record OutfitValidateResponse
 
 public sealed record PieceMaterialDto
 {
+    /// <summary>
+    /// Legacy draft material request. The exporter rejects this until generated DDS assets and
+    /// verified NIF shape mappings are part of the contract. Paths alone are not a game variant.
+    /// </summary>
     public required string ArmorFormKey { get; init; }
     public AppearanceColor? CustomTintColor { get; init; }
     public string? DiffusePath { get; init; }
@@ -47,7 +51,7 @@ public sealed record OutfitAssignment
 
     public bool AlsoSetSleepingOutfit { get; init; }
 
-    /// <summary>Material/recolor overrides for specific armor pieces.</summary>
+    /// <summary>Saved material requests; currently rejected with MaterialVariantPreviewOnly.</summary>
     public IReadOnlyList<PieceMaterialDto>? MaterialOverrides { get; init; }
 }
 

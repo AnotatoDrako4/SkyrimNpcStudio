@@ -199,6 +199,11 @@ ScrollView {
                 delegate: Button {
                     Layout.fillWidth: true
                     implicitHeight: 28
+                    // In Skyrim the eye color is the Eyes head part (its texture set), not a tint:
+                    // choosing it needs the head part catalog. Not available yet, so not clickable.
+                    enabled: false
+                    ToolTip.text: qsTr("Pendiente: el color de ojos se elige como pieza de cabeza (Eyes), aún no disponible aquí.")
+                    ToolTip.visible: hovered
                     contentItem: RowLayout {
                         spacing: 6
                         Rectangle {
@@ -215,9 +220,6 @@ ScrollView {
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
-                    }
-                    onClicked: {
-                        // Apply eye color / tint
                     }
                 }
             }

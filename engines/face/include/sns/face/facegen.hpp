@@ -75,6 +75,8 @@ struct FaceGenBuildOptions {
   // existing file does not contain (e.g. a new hairstyle) are regenerated.
   std::shared_ptr<const std::string> existing_facegen;
   std::optional<FaceValues> baseline;
+  // Checked between head parts; when it returns true the build stops with `cancelled` set and no NIF.
+  std::function<bool()> cancelled;
 };
 
 struct PartBuild {
@@ -91,10 +93,22 @@ struct FaceGenBuild {
   std::string nif;  // serialized NIF ("" when nothing could be built)
   std::vector<PartBuild> parts;
   std::vector<FaceIssue> issues;
+  bool cancelled = false;
   [[nodiscard]] bool exportable() const;  // a NIF was produced and no issue is an error
 };
 
 FaceGenBuild build_facegen(const FaceRecipe& recipe, FaceAssetCache& assets, const FaceGenBuildOptions& options = {});
+
+// Hair color only: the same FaceGen with the HairTint shader color of every HairTint shape set as
+// build_facegen sets it (twice the CLFM color; black without one). Geometry, textures and every
+// other block are kept, so a color change needs no regeneration. Hair, eyebrow and beard parts
+// whose shader is not HairTint are reported (HairTintUnsupported): the color does not reach them.
+struct HairTintPatch {
+  std::string nif;                   // "" when the input could not be read or written
+  std::vector<std::string> patched;  // shapes whose tint was set
+  std::vector<FaceIssue> issues;
+};
+HairTintPatch patch_hair_tint(std::string_view facegen_nif, const FaceRecipe& recipe);
 
 // Shape-by-shape comparison of two FaceGen NIFs (vertex positions, shape space).
 struct ShapeDifference {

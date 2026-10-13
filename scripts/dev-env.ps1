@@ -24,6 +24,20 @@ cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
 }
 
+# Header dependencies. Ninja learns which headers a .cpp includes from the "/showIncludes" lines of
+# cl.exe, recognised by a prefix that CMake stores in build.ninja as UTF-8. A localized compiler
+# (e.g. Spanish "Nota: inclusión del archivo:") writes that prefix in the CONSOLE code page: in CP850
+# (cmd, Windows PowerShell) the "ó" is byte 0xA2, Ninja matches no line, records no dependency, and
+# a header change no longer recompiles the files that include it - stale objects with old struct
+# layouts get linked into the program (memory corruption, random crashes). UTF-8 console output
+# makes cl.exe write the bytes Ninja expects. (English-only compilers are unaffected.)
+try {
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [Text.UTF8Encoding]::new($false)
+} catch {
+    Write-Warning "Could not switch the console to UTF-8; header dependency tracking may fail with a localized MSVC."
+}
+
 if (-not (Test-Path (Join-Path $DotnetRoot 'dotnet.exe'))) { throw ".NET SDK not found at $DotnetRoot (run scripts/bootstrap.ps1)." }
 $env:DOTNET_ROOT = $DotnetRoot
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
