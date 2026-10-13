@@ -20,6 +20,7 @@ internal static class NativeNpcBuilder
     public static CreationExportResponse Export(LoadOrderSession session, CatalogQueries queries, CreationExportRequest request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        ValidateDestination(session, request.OutputDirectory);
         var validation = Validate(session, queries, new CreationValidateRequest { Npc = request.Npc, PluginName = request.PluginName });
         if (!validation.TechnicallyExportable || !request.TechnicalOnly)
             throw new WorkerException(ErrorCodes.ValidationFailed, "Native NPC validation failed; final export requires verified native FaceGen.", validation.Issues);
@@ -91,6 +92,34 @@ internal static class NativeNpcBuilder
 
     private static ExportedRecord Record(ISkyrimMajorRecordGetter r, string type) =>
         new() { FormKey = r.FormKey.ToString(), EditorId = r.EditorID, RecordType = type, Kind = "new" };
+
+    private static void ValidateDestination(LoadOrderSession session, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || !Directory.Exists(path))
+            throw new WorkerException(ErrorCodes.InvalidArgument, "Choose an existing absolute output directory outside Skyrim and MO2.");
+        static string RealDirectory(string value)
+        {
+            var full = Path.GetFullPath(value);
+            var resolved = Path.GetPathRoot(full)!;
+            foreach (var part in full[resolved.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+            {
+                resolved = Path.Combine(resolved, part);
+                resolved = new DirectoryInfo(resolved).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? resolved;
+            }
+            return Path.TrimEndingDirectorySeparator(resolved);
+        }
+        var output = RealDirectory(path);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        foreach (var plugin in session.Plugins)
+        {
+            var active = RealDirectory(Path.GetDirectoryName(plugin.Path)!);
+            if (output.Equals(active, comparison) || output.StartsWith(active + Path.DirectorySeparatorChar, comparison))
+                throw new WorkerException(ErrorCodes.InvalidArgument, "Export cannot write inside a game Data directory or an active mod, including subdirectories and symbolic links.");
+        }
+        for (var directory = new DirectoryInfo(output); directory is not null; directory = directory.Parent)
+            if (directory.Name.Equals("overwrite", StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(directory.FullName, "ModOrganizer.ini")))
+                throw new WorkerException(ErrorCodes.InvalidArgument, "Export cannot write inside MO2 or its overwrite directory.");
+    }
 
     private static void Verify(LoadOrderSession session, SkyrimMod expected, ISkyrimModGetter written, IReadOnlyList<ExportedRecord> records, bool esl)
     {
