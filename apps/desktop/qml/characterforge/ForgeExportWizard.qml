@@ -7,6 +7,7 @@ import SkyrimNpcStudio
 ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
+    enabled: forge.hasProject && !forge.busy
     readonly property int step: (forge.workspace.exportWizard || {}).step || 0
     readonly property string outputFolder: (forge.workspace.exportWizard || {}).outputFolder || ""
     function updateWizard(field, value) {

@@ -7,6 +7,7 @@ import SkyrimNpcStudio
 ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
+    enabled: forge.hasProject && !forge.busy
     readonly property var request: forge.workspace.ai || ({})
     function update(field, value) {
         let ai = Object.assign({}, request);

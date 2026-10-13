@@ -56,6 +56,6 @@ No usar `-SkipTests` como evidencia de pruebas aprobadas. Revisar cada código d
 
 ## Evidencia Cloud
 
-SDK 10.0.401, runtime 10.0.12. Restore `--locked-mode`, build .NET sin warnings/errors, 35 unit/RPC y 29 export pasan. En Linux se ejecutan DLL administradas con `libe_sqlite3.so` del paquete fijado 2.1.12 en salidas ignoradas. No se cambian lockfiles ni RuntimeIdentifier win-x64.
+SDK 10.0.401, runtime 10.0.12. Restore `--locked-mode`, build .NET sin warnings/errors, 35 unit/RPC y 30 export pasan. En Linux se ejecutan DLL administradas con `libe_sqlite3.so` del paquete fijado 2.1.12 en salidas ignoradas. No se cambian lockfiles ni RuntimeIdentifier win-x64.
 
 Los 23 QML Forge pasan parseo con `qmlformat` 6.11.2 y están registrados en CMake. Syntax-only C++20 de fuentes de creación y pruebas portables de serialización/esquema pasan. Estas comprobaciones no sustituyen MOC, compilación MSVC/Qt, CTest o prueba visual Windows. La revisión de componentes con ViewModel simulado se usó solo como análisis estructural, nunca como evidencia de integración real.

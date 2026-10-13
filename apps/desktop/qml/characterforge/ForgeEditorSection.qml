@@ -5,6 +5,7 @@ import SkyrimNpcStudio
 
 ColumnLayout {
     required property CharacterForgeViewModel forge
+    enabled: forge.hasProject && !forge.busy
     function recordLabel(key) {
         return (forge.workspace.recordLabels || {})[key] || qsTr("Referencia de %1").arg(key.split(":").pop());
     }

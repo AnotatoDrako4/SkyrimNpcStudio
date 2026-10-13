@@ -7,6 +7,7 @@ import SkyrimNpcStudio
 ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
+    enabled: forge.hasProject && !forge.busy
     readonly property var material: forge.workspace.materials || ({})
     function update(field, value) {
         let next = Object.assign({}, material);

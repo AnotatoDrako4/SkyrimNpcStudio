@@ -89,7 +89,7 @@ Rama `feature/character-forge-phase-2`, base c35a9f8 de Fase 1 más main e3c770b
 
 FaceGen nativo **pendiente**: el pipeline C++ existente depende de recursos/TRI/NIF/DDS reales y no se ha conectado a una receta de NPC original certificada. No se copia FaceGen de ningún NPC. Exportación final bloqueada; exportación técnica explícita incluye `readyForGame:false`, `faceGenStatus:pending`, `inGameVerified:false` y advertencia NO INSTALAR en README. Exterior ACHR y relaciones nuevas no soportados.
 
-Evidencia: SDK 10.0.401, restore locked, build sin warnings/errors; 35 pruebas unit/RPC y 29 pruebas de exportación .NET. Sintaxis C++20 de motor de creación y parseo QML con Qt 6.11.2 comprobados. Las pruebas Catch2, compilación MSVC/Qt, UI gráfica y Skyrim siguen pendientes en Windows; no se declara completa la Fase 2.
+Evidencia: SDK 10.0.401, restore locked, build sin warnings/errors; 35 pruebas unit/RPC y 30 pruebas de exportación .NET. Sintaxis C++20 de motor de creación y parseo QML con Qt 6.11.2 comprobados. Las pruebas Catch2, compilación MSVC/Qt, UI gráfica y Skyrim siguen pendientes en Windows; no se declara completa la Fase 2.
 
 Revisión independiente: corregidos catálogo obsoleto durante cambio de perfil, exportOptions sin tipos y truncamiento/desbordamiento de enteros JSON. No se fusionó ningún PR remoto ni se modificó main.
 
