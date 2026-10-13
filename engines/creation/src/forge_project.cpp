@@ -1,4 +1,5 @@
 #include "sns/creation/forge_project.hpp"
+#include "sns/creation/forge_workspace.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -44,6 +45,7 @@ void validate(const ForgeProject& project) {
   check_text(project.description, 4096, "Description");
   validate_native_draft(project.npc);
   validate_export_options(project.export_options);
+  validate_forge_workspace(project.workspace);
 
 }
 
@@ -83,6 +85,7 @@ void ForgeProjectStore::save(const fs::path& directory, const ForgeProject& proj
       {"nativeNpc", native_npc_to_json(project.npc)},
       {"exportOptions", project.export_options},
       {"dependencies", project.dependencies},
+      {"workspace", project.workspace},
       {"environment", {{"instanceName", project.environment.instance_name},
                        {"instanceIni", project.environment.instance_ini},
                        {"profile", project.environment.profile},
@@ -122,6 +125,7 @@ ForgeProject ForgeProjectStore::load(const fs::path& directory) {
       project.npc = native_npc_from_json(j.at("nativeNpc"));
       project.export_options = j.value("exportOptions", project.export_options);
       project.dependencies = j.value("dependencies", std::vector<std::string>{});
+      project.workspace = j.value("workspace", Json::object());
     }
     const auto environment = j.value("environment", Json::object());
     project.environment = {environment.value("instanceName", ""), environment.value("instanceIni", ""),
@@ -176,5 +180,10 @@ void ForgeDraft::set_export_options(Json value) {
   validate_export_options(value);
   if (project_.export_options == value) return;
   history_.push(std::make_unique<SetField<Json>>(project_.export_options, std::move(value), "Opciones de exportación"));
+}
+void ForgeDraft::set_workspace(Json value) {
+  validate_forge_workspace(value);
+  if (project_.workspace == value) return;
+  history_.push(std::make_unique<SetField<Json>>(project_.workspace, std::move(value), "Preparación del workspace"));
 }
 }  // namespace sns::creation

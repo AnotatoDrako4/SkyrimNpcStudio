@@ -25,6 +25,7 @@ struct ForgeProject {
   NativeNpcDraft npc;
   nlohmann::json export_options = {{"pluginName", "CharacterForge.esp"}, {"eslFlag", false}, {"createZip", true}};
   std::vector<std::string> dependencies;
+  nlohmann::json workspace = nlohmann::json::object();
   ForgeEnvironment environment;
 };
 
@@ -47,6 +48,7 @@ class ForgeDraft {
   void set_description(std::string value);
   void set_native_npc(NativeNpcDraft value);
   void set_export_options(nlohmann::json value);
+  void set_workspace(nlohmann::json value);
   bool undo() { return history_.undo(); }
   bool redo() { return history_.redo(); }
   [[nodiscard]] bool can_undo() const noexcept { return history_.can_undo(); }

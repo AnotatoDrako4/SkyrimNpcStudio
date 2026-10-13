@@ -16,8 +16,8 @@ ColumnLayout {
     }
     Button {
         Layout.fillWidth: true
-        text: root.value.length ? root.value : qsTr("Seleccionar…")
-        enabled: root.forge.hasProject && !root.forge.busy
+        text: root.value.length ? (root.forge.workspace.recordLabels || {})[root.value] || qsTr("Referencia de %1").arg(root.value.split(":").pop()) : qsTr("Seleccionar…")
+        enabled: root.forge.hasProject && root.forge.catalogReady && !root.forge.busy
         onClicked: {
             root.forge.searchRecords(root.kind, "");
             picker.open();
@@ -54,6 +54,9 @@ ColumnLayout {
                     width: ListView.view.width
                     text: modelData.editorId
                     onClicked: {
+                        let labels = Object.assign({}, root.forge.workspace.recordLabels || {});
+                        labels[modelData.formKey] = modelData.editorId;
+                        root.forge.setWorkspaceValue("recordLabels", labels);
                         root.selected(modelData);
                         picker.close();
                     }

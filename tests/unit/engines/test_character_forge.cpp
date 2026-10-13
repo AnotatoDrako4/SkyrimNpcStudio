@@ -5,6 +5,7 @@
 #include <limits>
 #include "sns/core/error.hpp"
 #include "sns/creation/forge_project.hpp"
+#include "sns/creation/forge_workspace.hpp"
 #include "temp_dir.hpp"
 
 using namespace sns::creation;
@@ -136,4 +137,21 @@ TEST_CASE("Native JSON integers never truncate or wrap", "[forge][schema]") {
   CHECK_THROWS_AS(native_npc_from_json({{"level", 1.9}}), sns::Error);
   CHECK_THROWS_AS(native_npc_from_json({{"health", 4294967396ULL}}), sns::Error);
   CHECK_THROWS_AS(native_npc_from_json({{"inventory", {{{"formKey", "013953:Skyrim.esm"}, {"count", 1.5}}}}}), sns::Error);
+}
+
+TEST_CASE("Forge UI preparation persists without changing native NPC or .snps", "[forge][ui]") {
+  sns::test::TempDir temp;
+  ForgeDraft draft;
+  draft.replace(ForgeProjectStore::create("UI"));
+  const auto original = native_npc_to_json(draft.current().npc);
+  draft.set_workspace({{"tool", "ai"}, {"ai", {{"provider", "Meshy"}, {"description", "A ranger"}}}});
+  CHECK(native_npc_to_json(draft.current().npc) == original);
+  CHECK(draft.undo()); CHECK(draft.current().workspace.empty());
+  CHECK(draft.redo());
+  ForgeProjectStore::save(temp.path() / "UI.sncf", draft.current());
+  CHECK(ForgeProjectStore::load(temp.path() / "UI.sncf").workspace.at("ai").at("provider") == "Meshy");
+  CHECK_THROWS_AS(validate_forge_workspace({{"library", 123}}), sns::Error);
+  CHECK_THROWS_AS(validate_forge_workspace({{"library", {nlohmann::json::object()}}}), sns::Error);
+  CHECK_THROWS_AS(validate_forge_workspace({{"ai", {{"provider", 123}}}}), sns::Error);
+  CHECK_THROWS_AS(validate_forge_workspace({{"exportWizard", {{"step", 2.5}}}}), sns::Error);
 }

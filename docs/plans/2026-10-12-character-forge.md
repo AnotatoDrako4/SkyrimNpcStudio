@@ -92,3 +92,9 @@ FaceGen nativo **pendiente**: el pipeline C++ existente depende de recursos/TRI/
 Evidencia: SDK 10.0.401, restore locked, build sin warnings/errors; 35 pruebas unit/RPC y 29 pruebas de exportación .NET. Sintaxis C++20 de motor de creación y parseo QML con Qt 6.11.2 comprobados. Las pruebas Catch2, compilación MSVC/Qt, UI gráfica y Skyrim siguen pendientes en Windows; no se declara completa la Fase 2.
 
 Revisión independiente: corregidos catálogo obsoleto durante cambio de perfil, exportOptions sin tipos y truncamiento/desbordamiento de enteros JSON. No se fusionó ningún PR remoto ni se modificó main.
+
+## UI-first — rama separada (2026-10-13)
+
+`feature/character-forge-ui` extiende Fase 2 sin declarar completadas las fases de Blender/importación/IA. Se añadieron navegación, toolbar, viewport preparado sin geometría ficticia, formularios modulares, importador con metadatos reales, biblioteca, configuración Blender/MCP, preparación IA, materiales, esqueleto, validación contextual, inspector avanzado y wizard. El objeto opcional `workspace` en v2 conserva estados al guardar/reabrir y participa en el historial. Datos anidados corruptos se rechazan antes de cargar la UI.
+
+Guía de capacidades y checklist pendiente: [CHARACTER_FORGE_LOCAL_TESTS.md](../CHARACTER_FORGE_LOCAL_TESTS.md). La UI reutiliza catálogos y validadores, no estados mutables de los otros workspaces. Final export sigue bloqueado por FaceGen.

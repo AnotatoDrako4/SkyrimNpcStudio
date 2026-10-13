@@ -2,11 +2,17 @@
 
 #include <QRegularExpression>
 #include <QUrl>
+#include <QFile>
+#include <QFileInfo>
+#include <QImageReader>
+#include <QStandardPaths>
+#include <QtEndian>
 #include <filesystem>
 #include <stdexcept>
 #include <utility>
 #include "sns/ipc/protocol.hpp"
 #include <chrono>
+#include <algorithm>
 
 namespace sns::app {
 namespace {
@@ -109,11 +115,11 @@ bool CharacterForgeViewModel::saveProject(const QString& folder_or_url) {
   }
 }
 
-template <class F> void CharacterForgeViewModel::edit(F&& change) {
+template <class F> void CharacterForgeViewModel::edit(F&& change, bool affects_validation) {
   if (!has_project_ || busy_) return;
   try {
     change();
-    invalidate_validation();
+    if (affects_validation) invalidate_validation();
     last_error_.clear();
   } catch (const std::exception& ex) {
     last_error_ = QString::fromUtf8(ex.what());
@@ -207,5 +213,97 @@ void CharacterForgeViewModel::exportTechnical(const QString& folder_or_url) {
 void CharacterForgeViewModel::cancelOperation() {
   if (operation_cancel_) operation_cancel_->store(true);
   // Remain busy until cancellation is acknowledged, preventing a racing duplicate export.
+}
+QVariantMap CharacterForgeViewModel::workspace() const {
+  if (!has_project_) return {};
+  auto result = to_map(draft_.current().workspace);
+  auto model = result.value("model").toMap();
+  if (!model.isEmpty()) { model["available"] = QFileInfo(model.value("path").toString()).isFile(); result["model"] = model; }
+  return result;
+}
+QVariantMap CharacterForgeViewModel::capabilities() const {
+  return {{"nativeRecords", true}, {"nativeFaceGen", false}, {"modelPreview", false},
+          {"blenderBridge", false}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false}};
+}
+void CharacterForgeViewModel::setWorkspaceValue(const QString& field, const QVariant& value) {
+  edit([&] { auto w = draft_.current().workspace; w[ss(field)] = to_json(value); draft_.set_workspace(std::move(w)); }, false);
+}
+void CharacterForgeViewModel::selectModelFile(const QString& url) {
+  edit([&] {
+    const QFileInfo info(local_path(url));
+    const auto extension = info.suffix().toLower();
+    if (!info.isFile() || !info.isReadable() || info.size() <= 0 || info.size() > 2LL * 1024 * 1024 * 1024)
+      throw std::invalid_argument("Select a readable, nonempty model file smaller than 2 GiB");
+    if (!QStringList{"glb", "gltf", "fbx", "obj", "blend"}.contains(extension))
+      throw std::invalid_argument("Supported selections: GLB, glTF, FBX, OBJ, BLEND");
+    Json model{{"name", ss(info.fileName())}, {"path", ss(info.canonicalFilePath())}, {"format", ss(extension)},
+               {"sizeBytes", info.size()}, {"status", "selected-only"}, {"convertedToNif", false}};
+    QFile file(info.absoluteFilePath());
+    if (!file.open(QIODevice::ReadOnly)) throw std::invalid_argument("Cannot read selected file");
+    QByteArray jsonBytes;
+    if (extension == "gltf") {
+      if (info.size() > 16 * 1024 * 1024) throw std::invalid_argument("glTF metadata exceeds 16 MiB");
+      jsonBytes = file.readAll();
+    } else if (extension == "glb") {
+      const auto header = file.read(20);
+      if (header.size() != 20 || header.left(4) != "glTF") throw std::invalid_argument("Invalid GLB header");
+      const auto* data = reinterpret_cast<const uchar*>(header.constData());
+      const auto length = qFromLittleEndian<quint32>(data + 12);
+      if (qFromLittleEndian<quint32>(data + 4) != 2 || qFromLittleEndian<quint32>(data + 8) != info.size()
+          || qFromLittleEndian<quint32>(data + 16) != 0x4E4F534A || length > 16 * 1024 * 1024 || length > info.size() - 20)
+        throw std::invalid_argument("Unsupported or truncated GLB metadata");
+      jsonBytes = file.read(length);
+    } else if (extension == "blend" && file.read(7) != "BLENDER") {
+      throw std::invalid_argument("Invalid Blender file header");
+    }
+    if (!jsonBytes.isEmpty()) {
+      const auto metadata = Json::parse(jsonBytes.toStdString());
+      if (!metadata.is_object() || !metadata.contains("asset") || metadata.at("asset").value("version", "") != "2.0")
+        throw std::invalid_argument("Only glTF 2.0 metadata is supported");
+      for (const auto* field : {"meshes", "materials", "textures", "skins"}) {
+        const auto values = metadata.value(field, Json::array());
+        if (!values.is_array()) throw std::invalid_argument("Malformed glTF array");
+        model[field] = values.size();
+      }
+      model["metadataInspected"] = true;
+    } else model["metadataInspected"] = false;
+    auto w = draft_.current().workspace;
+    w["model"] = model;
+    auto library = w.value("library", Json::array());
+    if (!library.is_array()) library = Json::array();
+    const auto same = std::find_if(library.begin(), library.end(), [&](const Json& entry) { return entry.value("path", "") == model.at("path"); });
+    if (same == library.end() && library.size() < 100) library.push_back(model);
+    w["library"] = library;
+    draft_.set_workspace(std::move(w));
+  }, false);
+}
+void CharacterForgeViewModel::selectBlenderExecutable(const QString& url) {
+  edit([&] {
+    const QFileInfo info(local_path(url));
+    if (!info.isFile() || !info.isReadable() || (!info.isExecutable() && info.suffix().compare("exe", Qt::CaseInsensitive) != 0))
+      throw std::invalid_argument("Select an existing Blender executable");
+    auto w = draft_.current().workspace;
+    w["blender"] = {{"executable", ss(info.canonicalFilePath())}, {"status", "configured-unverified"}};
+    draft_.set_workspace(std::move(w));
+  }, false);
+}
+void CharacterForgeViewModel::detectBlender() {
+  const auto path = QStandardPaths::findExecutable("blender");
+  if (path.isEmpty()) { last_error_ = tr("Blender no encontrado en PATH. Puedes seleccionar el ejecutable; el bridge aún no está implementado."); emit changed(); return; }
+  selectBlenderExecutable(path);
+}
+void CharacterForgeViewModel::selectReferenceImage(const QString& role, const QString& url) {
+  edit([&] {
+    if (!QStringList{"front", "side", "back"}.contains(role)) throw std::invalid_argument("Unknown reference image role");
+    const QFileInfo info(local_path(url));
+    QImageReader reader(info.absoluteFilePath());
+    if (!info.isFile() || info.size() > 20 * 1024 * 1024 || !reader.canRead() || !reader.size().isValid())
+      throw std::invalid_argument("Select a readable reference image up to 20 MiB");
+    auto w = draft_.current().workspace;
+    auto ai = w.value("ai", Json::object());
+    ai[ss(role)] = {{"path", ss(info.canonicalFilePath())}, {"width", reader.size().width()}, {"height", reader.size().height()}};
+    w["ai"] = ai;
+    draft_.set_workspace(std::move(w));
+  }, false);
 }
 }  // namespace sns::app

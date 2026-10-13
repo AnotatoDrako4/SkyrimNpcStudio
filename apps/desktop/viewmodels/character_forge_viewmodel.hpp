@@ -31,6 +31,8 @@ class CharacterForgeViewModel final : public QObject {
   Q_PROPERTY(QVariantList recordChoices READ record_choices NOTIFY recordsChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(bool catalogReady READ catalog_ready NOTIFY changed)
+  Q_PROPERTY(QVariantMap workspace READ workspace NOTIFY changed)
+  Q_PROPERTY(QVariantMap capabilities READ capabilities CONSTANT)
   Q_PROPERTY(bool canExportTechnical READ can_export_technical NOTIFY changed)
 
  public:
@@ -53,6 +55,8 @@ class CharacterForgeViewModel final : public QObject {
   QVariantList record_choices() const { return record_choices_; }
   bool busy() const { return busy_; }
   bool catalog_ready() const { return catalog_ready_; }
+  QVariantMap workspace() const;
+  QVariantMap capabilities() const;
   bool can_export_technical() const { return catalog_ready_ && !busy_ && validation_.value("technicallyExportable").toBool(); }
 
   Q_INVOKABLE bool newProject(const QString& name);
@@ -70,6 +74,11 @@ class CharacterForgeViewModel final : public QObject {
   Q_INVOKABLE void validateNpc();
   Q_INVOKABLE void exportTechnical(const QString& folder_or_url);
   Q_INVOKABLE void cancelOperation();
+  Q_INVOKABLE void setWorkspaceValue(const QString& field, const QVariant& value);
+  Q_INVOKABLE void selectModelFile(const QString& url);
+  Q_INVOKABLE void selectBlenderExecutable(const QString& url);
+  Q_INVOKABLE void detectBlender();
+  Q_INVOKABLE void selectReferenceImage(const QString& role, const QString& url);
   void invalidate_validation();
   void set_catalog_ready(bool ready);
 
@@ -78,7 +87,7 @@ class CharacterForgeViewModel final : public QObject {
   void recordsChanged();
 
  private:
-  template <class F> void edit(F&& change);
+  template <class F> void edit(F&& change, bool affects_validation = true);
   EnvironmentProvider environment_;
   creation::ForgeDraft draft_;
   bool has_project_ = false;

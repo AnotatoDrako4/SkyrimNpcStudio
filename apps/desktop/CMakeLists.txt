@@ -50,10 +50,29 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/CharacterCreator.qml
+    qml/characterforge/AIGenerationPanel.qml
+    qml/characterforge/AppearanceEditor.qml
+    qml/characterforge/BlenderConnectionPanel.qml
+    qml/characterforge/BlenderOperations.qml
     qml/characterforge/CharacterForge.qml
-    qml/characterforge/NativeNpcEditor.qml
+    qml/characterforge/CharacterInventory.qml
+    qml/characterforge/CharacterProperties.qml
+    qml/characterforge/ForgeAdvancedInspector.qml
+    qml/characterforge/ForgeEditorSection.qml
+    qml/characterforge/ForgeExportWizard.qml
+    qml/characterforge/ForgeModelLibrary.qml
+    qml/characterforge/ForgeNavigation.qml
+    qml/characterforge/ForgeOutfitEditor.qml
+    qml/characterforge/ForgePlacementEditor.qml
     qml/characterforge/ForgeRecordSelector.qml
+    qml/characterforge/ForgeToolbar.qml
     qml/characterforge/ForgeValidationPanel.qml
+    qml/characterforge/ForgeViewport.qml
+    qml/characterforge/MaterialsEditor.qml
+    qml/characterforge/ModelImporter.qml
+    qml/characterforge/NativeNpcEditor.qml
+    qml/characterforge/SkeletonEditor.qml
+    qml/characterforge/StatsEditor.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
     qml/shaders/alpha_channel.frag)
