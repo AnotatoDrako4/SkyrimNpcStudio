@@ -99,6 +99,13 @@ Rectangle {
 
     Connections { target: root.scene; function onReady() { root.isolated = ""; root.reset() } }
 
+    // A viewport in a hidden tab does not rebuild on every edit; it catches up when shown.
+    Binding { target: root.scene; property: "active"; value: root.visible }
+
+    // HairTint parts (hair, brows, beards) take the live hair color: a color edit recolors them at
+    // once, without rebuilding the scene.
+    function tintOf(row) { return row.hair ? root.scene.hairTint : row.tint }
+
     Item {
         anchors.fill: parent
 
@@ -149,7 +156,7 @@ Rectangle {
                         scale: part.modelScale
                         pickable: true
                         materials: PrincipledMaterial {
-                            baseColor: part.modelData.tint
+                            baseColor: root.tintOf(part.modelData)
                             baseColorMap: part.modelData.diffuse ? part.diffuseTexture : null
                             normalMap: part.modelData.normal ? part.normalTexture : null
                             vertexColorsEnabled: part.modelData.vertexColors
@@ -187,7 +194,7 @@ Rectangle {
                         geometry: part.modelData.uvGeometry
                         pickable: true
                         materials: PrincipledMaterial {
-                            baseColor: part.modelData.tint
+                            baseColor: root.tintOf(part.modelData)
                             baseColorMap: part.modelData.diffuse ? part.diffuseTexture : null
                             lighting: PrincipledMaterial.NoLighting
                             cullMode: Material.NoCulling

@@ -1,0 +1,55 @@
+# Runs the studio with --crash-selftest <KIND> and checks what the crash handler left behind:
+# a report naming the failure, the operation in progress with its stage, the NPC context, the
+# breadcrumbs and a symbolized stack, plus a non-empty minidump, and a session log that is NOT
+# marked as cleanly closed (so the next start reports the crash).
+#   cmake -DAPP=<SkyrimNpcStudio.exe> -DKIND=<access-violation|terminate|abort> -DWORK=<dir> -P crash_selftest.cmake
+file(REMOVE_RECURSE "${WORK}")
+file(MAKE_DIRECTORY "${WORK}")
+set(ENV{SNS_DIAGNOSTICS_DIR} "${WORK}")
+execute_process(COMMAND "${APP}" --crash-selftest ${KIND} RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 120)
+if(result EQUAL 0)
+  message(FATAL_ERROR "The self-test was expected to crash but exited with 0.\n${err}")
+endif()
+message(STATUS "exit: ${result}")
+
+file(GLOB reports "${WORK}/crashes/crash-*.txt")
+file(GLOB dumps "${WORK}/crashes/crash-*.dmp")
+list(LENGTH reports report_count)
+list(LENGTH dumps dump_count)
+if(NOT report_count EQUAL 1 OR NOT dump_count EQUAL 1)
+  message(FATAL_ERROR "Expected one report and one minidump, found ${report_count} and ${dump_count}.\n${err}")
+endif()
+
+file(READ "${reports}" report)
+set(expected "reason:" "facegen.full #" "stage 'nif: build_facegen'" "npc = 0A2C8E:Skyrim.esm" "setHairColor"
+             "operations in progress:" "last breadcrumbs" "stack of the failing thread:" "minidump:")
+if(KIND STREQUAL "access-violation")
+  list(APPEND expected "exception 0xC0000005 (access violation)" "crash_selftest")
+elseif(KIND STREQUAL "terminate")
+  list(APPEND expected "std::terminate")
+elseif(KIND STREQUAL "abort")
+  list(APPEND expected "abort()")
+endif()
+foreach(text IN LISTS expected)
+  string(FIND "${report}" "${text}" at)
+  if(at EQUAL -1)
+    message(FATAL_ERROR "The crash report lacks '${text}':\n${report}")
+  endif()
+endforeach()
+
+file(SIZE "${dumps}" dump_size)
+if(dump_size LESS 4096)
+  message(FATAL_ERROR "The minidump is suspiciously small (${dump_size} bytes).")
+endif()
+
+file(GLOB sessions "${WORK}/sessions/session-*.log")
+list(LENGTH sessions session_count)
+if(NOT session_count EQUAL 1)
+  message(FATAL_ERROR "Expected one session log, found ${session_count}.")
+endif()
+file(READ "${sessions}" session)
+string(FIND "${session}" "session end (clean)" clean)
+if(NOT clean EQUAL -1)
+  message(FATAL_ERROR "A crashed session must not be marked as cleanly closed.")
+endif()
+message(STATUS "crash report OK (${dump_size}-byte minidump)")

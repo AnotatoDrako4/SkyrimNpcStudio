@@ -297,9 +297,16 @@ TEST_CASE("FaceGen build reports missing assets and refuses to export", "[face]"
   mismatch.put("meshes\\actors\\character\\character assets\\femaleheadchargen.tri",
                tri_bytes({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}}, {{"NoseLong", {Vec{0, 0, 1}, Vec{}, Vec{}}}}));
   FaceAssetCache cache2(mismatch.reader());
-  const auto build2 = build_facegen(synthetic_recipe(), cache2);
+  // A slider needs the chargen TRI, whose vertex count does not match the mesh: blocked.
+  auto slid = synthetic_recipe();
+  slid.values.sliders[0] = 0.5f;
+  const auto build2 = build_facegen(slid, cache2);
   CHECK_FALSE(build2.exportable());
   CHECK(std::any_of(build2.issues.begin(), build2.issues.end(), [](const auto& i) { return i.code == "TriVertexMismatch"; }));
+  // No slider set: that TRI contributes nothing (as in the Creation Kit), so it is only noted.
+  const auto build3 = build_facegen(synthetic_recipe(), cache2);
+  CHECK(build3.exportable());
+  CHECK(std::any_of(build3.issues.begin(), build3.issues.end(), [](const auto& i) { return i.code == "TriVertexMismatchUnused"; }));
 
   FaceRecipe empty;
   CHECK_FALSE(build_facegen(empty, cache).exportable());
@@ -339,6 +346,111 @@ TEST_CASE("PreserveExisting keeps sculpting the record cannot express and applie
   // Regenerating instead would lose the sculpt (z of vertex 2).
   const auto plain = build_facegen(edited, cache);
   CHECK(compare_facegen(plain.nif, expected.nif).max_distance > 2.9f);
+}
+
+TEST_CASE("Hair color patch changes only the HairTint color of the built FaceGen", "[face][hair]") {
+  auto assets = synthetic_assets();
+  FaceAssetCache cache(assets.reader());
+  auto recipe = synthetic_recipe();
+  recipe.values.sliders[0] = 0.5f;
+  recipe.values.hair_color = Rgb8{51, 102, 204};
+  const auto built = build_facegen(recipe, cache);
+  REQUIRE(built.exportable());
+
+  auto recolored = recipe;
+  recolored.values.hair_color = Rgb8{165, 58, 30};
+  const auto patch = patch_hair_tint(built.nif, recolored);
+  REQUIRE_FALSE(patch.nif.empty());
+  CHECK(patch.issues.empty());
+  REQUIRE(patch.patched == std::vector<std::string>{"HairFemaleNord02"});
+  const auto info = inspect_facegen(patch.nif);
+  REQUIRE(info.hair_tints.size() == 1);
+  CHECK_THAT(info.hair_tints[0].second[0], WithinAbs(2.0 * 165 / 255.0, 1e-4));
+  CHECK_THAT(info.hair_tints[0].second[2], WithinAbs(2.0 * 30 / 255.0, 1e-4));
+  // Geometry untouched, and the result is what a full regeneration with the new color writes.
+  const auto same = compare_facegen(patch.nif, built.nif);
+  CHECK(same.same_topology);
+  CHECK(same.max_distance == 0.0f);
+  CHECK(patch.nif == build_facegen(recolored, cache).nif);
+
+  // No hair color: black, as the Creation Kit writes it.
+  auto none = recipe;
+  none.values.hair_color.reset();
+  const auto black = inspect_facegen(patch_hair_tint(built.nif, none).nif);
+  REQUIRE(black.hair_tints.size() == 1);
+  CHECK(black.hair_tints[0].second == std::array<float, 3>{0, 0, 0});
+
+  // Not a NIF: reported, never a crash.
+  const auto broken = patch_hair_tint("not a nif", recolored);
+  CHECK(broken.nif.empty());
+  REQUIRE(broken.issues.size() == 1);
+  CHECK(broken.issues[0].code == "FaceGenUnreadable");
+}
+
+TEST_CASE("Hair parts without a HairTint shader are reported instead of colored", "[face][hair]") {
+  auto assets = synthetic_assets();
+  assets.put("meshes\\actors\\character\\character assets\\hair\\hair02.nif", quad_nif("Hair02", 0, "textures\\hair.dds"));
+  FaceAssetCache cache(assets.reader());
+  auto recipe = synthetic_recipe();
+  recipe.values.hair_color = Rgb8{10, 20, 30};
+  const auto build = build_facegen(recipe, cache);
+  auto unsupported = [](const std::vector<FaceIssue>& issues) {
+    return std::count_if(issues.begin(), issues.end(), [](const auto& i) { return i.code == "HairTintUnsupported"; });
+  };
+  CHECK(unsupported(build.issues) == 1);
+  CHECK(build.exportable());  // a warning: the record still gets the color, the piece just ignores it
+  const auto patch = patch_hair_tint(build.nif, recipe);
+  CHECK(patch.patched.empty());
+  CHECK(unsupported(patch.issues) == 1);
+}
+
+TEST_CASE("A head whose TRI files do not match blocks only edits that need those morphs", "[face]") {
+  // A replacer head: 4-vertex mesh whose record still names 3-vertex TRI files.
+  auto assets = synthetic_assets();
+  for (const char* tri : {"femaleheadraces.tri", "femaleheadchargen.tri", "femalehead.tri"}) {
+    assets.put(std::string("meshes\\actors\\character\\character assets\\") + tri,
+               tri_bytes({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}}, {{"NoseLong", {Vec{0, 0, 1}, Vec{}, Vec{}}}}));
+  }
+  FaceAssetCache cache(assets.reader());
+  auto recipe = synthetic_recipe();
+  FaceGenBuildOptions options;
+  options.mode = GeometryMode::PreserveExisting;
+  options.existing_facegen = std::make_shared<const std::string>(
+      [&] {
+        // The exported head the profile ships (built here without the broken TRIs).
+        auto good = synthetic_assets();
+        FaceAssetCache good_cache(good.reader());
+        return build_facegen(recipe, good_cache).nif;
+      }());
+  options.baseline = recipe.values;
+
+  // Hair color only: nothing to morph, the exported head is kept and the result is exportable.
+  auto recolored = recipe;
+  recolored.values.hair_color = Rgb8{1, 2, 3};
+  const auto color_only = build_facegen(recolored, cache, options);
+  CHECK(color_only.exportable());
+  CHECK(std::any_of(color_only.issues.begin(), color_only.issues.end(),
+                    [](const auto& i) { return i.code == "TriVertexMismatchUnused" && i.severity == "info"; }));
+
+  // A slider edit needs the chargen TRI: blocked with the reason.
+  auto slid = recipe;
+  slid.values.sliders[0] = 0.4f;
+  const auto blocked = build_facegen(slid, cache, options);
+  CHECK_FALSE(blocked.exportable());
+  CHECK(std::any_of(blocked.issues.begin(), blocked.issues.end(), [](const auto& i) { return i.code == "TriVertexMismatch"; }));
+}
+
+TEST_CASE("A superseded FaceGen build stops cooperatively", "[face]") {
+  auto assets = synthetic_assets();
+  FaceAssetCache cache(assets.reader());
+  FaceGenBuildOptions options;
+  int checks = 0;
+  options.cancelled = [&] { return ++checks > 1; };  // cancelled after the first head part
+  const auto build = build_facegen(synthetic_recipe(), cache, options);
+  CHECK(build.cancelled);
+  CHECK(build.nif.empty());
+  CHECK_FALSE(build.exportable());
+  CHECK(build.parts.size() == 1);
 }
 
 TEST_CASE("FaceTint composition blends layers over the skin tone and encodes BC3 with mips", "[face][tint]") {

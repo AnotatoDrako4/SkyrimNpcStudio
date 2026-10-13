@@ -210,6 +210,98 @@ public sealed class FacePatchExportTests : IDisposable
         Assert.Equal(255, lydia.TextureLighting.Value.R);
     }
 
+    [Fact]
+    public void ExportCompleteOverhaul_RejectsPreviewOnlyMaterialInsteadOfDroppingIt()
+    {
+        var request = new ExportCompleteOverhaulRequest
+        {
+            PluginName = "SkyrimNpcStudio_Lydia_UnverifiedMaterial.esp",
+            OutputDirectory = _out,
+            Assignments =
+            [
+                new CompleteNpcAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    Outfit = new OutfitAssignment
+                    {
+                        NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                        ArmorFormKeys = [SyntheticLoadOrder.SteelCuirass.ToString()],
+                        MaterialOverrides =
+                        [
+                            new PieceMaterialDto
+                            {
+                                ArmorFormKey = SyntheticLoadOrder.SteelCuirass.ToString(),
+                                CustomTintColor = new AppearanceColor(64, 32, 16),
+                            },
+                        ],
+                    },
+                },
+            ],
+        };
+
+        var error = Assert.Throws<WorkerException>(() => _state.Read(c =>
+            ModPackager.ExportCompleteOverhaul(c.Session, c.Queries, request, CancellationToken.None)));
+        Assert.Equal(ErrorCodes.ValidationFailed, error.Code);
+        Assert.Contains(error.Issues, issue => issue.Code == "MaterialVariantPreviewOnly");
+        Assert.False(File.Exists(Path.Combine(_out, request.PluginName)));
+    }
+
+    [Fact]
+    public void ExportFaceOverhaul_HairColorOnlyChangesHclfAndNeedsOnlyTheFaceGenNif()
+    {
+        // The studio sends the complete face read with face.getRecipe; only the hair color differs.
+        // Regression: QNAM was rewritten with another alpha and counted as a skin tone change, so
+        // the export demanded a FaceTint and refused a pure hair color edit.
+        var recipe = _state.Read(c => FaceRecipeQueries.Get(c.Session, c.Queries,
+            new FaceRecipeRequest { NpcFormKey = SyntheticLoadOrder.Lydia.ToString() }));
+        var nif = Path.Combine(_out, "hair_only.nif");
+        File.WriteAllBytes(nif, [0x4E, 0x49, 0x46, 0x01]);
+        var expectedFaceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
+        var request = new ExportFaceOverhaulRequest
+        {
+            PluginName = "SNS_Lydia_HairOnly.esp",
+            OutputDirectory = _out,
+            CreateZip = false,
+            Assignments =
+            [
+                new FaceAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    Values = new FaceValuesDto
+                    {
+                        Sliders = recipe.Values.Sliders,
+                        Presets = recipe.Values.Presets,
+                        Weight = recipe.Values.Weight,
+                        SkinTone = recipe.Values.SkinTone,
+                        HairColor = new AppearanceColor(165, 58, 30),
+                        Tints = recipe.Values.Tints,
+                    },
+                    HeadParts = recipe.NpcHeadParts,
+                    HeadTexture = recipe.NpcHeadTexture,
+                    GeneratedAssets =
+                    [
+                        new GeneratedAsset { SourcePath = nif, DataPath = expectedFaceGen.GeometryPath, Sha256 = Sha256Of(nif), Kind = "facegen-geometry" },
+                    ],
+                },
+            ],
+        };
+
+        var response = _state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, CancellationToken.None));
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(response.ManifestPath));
+        var changed = manifest.RootElement.GetProperty("faces")[0].GetProperty("changedFields").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Equal(["HCLF"], changed);
+        Assert.True(File.Exists(Path.Combine(response.ModDirectory, expectedFaceGen.GeometryPath)));
+        Assert.False(File.Exists(Path.Combine(response.ModDirectory, expectedFaceGen.TintPath)));
+
+        using var mod = ReadBack(response.PluginPath);
+        var lydia = Assert.Single(mod.Npcs);
+        Assert.Equal((206, 205, 204), (lydia.TextureLighting!.Value.R, lydia.TextureLighting.Value.G, lydia.TextureLighting.Value.B));
+        var color = Assert.Single(mod.Colors);
+        Assert.Equal(color.FormKey, lydia.HairColor.FormKey);
+        Assert.Equal((165, 58, 30), (color.Color.R, color.Color.G, color.Color.B));
+    }
+
     public void Dispose()
     {
         _state.Dispose();

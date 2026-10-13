@@ -119,7 +119,7 @@ internal static partial class FacePatchBuilder
                 {
                     outfitEditorId = UniqueEditorId(outfitAssignment.OutfitEditorId ?? $"SNS_{winner.EditorID ?? winner.FormKey.ID.ToString("X6")}Outfit", usedEditorIds);
                     var outfit = patch.Outfits.AddNew(outfitEditorId);
-                    var (itemKeys, outfitPieces) = OutfitPatchBuilder.ResolveOutfitItems(patch, session, validation.Pieces, outfitAssignment.MaterialOverrides, usedEditorIds, records);
+                    var (itemKeys, outfitPieces) = OutfitPatchBuilder.ResolveOutfitItems(validation.Pieces, outfitAssignment.MaterialOverrides);
                     outfit.Items = new ExtendedList<IFormLinkGetter<IOutfitTargetGetter>>(
                         itemKeys.Select(k => (IFormLinkGetter<IOutfitTargetGetter>)new FormLink<IOutfitTargetGetter>(k)));
                     outfitKey = outfit.FormKey;
@@ -227,7 +227,14 @@ internal static partial class FacePatchBuilder
                 Mouth = unchecked((uint)v.Presets[3]),
             };
             npc.Weight = Math.Clamp(v.Weight, 0f, 100f);
-            npc.TextureLighting = System.Drawing.Color.FromArgb(255, v.SkinTone.R, v.SkinTone.G, v.SkinTone.B);
+            // QNAM is stored as RGB: the alpha Mutagen reports is not data. Keep the record's value so
+            // an unchanged skin tone stays byte-identical.
+            // A record without QNAM is read as white (FaceRecipeQueries): leave it without QNAM unless
+            // the tone was really changed.
+            var untouchedDefault = winner.TextureLighting is null && v.SkinTone.R == 255 && v.SkinTone.G == 255 && v.SkinTone.B == 255;
+            npc.TextureLighting = untouchedDefault
+                ? null
+                : System.Drawing.Color.FromArgb(winner.TextureLighting?.A ?? 255, v.SkinTone.R, v.SkinTone.G, v.SkinTone.B);
             npc.TintLayers.Clear();
             foreach (var t in v.Tints)
             {
@@ -330,7 +337,9 @@ internal static partial class FacePatchBuilder
         if (winner.Weight != npc.Weight) changed.Add("NAM7");
         if (winner.Height != npc.Height) changed.Add("NAM6");
         if (winner.HairColor.FormKeyNullable != npc.HairColor.FormKeyNullable) changed.Add("HCLF");
-        if (winner.TextureLighting?.ToArgb() != npc.TextureLighting?.ToArgb()) changed.Add("QNAM");
+        // Only the color channels exist in the file (see ApplyFace).
+        if ((winner.TextureLighting?.R, winner.TextureLighting?.G, winner.TextureLighting?.B)
+            != (npc.TextureLighting?.R, npc.TextureLighting?.G, npc.TextureLighting?.B)) changed.Add("QNAM");
         var a = winner.TintLayers.Select(t => (t.Index, t.Color?.R, t.Color?.G, t.Color?.B, t.InterpolationValue)).ToList();
         var b = npc.TintLayers.Select(t => (t.Index, t.Color?.R, t.Color?.G, t.Color?.B, t.InterpolationValue)).ToList();
         if (!a.SequenceEqual(b)) changed.Add("TINT");

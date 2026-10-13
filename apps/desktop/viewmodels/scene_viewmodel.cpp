@@ -6,7 +6,9 @@
 #include <QtQuick3D/QQuick3DTextureData>
 #include <algorithm>
 #include <cmath>
+#include <QSettings>
 #include "appearance_editor.hpp"
+#include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/ipc/protocol.hpp"
@@ -143,7 +145,51 @@ QVariantMap inspector(const rendering::RenderPart& p, const rendering::Character
            (p.physics_xml.empty() || p.physics_xml_well_formed)},
       {"hiddenReason", qs(p.hidden_reason)}, {"warnings", warnings}};
 }
+// "0A2C8E:Skyrim.esm" and "000A2C8E:Skyrim.esm" name the same record.
+bool same_form_key(const QString& a, const QString& b) {
+  const auto ia = a.indexOf(':'), ib = b.indexOf(':');
+  if (ia < 0 || ib < 0) return a.compare(b, Qt::CaseInsensitive) == 0;
+  bool oka = false, okb = false;
+  const auto ida = a.left(ia).toUInt(&oka, 16), idb = b.left(ib).toUInt(&okb, 16);
+  return oka && okb && ida == idb && a.mid(ia + 1).compare(b.mid(ib + 1), Qt::CaseInsensitive) == 0;
 }
+
+QColor rgb_color(const face::Rgb8& c) { return QColor(c.r, c.g, c.b); }
+
+// Scene inputs other than the hair color: equal inputs give an identical scene.
+bool same_scene_inputs(const FacePreview& a, const FacePreview& b) {
+  return a.npc_form_key == b.npc_form_key && a.geometry_revision == b.geometry_revision &&
+         (a.overlay == nullptr) == (b.overlay == nullptr) && a.weight == b.weight && a.height == b.height &&
+         a.skin_tone == b.skin_tone;
+}
+
+QString content_key(const rendering::RenderPart& part) {
+  return qs(part.mesh_path + "|" + part.shape_name + "|") +
+         QString::number(qHashBits(part.vertices.data(), part.vertices.size() * sizeof(float)), 16) + "|" +
+         QString::number(qHashBits(part.indices.data(), part.indices.size() * sizeof(std::uint32_t)), 16);
+}
+
+int setting_ms(const char* key, int fallback) {
+  bool ok = false;
+  const int value = QSettings().value(QString::fromLatin1(key), fallback).toInt(&ok);
+  return ok ? std::clamp(value, 0, 5000) : fallback;
+}
+}  // namespace
+
+// A built scene plus what install() needs from it, all computed on the build thread so the GUI
+// thread only creates or reuses Quick 3D objects.
+struct SceneViewModel::Prepared {
+  std::uint64_t task = 0;
+  rendering::CharacterScene scene;
+  std::vector<QString> geometry_keys;  // per part, content hash of vertices + indices
+  std::vector<std::pair<QString, std::shared_ptr<const textures::DdsImage>>> textures;  // pool key, image
+  std::vector<QString> texture_paths;
+  QString error;
+  qint64 elapsed = 0;
+  FacePreview preview;
+  QString npc;
+  QColor record_hair;
+};
 
 SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot,
                                QObject* parent, bool armor_preview)
@@ -151,59 +197,131 @@ SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, Appea
       armor_preview_(armor_preview) {
   pool_.setMaxThreadCount(1);
   debounce_.setSingleShot(true);
-  debounce_.setInterval(200);
+  // Pause after the last outfit change before the scene is rebuilt (preview/sceneReloadDebounceMs).
+  reload_delay_ms_ = setting_ms("preview/sceneReloadDebounceMs", 200);
+  debounce_.setInterval(reload_delay_ms_);
   connect(&debounce_, &QTimer::timeout, this, &SceneViewModel::reload);
   // Outfit edits need the worker (ARMA/ARMO resolution); face edits arrive as regenerated FaceGen.
-  connect(outfit_, &OutfitEditor::changed, this, [this] { schedule(200); });
+  connect(outfit_, &OutfitEditor::changed, this, [this] { schedule(reload_delay_ms_); });
   if (appearance_) {
-    connect(appearance_, &AppearanceEditor::faceGenChanged, this, [this] {
-      if (!appearance_->building()) schedule(30);
-    });
+    connect(appearance_, &AppearanceEditor::faceGenChanged, this, &SceneViewModel::on_face_changed);
+    // The hair color shows at once; the FaceGen patch that matches it follows in the background.
+    connect(appearance_, &AppearanceEditor::appearanceChanged, this, &SceneViewModel::sync_hair_tint);
   }
 }
+
+SceneViewModel::~SceneViewModel() {
+  cancel();
+  pool_.waitForDone();
+}
+
 void SceneViewModel::schedule(int delay_ms) {
+  if (!active_) {
+    stale_ = true;
+    return;
+  }
   cancel();
   debounce_.setInterval(delay_ms);
   debounce_.start();
 }
-SceneViewModel::~SceneViewModel() { cancel(); pool_.waitForDone(); }
+
 void SceneViewModel::cancel() {
   ++serial_;
   if (cancel_) *cancel_ = true;
   if (request_cancel_) *request_cancel_ = true;
   debounce_.stop();
+  if (!loading_) return;
   loading_ = false;
-  if (!status_.isEmpty()) status_ = tr("Carga cancelada");
+  status_ = tr("Carga cancelada");
   emit loadingChanged();
 }
+
 void SceneViewModel::clear() {
   cancel(); parts_.clear(); issues_.clear(); stats_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear();
   status_.clear();
   last_appearance_ = nullptr;
   last_request_key_.clear();
+  installed_ = false;
+  installed_npc_.clear();
+  installed_preview_ = {};
   emit changed(); emit visibilityChanged(); emit selectionChanged();
+  // Deferred: QML drops its references to these objects when it handles changed() above.
   if (resources_) { resources_->deleteLater(); resources_ = nullptr; }
   if (pool_owner_) { pool_owner_->deleteLater(); pool_owner_ = nullptr; }
   geometry_pool_.clear(); uv_pool_.clear(); texture_pool_.clear();
 }
+
 void SceneViewModel::setOriginal(bool value) {
   if (original_ == value) return;
-  original_ = value; emit originalChanged(); reload();
+  original_ = value; emit originalChanged();
+  sync_hair_tint();
+  reload();
 }
+
 void SceneViewModel::setPose(const QString& pose) {
   if (pose_ == pose) return;
   pose_ = pose;
   emit poseChanged();
   reload();
 }
+
+void SceneViewModel::setActive(bool active) {
+  if (active_ == active) return;
+  active_ = active;
+  emit activeChanged();
+  if (active_ && stale_) {
+    stale_ = false;
+    reload();
+  }
+}
+
+QString SceneViewModel::effective_npc() const {
+  QString npc = outfit_->npc_form_key();
+  if (npc.isEmpty() && armor_preview_) npc = QStringLiteral("000A2C8E:Skyrim.esm");
+  return npc;
+}
+
+FacePreview SceneViewModel::current_preview() const {
+  if (original_ || !appearance_) return {};
+  auto p = appearance_->preview();
+  if (p.npc_form_key.empty() || !same_form_key(qs(p.npc_form_key), effective_npc())) return {};
+  return p;
+}
+
+// Face draft changed (FaceGen rebuilt, patched or reset): rebuild the scene only when something it
+// draws changed; a hair color patch just recolors the materials.
+void SceneViewModel::on_face_changed() {
+  if (!appearance_ || appearance_->building()) return;
+  const auto p = current_preview();
+  if (installed_ && same_form_key(installed_npc_, effective_npc()) && same_scene_inputs(p, installed_preview_)) {
+    sync_hair_tint();
+    return;
+  }
+  schedule(30);
+}
+
+void SceneViewModel::sync_hair_tint() {
+  QColor color = record_hair_.isValid() ? record_hair_ : QColor(Qt::white);
+  if (installed_ && same_form_key(installed_npc_, effective_npc())) {
+    const auto p = current_preview();
+    if (!p.npc_form_key.empty()) color = p.hair_color ? rgb_color(*p.hair_color) : QColor(Qt::white);
+  }
+  if (color == hair_tint_) return;
+  diag::record("scene", QStringLiteral("hair tint %1 -> %2 (no rebuild)").arg(hair_tint_.name(), color.name()).toStdString());
+  hair_tint_ = color;
+  emit hairTintChanged();
+}
+
 void SceneViewModel::reload() {
   cancel();
-  const auto snapshot = snapshot_();
-  QString effective_npc = outfit_->npc_form_key();
-  if (effective_npc.isEmpty() && armor_preview_) {
-    effective_npc = QStringLiteral("000A2C8E:Skyrim.esm");
+  if (!active_) {
+    stale_ = true;
+    return;
   }
-  if (!snapshot || effective_npc.isEmpty() || (armor_preview_ && selected_armor_.isEmpty())) {
+  stale_ = false;
+  const auto snapshot = snapshot_();
+  const QString effective = effective_npc();
+  if (!snapshot || effective.isEmpty() || (armor_preview_ && selected_armor_.isEmpty())) {
     if (armor_preview_) {
       status_ = selected_armor_.isEmpty() ? tr("Selecciona una prenda del catálogo para inspeccionarla")
                                           : tr("Selecciona un NPC como referencia de cuerpo, raza y esqueleto");
@@ -214,7 +332,7 @@ void SceneViewModel::reload() {
   const int serial = serial_;
   cancel_ = std::make_shared<std::atomic<bool>>(false);
   loading_ = true; status_ = tr("Cargando recursos 3D..."); emit loadingChanged();
-  Json params{{"npcFormKey", ss(effective_npc)}};
+  Json params{{"npcFormKey", ss(effective)}};
   if (armor_preview_ && preview_mode_ == "outfit") {
     params["armorFormKeys"] = Json::array();
     for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
@@ -234,22 +352,37 @@ void SceneViewModel::reload() {
     params["armorFormKeys"] = Json::array();
     for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
   }
-  // "Original" shows the profile as it is: no face overlay, record weight/height/colors.
-  const FacePreview preview = (!original_ && appearance_) ? appearance_->preview() : FacePreview{};
+  // "Original" shows the profile as it is: no face overlay, record weight/height/colors. The face
+  // draft only applies to the NPC it belongs to.
+  const FacePreview preview = current_preview();
   const QString display_mode = armor_preview_ ? preview_mode_ : QString();
   const QString current_pose = pose_;
-  auto build = [this, snapshot, serial, preview, display_mode, current_pose, cancel = cancel_](const Json& data) {
+  const auto task = diag::next_task_id();
+  diag::record("scene", QStringLiteral("reload #%1 npc=%2 %3 face=%4 geometryRevision=%5")
+                            .arg(task).arg(effective, armor_preview_ ? "armor-preview" : "main",
+                                           preview.npc_form_key.empty() ? "record" : "draft")
+                            .arg(preview.geometry_revision).toStdString());
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, cancel = cancel_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose] {
-      rendering::CharacterScene scene;
-      QString error;
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective] {
+      auto prepared = std::make_shared<Prepared>();
+      prepared->task = task;
+      prepared->preview = preview;
+      prepared->npc = effective;
+      auto& scene = prepared->scene;
       QElapsedTimer timer; timer.start();
+      diag::Operation op("scene.build", task, ss(effective));
       try {
+        op.stage("appearance");
         auto appearance = rendering::appearance_from_json(data);
-        if (preview.active) {
+        if (appearance.hair_color) {
+          prepared->record_hair = QColor::fromRgbF(appearance.hair_color->r, appearance.hair_color->g, appearance.hair_color->b);
+        }
+        if (!preview.npc_form_key.empty()) {
           appearance.weight = preview.weight;
           appearance.height = preview.height;
           if (preview.hair_color) appearance.hair_color = rendering::Rgb{preview.hair_color->r / 255.0f, preview.hair_color->g / 255.0f, preview.hair_color->b / 255.0f};
+          else appearance.hair_color.reset();
           appearance.skin_tone = rendering::Rgb{preview.skin_tone.r / 255.0f, preview.skin_tone.g / 255.0f, preview.skin_tone.b / 255.0f};
         }
         const auto cancelled = [cancel] { return cancel->load(); };
@@ -260,6 +393,7 @@ void SceneViewModel::reload() {
         options.cancelled = cancelled;
         options.cache = context->scene_cache;
         options.overlay = preview.overlay;
+        op.stage("build_character_scene");
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
         if (display_mode == "piece" || display_mode == "mannequin") {
           std::erase_if(scene.parts, [&](const rendering::RenderPart& part) {
@@ -276,22 +410,38 @@ void SceneViewModel::reload() {
             first = false;
           }
         }
-      } catch (const std::exception& e) { error = qs(e.what()); }
+        // Content keys for GPU object reuse, here rather than on the GUI thread.
+        op.stage("content keys");
+        prepared->geometry_keys.reserve(scene.parts.size());
+        for (const auto& part : scene.parts) prepared->geometry_keys.push_back(content_key(part));
+        for (const auto& [path, image] : scene.textures) {
+          prepared->texture_paths.push_back(qs(path));
+          prepared->textures.emplace_back(qs(path) + QStringLiteral("|%1x%2|").arg(image->width).arg(image->height) +
+                                              QString::number(reinterpret_cast<quintptr>(image.get()), 16),
+                                          image);
+        }
+        op.succeed();
+      } catch (const std::exception& e) {
+        prepared->error = qs(e.what());
+        if (!cancel->load()) op.fail(e.what());
+      }
       if (cancel->load()) return;
-      const auto elapsed = timer.elapsed();
-      QMetaObject::invokeMethod(self, [self, scene = std::move(scene), error, serial, elapsed, generated = preview.overlay != nullptr] {
+      prepared->elapsed = timer.elapsed();
+      QMetaObject::invokeMethod(self, [self, prepared, serial] {
         if (!self || serial != self->serial_) return;
         self->loading_ = false;
-        if (error.isEmpty()) {
-          self->install(scene);
-          self->stats_["elapsedMs"] = elapsed;
-          self->stats_["generatedFaceGen"] = generated;
-          self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5").arg(scene.stats.meshes_loaded).arg(scene.stats.shapes)
-                              .arg(scene.stats.textures_loaded).arg(elapsed).arg(generated ? tr(" · cabeza regenerada del borrador") : QString());
+        if (prepared->error.isEmpty()) {
+          self->install(*prepared);
+          self->stats_["elapsedMs"] = prepared->elapsed;
+          self->stats_["generatedFaceGen"] = prepared->preview.overlay != nullptr;
+          const auto& s = prepared->scene.stats;
+          self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5").arg(s.meshes_loaded).arg(s.shapes)
+                              .arg(s.textures_loaded).arg(prepared->elapsed)
+                              .arg(prepared->preview.overlay ? tr(" · cabeza regenerada del borrador") : QString());
         } else {
           self->clear();
-          self->issues_ = {QVariantMap{{"severity", "error"}, {"code", "SceneFailed"}, {"message", error}}};
-          self->status_ = error;
+          self->issues_ = {QVariantMap{{"severity", "error"}, {"code", "SceneFailed"}, {"message", prepared->error}}};
+          self->status_ = prepared->error;
           emit self->changed();
         }
         emit self->loadingChanged(); emit self->ready();
@@ -317,27 +467,28 @@ void SceneViewModel::reload() {
     });
 }
 
-void SceneViewModel::install(const rendering::CharacterScene& scene) {
+void SceneViewModel::install(Prepared& prepared) {
+  const auto& scene = prepared.scene;
+  diag::Operation op("scene.install", prepared.task, ss(prepared.npc));
   auto* old = resources_;
   resources_ = new QObject(this);
   if (!pool_owner_) pool_owner_ = new QObject(this);
   parts_.clear(); issues_.clear(); selected_.clear(); visibility_.clear();
   // Reuse GPU objects whose content did not change (a face edit leaves the body and outfit alone).
-  QHash<QString, QQuick3DTextureData*> textures, texture_pool;
-  for (const auto& [path, image] : scene.textures) {
-    const auto key = qs(path) + QStringLiteral("|%1x%2|").arg(image->width).arg(image->height) +
-                     QString::number(qHashBits(image->data.data(), image->data.size()), 16);
-    auto* t = texture_pool.value(key);
-    if (!t) t = texture_pool_.take(key);
-    if (!t) t = texture(*image, pool_owner_);
-    texture_pool.insert(key, t);
-    textures[qs(path)] = t;
+  op.stage("textures");
+  QHash<QString, QQuick3DTextureData*> textures;
+  QHash<QString, PooledTexture> texture_pool;
+  for (std::size_t i = 0; i < prepared.textures.size(); ++i) {
+    const auto& [key, image] = prepared.textures[i];
+    auto pooled = texture_pool.value(key);
+    if (!pooled.gpu) pooled = texture_pool_.take(key);
+    if (!pooled.gpu) pooled = PooledTexture{texture(*image, pool_owner_), image};
+    texture_pool.insert(key, pooled);
+    textures[prepared.texture_paths[i]] = pooled.gpu;
   }
+  op.stage("geometries");
   QHash<QString, QQuick3DGeometry*> geometry_pool, uv_pool;
-  auto take = [&](const rendering::RenderPart& part, bool uv) {
-    const auto key = qs(part.mesh_path + "|" + part.shape_name + "|") +
-                     QString::number(qHashBits(part.vertices.data(), part.vertices.size() * sizeof(float)), 16) + "|" +
-                     QString::number(qHashBits(part.indices.data(), part.indices.size() * sizeof(std::uint32_t)), 16);
+  auto take = [&](const rendering::RenderPart& part, const QString& key, bool uv) {
     auto& fresh = uv ? uv_pool : geometry_pool;
     auto& previous = uv ? uv_pool_ : geometry_pool_;
     if (auto* g = fresh.value(key)) return g;
@@ -346,12 +497,14 @@ void SceneViewModel::install(const rendering::CharacterScene& scene) {
     fresh.insert(key, g);
     return g;
   };
-  for (const auto& part : scene.parts) {
+  for (std::size_t index = 0; index < scene.parts.size(); ++index) {
+    const auto& part = scene.parts[index];
+    const auto& key = prepared.geometry_keys[index];
     QVariantMap row{{"id", qs(part.id)}, {"label", qs(part.label + " / " + part.shape_name)}, {"shape", qs(part.shape_name)},
       {"group", qs(part.group)}, {"path", qs(part.mesh_path)}, {"armorFormKey", qs(part.armor_form_key)},
       {"shownByDefault", part.shown_by_default}, {"hiddenReason", qs(part.hidden_reason)},
-      {"geometry", QVariant::fromValue(take(part, false))},
-      {"uvGeometry", QVariant::fromValue(take(part, true))},
+      {"geometry", QVariant::fromValue(take(part, key, false))},
+      {"uvGeometry", QVariant::fromValue(take(part, key, true))},
       {"diffuse", QVariant::fromValue(textures.value(qs(part.diffuse)))},
       {"normal", QVariant::fromValue(textures.value(qs(part.normal)))},
       {"alphaMode", qs(std::string(rendering::to_string(part.alpha_mode)))}, {"alphaCutoff", part.alpha_cutoff},
@@ -376,15 +529,24 @@ void SceneViewModel::install(const rendering::CharacterScene& scene) {
     {"textures", scene.stats.textures_loaded}, {"missingTextures", scene.stats.textures_missing},
     {"skinnedShapes", scene.stats.skinned_shapes}, {"bones", static_cast<qlonglong>(scene.skeleton_bones)}, {"missingBones", scene.stats.bones_missing},
     {"hiddenShapes", scene.stats.hidden_shapes}, {"texturesReduced", scene.stats.textures_reduced}, {"piecesUnequipped", scene.stats.pieces_unequipped}};
+  installed_ = true;
+  installed_npc_ = prepared.npc;
+  installed_preview_ = prepared.preview;
+  record_hair_ = prepared.record_hair;
+  sync_hair_tint();
+  op.stage("notify QML");
   emit changed(); emit visibilityChanged(); emit selectionChanged();
+  // QML has switched to the new objects synchronously in changed(); what is left over goes away
+  // with deleteLater, after the scene graph has synchronized (never while a frame uses it).
+  op.stage("release unused GPU objects");
   if (old) old->deleteLater();
-  // Objects no part uses any more go away once QML has switched to the new ones.
   for (auto* g : std::as_const(geometry_pool_)) g->deleteLater();
   for (auto* g : std::as_const(uv_pool_)) g->deleteLater();
-  for (auto* t : std::as_const(texture_pool_)) t->deleteLater();
+  for (const auto& t : std::as_const(texture_pool_)) t.gpu->deleteLater();
   geometry_pool_ = std::move(geometry_pool);
   uv_pool_ = std::move(uv_pool);
   texture_pool_ = std::move(texture_pool);
+  op.succeed();
 }
 void SceneViewModel::select(const QString& id) { selected_ = id; emit selectionChanged(); }
 void SceneViewModel::setVisible(const QString& id, bool visible) {

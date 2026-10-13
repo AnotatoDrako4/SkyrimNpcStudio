@@ -67,7 +67,7 @@ ScrollView {
 
     Dialog {
         id: materialDialog
-        title: qsTr("Estudio de Material: ") + targetPieceName
+        title: qsTr("Configuración de material pendiente: ") + targetPieceName
         modal: true
         anchors.centerIn: Overlay.overlay
         width: 440
@@ -85,7 +85,7 @@ ScrollView {
             spacing: 8
 
             Text {
-                text: qsTr("Personaliza el material de esta pieza. Al exportar, se generarán registros TXST y ARMA vinculados a un nuevo ARMO en el plugin.")
+                text: qsTr("Configuración pendiente: el tinte y estas rutas se guardan en el proyecto, pero aún no cambian la malla del visor ni generan DDS para Skyrim. Aplicarlos bloqueará la exportación hasta que restaures el material original.")
                 color: Theme.textDim
                 font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
@@ -187,7 +187,7 @@ ScrollView {
                 }
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: qsTr("Aplicar Material")
+                    text: qsTr("Guardar solicitud")
                     highlighted: true
                     onClicked: {
                         root.outfit.setPieceMaterial(
@@ -482,7 +482,7 @@ ScrollView {
                                     materialDialog.open()
                                 }
                                 ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Personalizar textura / tinte de material (TXST/ARMA)")
+                                ToolTip.text: qsTr("Guardar configuración de material pendiente (sin efecto visual ni exportación)")
                             }
 
                             ToolButton {
@@ -495,7 +495,7 @@ ScrollView {
                             }
                         }
 
-                        // Badge de Material TXST si aplica
+                        // A saved material request is intentionally neither rendered nor exportable.
                         RowLayout {
                             visible: modelData.hasMaterial
                             spacing: 4
@@ -508,7 +508,7 @@ ScrollView {
                                 border.width: 1
                             }
                             Text {
-                                text: qsTr("Material TXST: ") + (modelData.materialName && modelData.materialName.length > 0 ? modelData.materialName : qsTr("Personalizado"))
+                                text: qsTr("Material pendiente (sin efecto visual): ") + (modelData.materialName && modelData.materialName.length > 0 ? modelData.materialName : qsTr("Personalizado"))
                                 color: Theme.accent
                                 font.pixelSize: Theme.micro
                                 font.bold: true

@@ -8,6 +8,8 @@
 #include <NifFile.hpp>
 
 #include <cstdio>
+#include <cstdlib>
+#include <windows.h>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 
+#include "diagnostics/crash_diagnostics.hpp"
 #include "sns/assets/bsa_archive.hpp"
 #include "sns/core/file_io.hpp"
 #include "sns/core/text.hpp"
@@ -112,6 +115,10 @@ int nif_dump(const std::filesystem::path& path, const std::filesystem::path& raw
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Crash report + minidump (SNS_DIAGNOSTICS_DIR or the temp folder) for failures on real data.
+  wchar_t diag_dir[1024]{};
+  const bool has_dir = GetEnvironmentVariableW(L"SNS_DIAGNOSTICS_DIR", diag_dir, 1024) > 0;
+  sns::app::diag::install(has_dir ? std::filesystem::path(diag_dir) : std::filesystem::temp_directory_path() / "sns-probe-diagnostics");
   if (argc < 3) return usage();
   const std::string_view command = argv[1];
   try {

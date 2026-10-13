@@ -4,6 +4,8 @@ qt_standard_project_setup(REQUIRES 6.11)
 qt_add_executable(SkyrimNpcStudio WIN32
   main.cpp
   components/viewport_verifier.cpp components/viewport_verifier.hpp
+  components/appearance_stress.cpp components/appearance_stress.hpp
+  diagnostics/crash_diagnostics.cpp diagnostics/crash_diagnostics.hpp
   viewmodels/json_bridge.hpp
   viewmodels/mo2_snapshot.hpp
   viewmodels/console_model.cpp viewmodels/console_model.hpp
@@ -64,7 +66,8 @@ target_link_libraries(SkyrimNpcStudio PRIVATE
   sns::ipc sns::mo2 sns::projects sns::creation sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering
-  sns::compile_options)
+  sns::compile_options
+  dbghelp)
 
 if(SNS_BUILD_WORKER)
   add_dependencies(SkyrimNpcStudio bethesda_worker)
