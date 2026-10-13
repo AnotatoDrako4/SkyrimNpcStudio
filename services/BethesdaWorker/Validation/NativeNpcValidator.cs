@@ -19,6 +19,21 @@ internal static partial class NativeNpcValidator
     {
         ArgumentNullException.ThrowIfNull(request.Npc);
         var d = request.Npc;
+        ArgumentNullException.ThrowIfNull(d.Name);
+        ArgumentNullException.ThrowIfNull(d.EditorId);
+        ArgumentNullException.ThrowIfNull(d.Description);
+        ArgumentNullException.ThrowIfNull(d.RaceFormKey);
+        ArgumentNullException.ThrowIfNull(d.VoiceFormKey);
+        ArgumentNullException.ThrowIfNull(d.ClassFormKey);
+        ArgumentNullException.ThrowIfNull(d.CombatStyleFormKey);
+        ArgumentNullException.ThrowIfNull(d.HairColorFormKey);
+        ArgumentNullException.ThrowIfNull(d.HeadTextureFormKey);
+        ArgumentNullException.ThrowIfNull(d.Skills);
+        ArgumentNullException.ThrowIfNull(d.HeadPartFormKeys);
+        ArgumentNullException.ThrowIfNull(d.OutfitArmorFormKeys);
+        ArgumentNullException.ThrowIfNull(d.Inventory);
+        ArgumentNullException.ThrowIfNull(d.Factions);
+        ArgumentNullException.ThrowIfNull(d.PackageFormKeys);
         var issues = new List<Issue>();
         var missing = new List<string>();
         var masters = new HashSet<ModKey>();
@@ -91,6 +106,8 @@ internal static partial class NativeNpcValidator
                 issues.Add(Issue.Error("FactionInvalid", "Faction rank must be -1–127 and memberships unique.", f.FormKey));
         }
         foreach (var key in d.PackageFormKeys) Resolve<IPackageGetter>(key, true);
+        if (d.OutfitArmorFormKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != d.OutfitArmorFormKeys.Count)
+            issues.Add(Issue.Error("OutfitDuplicate", "Outfit pieces must be unique."));
         if (d.PackageFormKeys.Count > 0) issues.Add(Issue.Warning("PackageBehaviorUnverified", "Package references resolve; quest-specific conditions and behavior require manual validation."));
         if (d.Placement is { } p)
         {
@@ -102,6 +119,11 @@ internal static partial class NativeNpcValidator
         }
         if (d.Face is { } face)
         {
+            ArgumentNullException.ThrowIfNull(face.Sliders);
+            ArgumentNullException.ThrowIfNull(face.Presets);
+            ArgumentNullException.ThrowIfNull(face.Tints);
+            ArgumentNullException.ThrowIfNull(face.SkinTone);
+            if (face.HairColor is not null) issues.Add(Issue.Error("HairColorReferenceRequired", "Use hairColorFormKey to reference a resolved hair color record."));
             if (face.Sliders.Count != 18 || face.Presets.Count != 4 || face.Sliders.Any(v => !float.IsFinite(v) || v is < -1 or > 1)
                 || face.Presets.Any(v => v is < -1 or > 65535) || face.Weight != d.Weight || face.Tints.Count > 64)
                 issues.Add(Issue.Error("FaceValuesInvalid", "Face needs 18 finite sliders (-1–1), four presets, and weight matching the NPC."));

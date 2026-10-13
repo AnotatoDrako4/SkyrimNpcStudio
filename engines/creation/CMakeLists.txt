@@ -1,5 +1,6 @@
 add_library(sns_creation STATIC
-  src/forge_project.cpp)
+  src/forge_project.cpp
+  src/native_npc_draft.cpp)
 add_library(sns::creation ALIAS sns_creation)
 target_include_directories(sns_creation PUBLIC include)
 target_link_libraries(sns_creation

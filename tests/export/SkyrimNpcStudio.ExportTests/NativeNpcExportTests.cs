@@ -158,6 +158,42 @@ public sealed class NativeNpcExportTests : IDisposable
     }
 
     [Fact]
+    public void FaceValuesAndScaling_ArePersistedWithoutClaimingFaceGen()
+    {
+        var d = Draft() with { LevelMultiplier = 1.5f, MinLevel = 5, MaxLevel = 40,
+            Skills = new Dictionary<string, int> { ["OneHanded"] = 70 },
+            HairColorFormKey = SyntheticLoadOrder.HairColorBrown.ToString(),
+            Face = new FaceValuesDto { Sliders = Enumerable.Repeat(0.2f, 18).ToArray(), Presets = [1, -1, 2, 3], Weight = 35,
+                SkinTone = new AppearanceColor(200, 190, 180),
+                Tints = [new FaceRecipeTint(24, new AppearanceColor(200, 190, 180), 0.8f, 602)] } };
+        var r = Export(Request(d));
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(new ModPath(ModKey.FromFileName("SNS_Aerin.esp"), r.Package.PluginPath), SkyrimRelease.SkyrimSE,
+            new BinaryReadParameters { MasterFlagsLookup = _state.Read(c => c.Session.MasterStyles) });
+        var npc = Assert.Single(mod.Npcs);
+        Assert.Equal(1.5f, Assert.IsAssignableFrom<IPcLevelMultGetter>(npc.Configuration.Level).LevelMult);
+        Assert.Equal(70, npc.PlayerSkills!.SkillValues[Skill.OneHanded]);
+        Assert.Equal(0.2f, npc.FaceMorph!.NoseLongVsShort);
+        Assert.Equal((ushort)24, Assert.Single(npc.TintLayers).Index!.Value);
+        Assert.False(r.Validation.Exportable);
+    }
+
+    [Fact]
+    public void MalformedDraftCollectionsAndFace_AreRejected()
+    {
+        Assert.Throws<ArgumentNullException>(() => Validate(Draft() with { Inventory = null! }));
+        var d = Draft() with { Face = new FaceValuesDto { Sliders = [], Presets = [], Weight = 35, SkinTone = new AppearanceColor(255, 255, 255), Tints = [] } };
+        Assert.False(Validate(d).TechnicallyExportable);
+        Assert.Throws<WorkerException>(() => Export(Request(d)));
+        Assert.Empty(Directory.GetDirectories(_out, ".sns-staging-*"));
+    }
+
+    [Fact]
+    public void DuplicateOutfitPieces_AreRejected()
+    {
+        Assert.False(Validate(Draft() with { OutfitArmorFormKeys = [SyntheticLoadOrder.SteelBoots.ToString(), SyntheticLoadOrder.SteelBoots.ToString()] }).TechnicallyExportable);
+    }
+
+    [Fact]
     public void OutputAndPlacementMustBeValid()
     {
         Assert.Equal(ErrorCodes.InvalidArgument, Assert.Throws<WorkerException>(() => Export(Request() with { OutputDirectory = "relative" })).Code);

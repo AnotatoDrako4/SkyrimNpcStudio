@@ -4,10 +4,11 @@
 #include <string>
 
 #include "sns/projects/command_stack.hpp"
+#include "sns/creation/native_npc_draft.hpp"
 
 namespace sns::creation {
 
-inline constexpr int kForgeProjectVersion = 1;
+inline constexpr int kForgeProjectVersion = 2;
 
 struct ForgeEnvironment {
   std::string instance_name;
@@ -21,8 +22,9 @@ struct ForgeProject {
   std::string id;
   std::string name;
   std::string description;
-  std::string character_name;
-  std::string editor_id;
+  NativeNpcDraft npc;
+  nlohmann::json export_options = {{"pluginName", "CharacterForge.esp"}, {"eslFlag", false}, {"createZip", true}};
+  std::vector<std::string> dependencies;
   ForgeEnvironment environment;
 };
 
@@ -43,6 +45,8 @@ class ForgeDraft {
   void set_character_name(std::string value);
   void set_editor_id(std::string value);
   void set_description(std::string value);
+  void set_native_npc(NativeNpcDraft value);
+  void set_export_options(nlohmann::json value);
   bool undo() { return history_.undo(); }
   bool redo() { return history_.redo(); }
   [[nodiscard]] bool can_undo() const noexcept { return history_.can_undo(); }

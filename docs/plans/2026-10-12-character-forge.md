@@ -80,3 +80,15 @@ Cada fase exige: archivos cambiados, pruebas realizadas con sus comandos y resul
 En la rama feature/character-forge-phase-0-1 se añadió el motor sin Qt, un ViewModel propio, el tercer workspace QML y pruebas Catch2 de .sncf, historial, entradas inválidas y protección frente a sobrescritura. El código **no ha sido compilado todavía en Windows** desde esta sesión. La Fase 1 solo puede cerrarse tras ejecutar build.ps1, CTest, xUnit y una prueba de interfaz con creación/guardado/apertura, incluyendo regresiones .snps y Outfit Studio.
 
 La rama se basa en main @ 9fb4d5b; commits posteriores de README y packaging no modifican los archivos de esta fase y deben preservarse al integrar.
+
+## Fase 2 — evidencia en Codex Cloud (2026-10-13)
+
+Rama `feature/character-forge-phase-2`, base c35a9f8 de Fase 1 más main e3c770b preservado. Creación nativa implementada en builder independiente, RPC 1.3, validación de referencias tipadas, estadísticas, Head Parts, slots/ARMA, inventario, facciones y ubicación interior opcional. Toda NPC_/OTFT/ACHR nueva pertenece al plugin generado; solo la CELL explícitamente elegida se incluye como contexto override al colocar ACHR. El plugin se relee, verifica campos, referencias, masters y rango ESL antes del empaquetado atómico.
+
+`.sncf` v2 incorpora NativeNpcDraft, opciones de exportación e historial propio. v1 migra solo en memoria; versiones futuras, no enteras y valores fuera de rango se rechazan. El ViewModel invalida validaciones al editar y bloquea el catálogo hasta que el perfil actual termina de indexarse.
+
+FaceGen nativo **pendiente**: el pipeline C++ existente depende de recursos/TRI/NIF/DDS reales y no se ha conectado a una receta de NPC original certificada. No se copia FaceGen de ningún NPC. Exportación final bloqueada; exportación técnica explícita incluye `readyForGame:false`, `faceGenStatus:pending`, `inGameVerified:false` y advertencia NO INSTALAR en README. Exterior ACHR y relaciones nuevas no soportados.
+
+Evidencia: SDK 10.0.401, restore locked, build sin warnings/errors; 35 pruebas unit/RPC y 29 pruebas de exportación .NET. Sintaxis C++20 de motor de creación y parseo QML con Qt 6.11.2 comprobados. Las pruebas Catch2, compilación MSVC/Qt, UI gráfica y Skyrim siguen pendientes en Windows; no se declara completa la Fase 2.
+
+Revisión independiente: corregidos catálogo obsoleto durante cambio de perfil, exportOptions sin tipos y truncamiento/desbordamiento de enteros JSON. No se fusionó ningún PR remoto ni se modificó main.

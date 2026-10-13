@@ -51,6 +51,9 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/CharacterCreator.qml
     qml/characterforge/CharacterForge.qml
+    qml/characterforge/NativeNpcEditor.qml
+    qml/characterforge/ForgeRecordSelector.qml
+    qml/characterforge/ForgeValidationPanel.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
     qml/shaders/alpha_channel.frag)

@@ -98,7 +98,7 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
     env.profile = ss(selected_profile_);
     if (snapshot_) env.game_edition = mo2::to_string(snapshot_->game.edition);
     return env;
-  }, this);
+  }, worker_, this);
 
   // Project save/open: the face travels with the outfit in the same .snps.
   outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {
@@ -148,6 +148,7 @@ void StudioController::log(const QString& level, const QString& text) { console_
 
 void StudioController::set_phase(Phase phase) {
   phase_ = phase;
+  if (forge_) forge_->set_catalog_ready(phase == Phase::Ready);
   emit phaseChanged();
 }
 
@@ -184,6 +185,7 @@ bool StudioController::openInstance(const QString& path_or_url) {
       log("error", tr("La instancia gestiona '%1'; solo Skyrim Special Edition/AE está soportado.").arg(qs(config.game_name)));
       return false;
     }
+    forge_->set_catalog_ready(false);
     instance_path_ = from_path(info->ini);
     game_path_ = QSettings().value("games/" + instance_path_, from_path(config.game_path)).toString();
     instance_name_ = qs(info->name);
@@ -327,6 +329,7 @@ void StudioController::start_index() {
   QDir().mkpath(cache);
 
   set_progress(tr("Indexando plugins…"), 0.0);
+  forge_->invalidate_validation();
   index_cancel_ = worker_->call(
       method::kCatalogIndex,
       Json{{"profileKey", ss(profile_key)}, {"cacheDirectory", ss(QDir::toNativeSeparators(cache))}, {"plugins", plugins},

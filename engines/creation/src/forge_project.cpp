@@ -17,18 +17,18 @@ using Json = nlohmann::json;
 
 namespace {
 
-class SetField final : public projects::Command {
+template<class T> class SetField final : public projects::Command {
  public:
-  SetField(std::string& target, std::string next, std::string label)
+  SetField(T& target, T next, std::string label)
       : target_(target), before_(target), after_(std::move(next)), label_(std::move(label)) {}
   void apply() override { target_ = after_; }
   void revert() override { target_ = before_; }
   [[nodiscard]] std::string description() const override { return label_; }
 
  private:
-  std::string& target_;
-  std::string before_;
-  std::string after_;
+  T& target_;
+  T before_;
+  T after_;
   std::string label_;
 };
 
@@ -41,13 +41,10 @@ void validate(const ForgeProject& project) {
     throw Error(ErrorKind::InvalidArgument, "Unsupported .sncf project format version");
   if (project.id.empty()) throw Error(ErrorKind::InvalidArgument, "Missing Character Forge project id");
   check_text(project.name, 160, "Project name");
-  check_text(project.character_name, 160, "Character name");
   check_text(project.description, 4096, "Description");
-  check_text(project.editor_id, 128, "EditorID");
-  if (!std::all_of(project.editor_id.begin(), project.editor_id.end(), [](unsigned char ch) {
-        return std::isalnum(ch) != 0 || ch == '_';
-      }))
-    throw Error(ErrorKind::InvalidArgument, "EditorID must contain ASCII letters, digits or underscore only");
+  validate_native_draft(project.npc);
+  validate_export_options(project.export_options);
+
 }
 
 void ensure_directory(const fs::path& directory) {
@@ -83,7 +80,9 @@ void ForgeProjectStore::save(const fs::path& directory, const ForgeProject& proj
       {"id", project.id},
       {"name", project.name},
       {"description", project.description},
-      {"character", {{"name", project.character_name}, {"editorId", project.editor_id}}},
+      {"nativeNpc", native_npc_to_json(project.npc)},
+      {"exportOptions", project.export_options},
+      {"dependencies", project.dependencies},
       {"environment", {{"instanceName", project.environment.instance_name},
                        {"instanceIni", project.environment.instance_ini},
                        {"profile", project.environment.profile},
@@ -107,16 +106,23 @@ ForgeProject ForgeProjectStore::load(const fs::path& directory) {
     const Json j = Json::parse(json);
     if (!j.is_object() || j.value("kind", "") != "characterForge")
       throw Error(ErrorKind::Parse, "Not a Character Forge project");
-    if (j.value("formatVersion", 0) != kForgeProjectVersion)
+    if (!j.contains("formatVersion") || !j.at("formatVersion").is_number_integer() ||
+        (j.at("formatVersion") != 1 && j.at("formatVersion") != kForgeProjectVersion))
       throw Error(ErrorKind::Parse, "Unsupported .sncf project version; do not modify it");
     ForgeProject project;
     project.format_version = kForgeProjectVersion;
     project.id = j.at("id").get<std::string>();
     project.name = j.value("name", "");
     project.description = j.value("description", "");
-    const auto character = j.value("character", Json::object());
-    project.character_name = character.value("name", "");
-    project.editor_id = character.value("editorId", "");
+    if (j.at("formatVersion").get<int>() == 1) {
+      const auto character = j.value("character", Json::object());
+      project.npc.name = character.value("name", "");
+      project.npc.editor_id = character.value("editorId", "");
+    } else {
+      project.npc = native_npc_from_json(j.at("nativeNpc"));
+      project.export_options = j.value("exportOptions", project.export_options);
+      project.dependencies = j.value("dependencies", std::vector<std::string>{});
+    }
     const auto environment = j.value("environment", Json::object());
     project.environment = {environment.value("instanceName", ""), environment.value("instanceIni", ""),
                            environment.value("profile", ""), environment.value("gameEdition", "")};
@@ -135,7 +141,7 @@ void ForgeDraft::replace(ForgeProject project) {
 
 void ForgeDraft::set_field(std::string& field, std::string value, std::string label) {
   if (field == value) return;
-  history_.push(std::make_unique<SetField>(field, std::move(value), std::move(label)));
+  history_.push(std::make_unique<SetField<std::string>>(field, std::move(value), std::move(label)));
 }
 
 void ForgeDraft::set_project_name(std::string value) {
@@ -145,15 +151,15 @@ void ForgeDraft::set_project_name(std::string value) {
 
 void ForgeDraft::set_character_name(std::string value) {
   check_text(value, 160, "Character name");
-  set_field(project_.character_name, std::move(value), "Nombre del personaje");
+  set_field(project_.npc.name, std::move(value), "Nombre del personaje");
 }
 
 void ForgeDraft::set_editor_id(std::string value) {
   check_text(value, 128, "EditorID");
-  if (!std::all_of(value.begin(), value.end(), [](unsigned char ch) {
-        return std::isalnum(ch) != 0 || ch == '_';
-      })) throw Error(ErrorKind::InvalidArgument, "EditorID must contain ASCII letters, digits or underscore only");
-  set_field(project_.editor_id, std::move(value), "EditorID del personaje");
+  auto candidate = project_.npc;
+  candidate.editor_id = value;
+  validate_native_draft(candidate);
+  set_field(project_.npc.editor_id, std::move(value), "EditorID del personaje");
 }
 
 void ForgeDraft::set_description(std::string value) {
@@ -161,4 +167,14 @@ void ForgeDraft::set_description(std::string value) {
   set_field(project_.description, std::move(value), "Descripcion del proyecto");
 }
 
+void ForgeDraft::set_native_npc(NativeNpcDraft value) {
+  validate_native_draft(value);
+  if (native_npc_to_json(project_.npc) == native_npc_to_json(value)) return;
+  history_.push(std::make_unique<SetField<NativeNpcDraft>>(project_.npc, std::move(value), "NPC nuevo"));
+}
+void ForgeDraft::set_export_options(Json value) {
+  validate_export_options(value);
+  if (project_.export_options == value) return;
+  history_.push(std::make_unique<SetField<Json>>(project_.export_options, std::move(value), "Opciones de exportación"));
+}
 }  // namespace sns::creation
