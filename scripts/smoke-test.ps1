@@ -17,6 +17,11 @@ param(
     [string]$MO2Profile,
     [string]$Npc,
     [string]$Game,
+    [Nullable[int]]$WorkspaceIndex,
+    [string]$Size,
+    [string]$StressAppearance,
+    [string]$SecondNpc,
+    [string]$StressWork,
     [switch]$VerifyViewport,
     [string]$CaptureSet,
     # Show the window instead of starting it hidden. A hidden window is never exposed, so it only
@@ -44,6 +49,11 @@ if ($Instance) { $arguments += @('--instance', "`"$Instance`"") }
 if ($MO2Profile) { $arguments += @('--profile', "`"$MO2Profile`"") }
 if ($Npc) { $arguments += @('--npc', $Npc) }
 if ($Game) { $arguments += @('--game', "`"$Game`"") }
+if ($null -ne $WorkspaceIndex) { $arguments += @('--smoke-workspace', [string]$WorkspaceIndex) }
+if ($Size) { $arguments += @('--smoke-size', $Size) }
+if ($StressAppearance) { $arguments += @('--stress-appearance', $StressAppearance) }
+if ($SecondNpc) { $arguments += @('--second-npc', $SecondNpc) }
+if ($StressWork) { $arguments += @('--stress-work', "`"$StressWork`"") }
 if ($VerifyViewport) { $arguments += '--verify-viewport' }
 if ($CaptureSet) {
     New-Item -ItemType Directory -Force $CaptureSet | Out-Null
@@ -52,6 +62,8 @@ if ($CaptureSet) {
 
 $log = [IO.Path]::ChangeExtension($Screenshot, '.log')
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle $(if ($ShowWindow) { 'Normal' } else { 'Hidden' }) -PassThru -RedirectStandardError $log
+# Touch the handle now: without it .NET may not keep the exit code and ExitCode reads as $null.
+$null = $process.Handle
 if (-not $process.WaitForExit(15 * 60 * 1000)) { $process.Kill(); throw 'Smoke test timed out.' }
 $process.WaitForExit()
 
@@ -63,5 +75,6 @@ if ($warnings) {
     $warnings | Select-Object -First 20 | ForEach-Object { Write-Warning $_.Line }
     throw "QML or shader warnings found ($(@($warnings).Count)); see $log"
 }
-if ($process.ExitCode -and $process.ExitCode -ne 0) { throw "Studio exited with $($process.ExitCode); see $log" }
+if ($null -eq $process.ExitCode) { throw "Studio exit code unavailable; see $log" }
+if ($process.ExitCode -ne 0) { throw "Studio exited with $($process.ExitCode); see $log" }
 Write-Host "OK - screenshot: $Screenshot"

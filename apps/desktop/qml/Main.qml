@@ -202,6 +202,7 @@ ApplicationWindow {
             // Modos de trabajo principales
             TabBar {
                 id: workspaceTabs
+                objectName: "workspaceTabs"
                 implicitHeight: 32
                 TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE") }
                 TabButton { text: qsTr("👗 ESTUDIO DE ATUENDOS") }

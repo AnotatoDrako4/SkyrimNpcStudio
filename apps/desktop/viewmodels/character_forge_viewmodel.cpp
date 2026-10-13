@@ -271,7 +271,10 @@ void CharacterForgeViewModel::selectModelFile(const QString& url) {
     w["model"] = model;
     auto library = w.value("library", Json::array());
     if (!library.is_array()) library = Json::array();
-    const auto same = std::find_if(library.begin(), library.end(), [&](const Json& entry) { return entry.value("path", "") == model.at("path"); });
+    const auto modelPath = model.at("path").get<std::string>();
+    const auto same = std::find_if(library.begin(), library.end(), [&](const Json& entry) {
+      return entry.is_object() && entry.value("path", std::string{}) == modelPath;
+    });
     if (same == library.end() && library.size() < 100) library.push_back(model);
     w["library"] = library;
     draft_.set_workspace(std::move(w));
@@ -288,7 +291,20 @@ void CharacterForgeViewModel::selectBlenderExecutable(const QString& url) {
   }, false);
 }
 void CharacterForgeViewModel::detectBlender() {
-  const auto path = QStandardPaths::findExecutable("blender");
+  auto path = QStandardPaths::findExecutable("blender");
+  if (path.isEmpty()) {
+#if defined(Q_OS_WIN)
+    for (const auto* candidate : {"D:/Program Files/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender 4.2/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender/blender.exe"}) {
+      if (QFileInfo::exists(candidate)) {
+        path = QString::fromLatin1(candidate);
+        break;
+      }
+    }
+#endif
+  }
   if (path.isEmpty()) { last_error_ = tr("Blender no encontrado en PATH. Puedes seleccionar el ejecutable; el bridge aún no está implementado."); emit changed(); return; }
   selectBlenderExecutable(path);
 }

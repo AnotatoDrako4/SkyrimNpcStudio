@@ -54,6 +54,16 @@ QQuick3DTextureData* texture(const textures::DdsImage& img, QObject* owner) {
   t->setTextureData(QByteArray(img.data.data(), static_cast<qsizetype>(img.data.size())));
   return t;
 }
+// A pooled object is detached from the scene while Repeater3D swaps delegates; Qt then drops its
+// backend node and builds a new, empty one when it is attached again, because the "data changed"
+// flags were consumed by the first upload. Re-setting the (implicitly shared) buffers flags them
+// again. Without this, reused heads were invisible and reused skin textures white after a rebuild.
+void refresh(QQuick3DGeometry* g) {
+  g->setVertexData(g->vertexData());
+  g->setIndexData(g->indexData());
+  g->update();
+}
+void refresh(QQuick3DTextureData* t) { t->setTextureData(t->textureData()); }
 
 QString shader_name(std::uint32_t type) {
   static const char* names[] = {"Default", "EnvironmentMap", "Glow", "Parallax", "FaceTint", "SkinTint", "HairTint",
@@ -481,7 +491,10 @@ void SceneViewModel::install(Prepared& prepared) {
   for (std::size_t i = 0; i < prepared.textures.size(); ++i) {
     const auto& [key, image] = prepared.textures[i];
     auto pooled = texture_pool.value(key);
-    if (!pooled.gpu) pooled = texture_pool_.take(key);
+    if (!pooled.gpu) {
+      pooled = texture_pool_.take(key);
+      if (pooled.gpu) refresh(pooled.gpu);
+    }
     if (!pooled.gpu) pooled = PooledTexture{texture(*image, pool_owner_), image};
     texture_pool.insert(key, pooled);
     textures[prepared.texture_paths[i]] = pooled.gpu;
@@ -493,7 +506,8 @@ void SceneViewModel::install(Prepared& prepared) {
     auto& previous = uv ? uv_pool_ : geometry_pool_;
     if (auto* g = fresh.value(key)) return g;
     auto* g = previous.take(key);
-    if (!g) g = geometry(part, pool_owner_, uv);
+    if (g) refresh(g);
+    else g = geometry(part, pool_owner_, uv);
     fresh.insert(key, g);
     return g;
   };

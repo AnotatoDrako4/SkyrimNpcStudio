@@ -43,7 +43,7 @@ ColumnLayout {
                 forge: root.forge
                 visible: tabs.currentIndex === 1
             }
-            AppearanceEditor {
+            ForgeAppearanceEditor {
                 Layout.fillWidth: true
                 forge: root.forge
                 visible: tabs.currentIndex === 2

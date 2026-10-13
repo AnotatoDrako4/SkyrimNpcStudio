@@ -142,6 +142,8 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption game_opt("game", "Use this Skyrim installation without changing MO2.", "path");
   const QCommandLineOption npc_opt("npc", "Select this NPC (FormKey or load-order FormID) once indexed.", "formKey");
   const QCommandLineOption shot_opt("screenshot", "Save a PNG of the window once loaded, then quit.", "file");
+  const QCommandLineOption workspace_opt("smoke-workspace", "Select workspace 0 (character), 1 (outfit) or 2 (forge) for a smoke capture.", "index");
+  const QCommandLineOption size_opt("smoke-size", "Resize the smoke capture window (WIDTHxHEIGHT).", "size");
   const QCommandLineOption smoke_opt("smoke-test", "Load, print a summary to stderr and quit (exit code 0 on success).");
   const QCommandLineOption verify_opt("verify-viewport", "Verify real rendered pixels, picking, inspector, camera, visibility, UV, diagnostics and compact layout.");
   const QCommandLineOption capture_opt("capture-set", "Save five fixed-camera captures (face, hair, body, armor, outfit) with pixel metrics.", "directory");
@@ -156,7 +158,7 @@ int main(int argc, char* argv[]) {
                                      "Crash on purpose (access-violation, terminate, abort) to check that the crash report and "
                                      "minidump are written. For tests only.",
                                      "kind");
-  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
+  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, workspace_opt, size_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
                   second_npc_opt, stress_work_opt, crash_opt});
   cli.process(app);
   if (cli.isSet(crash_opt)) return crash_selftest(cli.value(crash_opt));
@@ -175,9 +177,29 @@ int main(int argc, char* argv[]) {
                    Qt::QueuedConnection);
   engine.loadFromModule("SkyrimNpcStudio", "Main");
   if (engine.rootObjects().isEmpty()) return 1;
+  auto* main_window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+  if (cli.isSet(workspace_opt)) {
+    bool valid = false;
+    const int index = cli.value(workspace_opt).toInt(&valid);
+    auto* tabs = main_window ? main_window->findChild<QObject*>("workspaceTabs") : nullptr;
+    if (!valid || index < 0 || index > 2 || !tabs || !tabs->setProperty("currentIndex", index)) {
+      std::fprintf(stderr, "Invalid smoke workspace or missing workspace tabs\n");
+      return 2;
+    }
+  }
+  if (cli.isSet(size_opt)) {
+    const auto dimensions = cli.value(size_opt).split('x');
+    bool width_ok = false, height_ok = false;
+    const int width = dimensions.value(0).toInt(&width_ok), height = dimensions.value(1).toInt(&height_ok);
+    if (!main_window || dimensions.size() != 2 || !width_ok || !height_ok || width < 800 || height < 600) {
+      std::fprintf(stderr, "Invalid smoke size; expected WIDTHxHEIGHT (at least 800x600)\n");
+      return 2;
+    }
+    main_window->resize(width, height);
+  }
 
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
-  const bool automated = cli.isSet(shot_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
+  const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
                          cli.isSet(stress_opt);
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {

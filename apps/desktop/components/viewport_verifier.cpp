@@ -36,11 +36,14 @@ Coverage coverage(const QImage& image, int step) {
   // so it is read from the corner instead of assumed; a small tolerance keeps near-black armour
   // counted as covered.
   const auto bg = image.pixelColor(1, 1);
-  for (int y = 0; y < image.height(); y += step) for (int x = 0; x < image.width(); x += step) {
-    const auto px = image.pixelColor(x, y);
-    if (std::abs(px.red()-bg.red()) + std::abs(px.green()-bg.green()) + std::abs(px.blue()-bg.blue()) > 6) ++c.pixels;
-    if (px.red() >= 235 && px.green() >= 235 && px.blue() >= 235) ++c.white;
-  }
+  // The camera controls and status strip overlap the View3D in the window grab.
+  // Sample its central area so those controls cannot make an empty model pass.
+  for (int y = image.height() / 10; y < image.height() * 9 / 10; y += step)
+    for (int x = image.width() / 10; x < image.width() * 9 / 10; x += step) {
+      const auto px = image.pixelColor(x, y);
+      if (std::abs(px.red()-bg.red()) + std::abs(px.green()-bg.green()) + std::abs(px.blue()-bg.blue()) > 6) ++c.pixels;
+      if (px.red() >= 235 && px.green() >= 235 && px.blue() >= 235) ++c.white;
+    }
   return c;
 }
 
@@ -52,6 +55,7 @@ struct Run : std::enable_shared_from_this<Run> {
   QString path;
   std::function<void(bool)> completed;
   QImage previous;
+  Coverage previous_coverage;
   int step = 0;
   bool passed = true;
   void diagnostic(const char* mode) { QMetaObject::invokeMethod(controls, "setDiagnostic", Q_ARG(QVariant, QString::fromLatin1(mode))); }
@@ -62,7 +66,15 @@ struct Run : std::enable_shared_from_this<Run> {
     const auto c = coverage(image, 2);
     static const char* names[] = {"front", "side", "hidden", "uv", "alpha", "normals", "wireframe", "compact"};
     const bool changed = previous.isNull() || image != previous;
-    const bool nonblank = step == 2 ? c.pixels < 50 : c.pixels > 300;
+    // The empty View3D still draws its background and overlay. Compare coverage with
+    // the preceding visible view and check the scene state instead of requiring zero pixels.
+    bool no_shown_parts = true;
+    if (step == 2) {
+      const auto visibility = scene->visibility();
+      for (const auto& part : scene->parts())
+        no_shown_parts &= !visibility.value(part.toMap().value("id").toString()).toBool();
+    }
+    const bool nonblank = step == 2 ? no_shown_parts && c.pixels < previous_coverage.pixels : c.pixels > 300;
     passed &= changed && nonblank;
     std::fprintf(stderr, "viewport: %s size=%dx%d pixels=%zu white=%zu changed=%d valid=%d\n",
       names[step], image.width(), image.height(), c.pixels, c.white, changed, nonblank);
@@ -74,6 +86,7 @@ struct Run : std::enable_shared_from_this<Run> {
       passed &= full.save(file.path()+"/"+file.completeBaseName()+"-"+names[step]+".png");
     }
     previous = image;
+    previous_coverage = c;
     if (step == 0) {
       QVariant hit;
       if (window->isExposed()) {
@@ -166,10 +179,8 @@ struct CaptureRun : std::enable_shared_from_this<CaptureRun> {
     if (!window || !scene || !controls || !view) { completed(false); return; }
     const auto& s = scenarios[index];
     static const QRegularExpression hair("hair|scalp", QRegularExpression::CaseInsensitiveOption);
-    float scale = 1;
     for (const auto& p : scene->parts()) {
       const auto row = p.toMap();
-      scale = row.value("scale", 1.0f).toFloat();
       const bool by_default = row.value("shownByDefault", true).toBool();
       const bool head = row.value("group").toString() == "head";
       const bool visible = by_default && (s.show == Show::All || (head && (s.show == Show::Head || !row.value("label").toString().contains(hair))));
@@ -177,10 +188,8 @@ struct CaptureRun : std::enable_shared_from_this<CaptureRun> {
     }
     scene->select("");
     controls->setProperty("uvMode", false);
-    // Absolute framing (Skyrim units, view space): the head of an adult human sits ~121 units up.
-    const QVector3D center = s.face_camera ? QVector3D(0, 121, 1) * scale : QVector3D(0, 64, 0) * scale;
-    const float radius = s.face_camera ? 14 * scale : 72 * scale;
-    QMetaObject::invokeMethod(controls, "frame", Q_ARG(QVariant, QVariant::fromValue(center)), Q_ARG(QVariant, radius), Q_ARG(QVariant, 0));
+    // Frame the actual loaded scene: head heights and overall bounds vary by race and outfit.
+    passed &= QMetaObject::invokeMethod(controls, "applyCameraPreset", Q_ARG(QVariant, s.face_camera ? 4 : 0));
     QTimer::singleShot(1200, window, [self = shared_from_this()] { self->capture(); });
   }
   void capture() {
@@ -205,6 +214,10 @@ struct CaptureRun : std::enable_shared_from_this<CaptureRun> {
     const auto line = QStringLiteral("capture: %1 shapes=%2 pixels=%3 white=%4 (%5% of covered) pieces=[%6]")
                           .arg(s.name).arg(shown).arg(c.pixels).arg(c.white).arg(white_pct, 0, 'f', 2).arg(pieces.join("; "));
     std::fprintf(stderr, "%s\n", qPrintable(line));
+    QVariant state;
+    QMetaObject::invokeMethod(controls, "viewState", Q_RETURN_ARG(QVariant, state));
+    std::fprintf(stderr, "capture:   state %s center=(%g,%g,%g) radius=%g\n", qPrintable(state.toString()),
+                 scene->center().x(), scene->center().y(), scene->center().z(), scene->radius());
     report << line;
     passed &= shown > 0 && c.pixels > 300;
     passed &= image.save(dir.filePath(QString::fromLatin1(s.name) + ".png"));

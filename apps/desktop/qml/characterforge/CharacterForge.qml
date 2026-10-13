@@ -168,7 +168,6 @@ Item {
                 text: qsTr("Crear NPC")
                 enabled: root.forge.hasProject
                 onClicked: {
-                    root.currentTool = "native";
                     root.forge.setWorkspaceValue("tool", "native");
                 }
             }
