@@ -34,7 +34,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             ProtocolMinor = Protocol.Minor,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
-            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul"],
+            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords],
         };
     }
 
@@ -120,6 +120,18 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
             return response;
         }), ct);
+
+    [JsonRpcMethod(Methods.CreationValidateNpc)]
+    public Task<CreationValidateResponse> ValidateNativeNpc(CreationValidateRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() => state.Read(c => NativeNpcBuilder.Validate(c.Session, c.Queries, request))), ct);
+
+    [JsonRpcMethod(Methods.CreationExportNpc)]
+    public Task<CreationExportResponse> ExportNativeNpc(CreationExportRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() => state.Read(c => NativeNpcBuilder.Export(c.Session, c.Queries, request, ct))), ct);
+
+    [JsonRpcMethod(Methods.CreationSearchRecords)]
+    public IReadOnlyList<CreationRecord> SearchCreationRecords(CreationSearchRequest request) =>
+        Guard(() => state.Read(c => CreationRecordQueries.Search(c.Session, request)));
 
     private static T Guard<T>(Func<T> body)
     {

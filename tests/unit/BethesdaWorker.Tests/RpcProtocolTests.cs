@@ -32,6 +32,34 @@ public sealed class RpcProtocolTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task NativeCreation_ValidatesAndExportsThroughTheExistingRpc()
+    {
+        using var lo = SyntheticLoadOrder.Create();
+        var ct = TestContext.Current.CancellationToken;
+        await _client.InvokeWithParameterObjectAsync<IndexResponse>(Methods.CatalogIndex, new IndexRequest
+        {
+            ProfileKey = "forge-rpc", CacheDirectory = Path.Combine(lo.DataDirectory, "_cache"),
+            Plugins = lo.LoadOrder.Select(p => new LoadOrderEntry { FileName = p.FileName, Path = p.Path }).ToArray(),
+        }, ct);
+        var draft = new NativeNpcDraft { Name = "New person", EditorId = "SNS_NewPerson", Female = true,
+            RaceFormKey = SyntheticLoadOrder.NordRace.ToString(), VoiceFormKey = SyntheticLoadOrder.FemaleVoice.ToString(),
+            ClassFormKey = SyntheticLoadOrder.WarriorClass.ToString() };
+        var validation = await _client.InvokeWithParameterObjectAsync<CreationValidateResponse>("creation.validateNpc", new CreationValidateRequest { Npc = draft }, ct);
+        Assert.True(validation.TechnicallyExportable);
+        Assert.False(validation.Exportable);
+        var records = await _client.InvokeWithParameterObjectAsync<IReadOnlyList<CreationRecord>>("creation.searchRecords", new CreationSearchRequest { Kind = "race", Text = "NordRace" }, ct);
+        Assert.Contains(records, r => r.FormKey == SyntheticLoadOrder.NordRace.ToString());
+        var output = Path.Combine(lo.DataDirectory, "exports"); Directory.CreateDirectory(output);
+        var result = await _client.InvokeWithParameterObjectAsync<CreationExportResponse>("creation.exportNpc", new CreationExportRequest
+        { Npc = draft, PluginName = "RpcOriginal.esp", OutputDirectory = output, TechnicalOnly = true }, ct);
+        Assert.True(result.ReadBackVerified);
+        Assert.Equal("new", Assert.Single(result.Package.Records).Kind);
+        var rejected = await Assert.ThrowsAsync<RemoteInvocationException>(() => _client.InvokeWithParameterObjectAsync<CreationExportResponse>("creation.exportNpc", new CreationExportRequest
+        { Npc = draft, PluginName = "Final.esp", OutputDirectory = output }, ct));
+        Assert.Equal(ErrorCodes.ValidationFailed, rejected.ErrorCode);
+    }
+
+    [Fact]
     public async Task Handshake_ReturnsVersions()
     {
         var r = await _client.InvokeWithParameterObjectAsync<HandshakeResponse>(Methods.Handshake,

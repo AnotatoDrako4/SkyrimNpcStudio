@@ -5,7 +5,7 @@
 namespace sns::ipc::protocol {
 
 inline constexpr int kMajor = 1;
-inline constexpr int kMinor = 2;
+inline constexpr int kMinor = 3;
 
 namespace method {
 inline constexpr const char* kHandshake = "system.handshake";
@@ -24,6 +24,9 @@ inline constexpr const char* kSearchHeadParts = "catalog.searchHeadParts";
 inline constexpr const char* kExportFacePatch = "export.faceOverhaul";
 inline constexpr const char* kExportCompleteNpc = "export.completeOverhaul";
 inline constexpr const char* kGetFaceRecipe = "face.getRecipe";
+inline constexpr const char* kCreationValidateNpc = "creation.validateNpc";
+inline constexpr const char* kCreationExportNpc = "creation.exportNpc";
+inline constexpr const char* kCreationSearchRecords = "creation.searchRecords";
 // Server -> client notification.
 inline constexpr const char* kIndexProgress = "catalog.progress";
 // Client -> server notification understood by StreamJsonRpc (same as LSP).

@@ -12,7 +12,7 @@ public static class Protocol
     public const int Major = 1;
 
     /// <summary>Additive changes (new optional fields, new methods) bump the minor version.</summary>
-    public const int Minor = 2;
+    public const int Minor = 3;
 }
 
 public static class Methods
@@ -35,6 +35,9 @@ public static class Methods
     public const string ExportFacePatch = "export.faceOverhaul";
     public const string ExportCompleteNpc = "export.completeOverhaul";
     public const string GetFaceRecipe = "face.getRecipe";
+    public const string CreationValidateNpc = "creation.validateNpc";
+    public const string CreationExportNpc = "creation.exportNpc";
+    public const string CreationSearchRecords = "creation.searchRecords";
 
     /// <summary>Server → client notification emitted while indexing.</summary>
     public const string IndexProgress = "catalog.progress";

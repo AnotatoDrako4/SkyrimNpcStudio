@@ -52,6 +52,8 @@ public sealed class SyntheticLoadOrder : IDisposable
     public static readonly FormKey EyesGreenTextures = new(Skyrim, 0x0E7AF0);
     public static readonly FormKey HairColorBrown = new(Skyrim, 0x0A0434);
     public static readonly FormKey VampireNpc = new(Skyrim, 0x01367C);
+    public static readonly FormKey FemaleVoice = new(Skyrim, 0x0A0050);
+    public static readonly FormKey WarriorClass = new(Skyrim, 0x0A0051);
 
     public FormKey CrimsonCuirass { get; private set; }
     public FormKey CrimsonCloak { get; private set; }
@@ -81,6 +83,8 @@ public sealed class SyntheticLoadOrder : IDisposable
         master.ModHeader.Flags |= SkyrimModHeader.HeaderFlag.Master;
 
         var defaultRace = AddRace(master, DefaultRace, "DefaultRace", "Default", armorRace: null);
+        master.VoiceTypes.Add(new VoiceType(FemaleVoice, SkyrimRelease.SkyrimSE) { EditorID = "FemaleEvenToned" });
+        master.Classes.Add(new Class(WarriorClass, SkyrimRelease.SkyrimSE) { EditorID = "Warrior" });
         var nordRace = AddRace(master, NordRace, "NordRace", "Nord", armorRace: defaultRace);
         AddRace(master, KhajiitRace, "KhajiitRace", "Khajiit", armorRace: null);
         master.HeadParts.Add(new HeadPart(HairNord, SkyrimRelease.SkyrimSE)
@@ -157,6 +161,7 @@ public sealed class SyntheticLoadOrder : IDisposable
         {
             EditorID = "WhiterunDragonsreach",
             Name = "Dragonsreach",
+            Flags = Cell.Flag.IsInteriorCell,
         };
         var placedLydia = new PlacedNpc(LydiaRef, SkyrimRelease.SkyrimSE)
         {
