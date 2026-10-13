@@ -194,6 +194,16 @@ public sealed class NativeNpcExportTests : IDisposable
     }
 
     [Fact]
+    public void NativeExport_RejectsDirectoriesInsideActiveMods()
+    {
+        var destination = Path.Combine(_lo.DataDirectory, "exports");
+        Directory.CreateDirectory(destination);
+        var error = Assert.Throws<WorkerException>(() => Export(Request() with { OutputDirectory = destination }));
+        Assert.Equal(ErrorCodes.InvalidArgument, error.Code);
+        Assert.Empty(Directory.GetFileSystemEntries(destination));
+    }
+
+    [Fact]
     public void OutputAndPlacementMustBeValid()
     {
         Assert.Equal(ErrorCodes.InvalidArgument, Assert.Throws<WorkerException>(() => Export(Request() with { OutputDirectory = "relative" })).Code);

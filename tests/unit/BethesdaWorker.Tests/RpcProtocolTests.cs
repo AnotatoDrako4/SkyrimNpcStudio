@@ -49,7 +49,7 @@ public sealed class RpcProtocolTests : IAsyncDisposable
         Assert.False(validation.Exportable);
         var records = await _client.InvokeWithParameterObjectAsync<IReadOnlyList<CreationRecord>>("creation.searchRecords", new CreationSearchRequest { Kind = "race", Text = "NordRace" }, ct);
         Assert.Contains(records, r => r.FormKey == SyntheticLoadOrder.NordRace.ToString());
-        var output = Path.Combine(lo.DataDirectory, "exports"); Directory.CreateDirectory(output);
+        var output = Path.Combine(Path.GetTempPath(), "sns-rpc-export-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
         var result = await _client.InvokeWithParameterObjectAsync<CreationExportResponse>("creation.exportNpc", new CreationExportRequest
         { Npc = draft, PluginName = "RpcOriginal.esp", OutputDirectory = output, TechnicalOnly = true }, ct);
         Assert.True(result.ReadBackVerified);
@@ -57,6 +57,7 @@ public sealed class RpcProtocolTests : IAsyncDisposable
         var rejected = await Assert.ThrowsAsync<RemoteInvocationException>(() => _client.InvokeWithParameterObjectAsync<CreationExportResponse>("creation.exportNpc", new CreationExportRequest
         { Npc = draft, PluginName = "Final.esp", OutputDirectory = output }, ct));
         Assert.Equal(ErrorCodes.ValidationFailed, rejected.ErrorCode);
+        Directory.Delete(output, recursive: true);
     }
 
     [Fact]
