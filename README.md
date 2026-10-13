@@ -2,7 +2,7 @@
 
 Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, indexa los NPC y prendas de tu perfil de **Skyrim SE/AE** y exporta los cambios como **mods reales e instalables en MO2**.
 
-> Estado: Fases 0 y 1 implementadas; Fase 2 funcional en pose de referencia con recursos reales; núcleo de Fase 3 (vestuario + exportación) implementado. Edición facial, animaciones y modificación de mallas pendientes ([plan](docs/DEVELOPMENT_PLAN.md)).
+> Estado: explorador MO2, visor 3D, editor de atuendos, edición facial y exportación A/B/C disponibles con validaciones. La fidelidad de algunas mallas de replacers limita los morphs, y la comprobación final dentro de Skyrim sigue siendo manual ([plan](docs/DEVELOPMENT_PLAN.md), [diagnóstico de cierres](docs/CRASH_DIAGNOSTICS.md)).
 
 ## Qué hace hoy
 
@@ -12,7 +12,9 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 - Editor de atuendos con deshacer/rehacer, catálogo filtrable por slot, validación en vivo (slots, raza/ARMA, plantillas, mallas).
 - **GUARDAR MOD (Modo A)**: OTFT nuevo (y atuendo de dormir opcional) + override mínimo copiado del registro ganador → ESP (opcionalmente ESL) verificado releyéndolo, carpeta lista para MO2 + ZIP, README y `manifest.json`. Atómico y sin sobrescribir nada.
 - **Instalación asistida en MO2**: Opción directa desde el diálogo de exportación para copiar el mod a `mods/` tras validar que `ModOrganizer.exe` está cerrado y previa confirmación de seguridad.
-- Proyectos editables `.snps` con historial de versiones.
+- Proyectos editables `.snps` con historial de versiones, rostro y vestuario compartiendo el borrador.
+- Cambios de color de cabello con vista previa inmediata y actualización del FaceGen exportable; los morphs incompatibles con la topología de un replacer se bloquean con diagnóstico.
+- Las configuraciones de material de prendas se conservan en el proyecto, pero aún no afectan al visor ni al juego. La exportación las bloquea hasta que puedan generar DDS y referencias NIF verificadas; ver [estado de materiales](docs/MATERIAL_VARIANTS.md).
 - Visor Qt Quick 3D: NIF mediante nifly, recursos sueltos/BSA 105, DDS mediante DirectXTex, mezcla de peso y skinning CPU. Transparencias traducidas de la `NiAlphaProperty` y del alfa real de cada textura, FaceGen con tinte compuesto, formas de física SMP ocultas como en el juego. Cámara orbital, paneo, zoom, selección, ocultación, UV, huesos, comparación del atuendo original/borrador, inspector por geometría (origen MO2, shader, texturas, alfa, huesos, avisos) y vistas de diagnóstico (canal alfa, normales, tangentes, alambre, solo difusa, sin luz).
 - Recursos incompatibles o ausentes generan diagnósticos. No reproduce shaders, animaciones ni física de Skyrim; el visor no certifica exportaciones faciales.
 
@@ -58,10 +60,12 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (37) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
-| C++ (63, locales opcionales) | `ctest --preset debug` | IPC, MO2, proyectos, exportación sintética, BSA/LZ4 y BSA dañado, DDS (mips, alfa BC3/BC7), NIF y escena sintéticos (transparencias, FaceGen, jerarquía, formas SMP, UV, colores de vértice), peso y skinning |
+| .NET (49) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
+| C++ (96, con MO2 local configurado) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, informes de fallos y dependencias de compilación |
 | Locales `[local]` | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2; se omiten si no están definidas |
-| UI | `.\scripts\smoke-test.ps1 -VerifyViewport -ShowWindow [-CaptureSet dir]` con instancia/perfil/NPC | capturas nativas y comprobación de píxeles, picking, inspector, cámara, ocultación, UV, diagnósticos, restaurar y ventana compacta; 5 capturas con cámara fija para antes/después |
+| UI | `.\scripts\smoke-test.ps1` | verificación de carga QML completa, renderizado nativo y captura gráfica de la ventana |
+
+La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all`; incluye 18 escenarios de Lydia, cambios rápidos de cabello, cambio de NPC, rechazo de material no exportable, vestuario, guardado/reapertura y exportación. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
 
 ## Primer caso de uso: el atuendo de Lydia
 

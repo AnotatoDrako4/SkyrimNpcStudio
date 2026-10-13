@@ -58,6 +58,31 @@ void issue(std::vector<FaceIssue>& issues, std::string severity, std::string cod
   issues.push_back({std::move(severity), std::move(code), std::move(message), std::move(subject)});
 }
 
+// The Creation Kit stores twice the CLFM color, and black when the NPC has no hair color (both
+// measured on vanilla FaceGen).
+nifly::Vector3 hair_tint_vector(const std::optional<Rgb8>& c) {
+  if (!c) return nifly::Vector3(0.0f, 0.0f, 0.0f);
+  return nifly::Vector3(2.0f * c->r / 255.0f, 2.0f * c->g / 255.0f, 2.0f * c->b / 255.0f);
+}
+
+// Head parts the game colors with the NPC's hair color (through a HairTint lighting shader).
+bool is_hair_colored(HeadPartType type) {
+  return type == HeadPartType::Hair || type == HeadPartType::Eyebrows || type == HeadPartType::FacialHair;
+}
+
+void hair_tint_unsupported(std::vector<FaceIssue>& issues, const HeadPartData& part, nifly::NiShader* shader) {
+  std::string kind = "no shader";
+  if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader)) {
+    kind = "BSLightingShaderProperty type " + std::to_string(lighting->GetShaderType());
+  } else if (shader) {
+    kind = shader->GetBlockName();
+  }
+  issue(issues, "warning", "HairTintUnsupported",
+        part.editor_id + ": its shader (" + kind + ") is not HairTint, so the hair color does not change this piece "
+                         "in game or in the preview",
+        part.model);
+}
+
 // Morph weights by name, so that two plans can be subtracted (PreserveExisting).
 struct WeightTable {
   std::string race;
@@ -118,10 +143,24 @@ void morph_part(const HeadPartData& part, const FaceRecipe& recipe, FaceAssetCac
       continue;
     }
     if (tri->vertex_count != positions.size()) {
-      issue(issues, "error", "TriVertexMismatch",
-            std::format("{}: TRI has {} vertices, the mesh has {}; morphs cannot be applied", part.editor_id,
-                        tri->vertex_count, positions.size()),
-            ref.path);
+      // Only a problem when this TRI has something to apply. Replacer heads (e.g. a high-poly head
+      // that still names the vanilla TRI files) keep their exported FaceGen untouched when only
+      // colors change: PreserveExisting then asks for no morph at all.
+      const bool needed = ref.kind == TriKind::Race       ? in.race_weight != 0.0f && !in.race_morph.empty()
+                          : ref.kind == TriKind::Chargen  ? !in.chargen.empty()
+                                                          : !in.expression.empty();
+      if (needed) {
+        issue(issues, "error", "TriVertexMismatch",
+              std::format("{}: TRI has {} vertices, the mesh has {}; morphs cannot be applied", part.editor_id,
+                          tri->vertex_count, positions.size()),
+              ref.path);
+      } else {
+        issue(issues, "info", "TriVertexMismatchUnused",
+              std::format("{}: TRI has {} vertices, the mesh has {}; no morph of this file is needed by the edit, "
+                          "slider changes on this head part would not be possible",
+                          part.editor_id, tri->vertex_count, positions.size()),
+              ref.path);
+      }
       continue;
     }
     auto apply = [&](const std::map<std::string, float>& weights, const char* prefix) {
@@ -342,6 +381,13 @@ FaceGenBuild build_facegen(const FaceRecipe& recipe, FaceAssetCache& assets, con
   for (const auto& [name, w] : plan.custom) custom_found[name] = false;
 
   for (const auto& part : recipe.parts) {
+    // Cooperative cancellation: a newer edit superseded this build; stop between head parts.
+    if (options.cancelled && options.cancelled()) {
+      build.cancelled = true;
+      build.nif.clear();
+      issue(build.issues, "info", "BuildCancelled", "Superseded by a newer edit before it finished", recipe.npc_form_key);
+      return build;
+    }
     PartBuild report;
     report.editor_id = part.editor_id;
     report.model = part.model;
@@ -476,13 +522,9 @@ FaceGenBuild build_facegen(const FaceRecipe& recipe, FaceAssetCache& assets, con
     }
     if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader);
         lighting && lighting->GetShaderType() == kShaderHairTint) {
-      // The Creation Kit stores twice the CLFM color, and black when the NPC has no hair color
-      // (both measured on vanilla FaceGen).
-      if (const auto& c = recipe.values.hair_color) {
-        lighting->hairTintColor = nifly::Vector3(2.0f * c->r / 255.0f, 2.0f * c->g / 255.0f, 2.0f * c->b / 255.0f);
-      } else {
-        lighting->hairTintColor = nifly::Vector3(0.0f, 0.0f, 0.0f);
-      }
+      lighting->hairTintColor = hair_tint_vector(recipe.values.hair_color);
+    } else if (is_hair_colored(part.type)) {
+      hair_tint_unsupported(build.issues, part, shader);
     }
 
     report.status = "built";
@@ -543,6 +585,35 @@ FaceGenInfo inspect_facegen(std::string_view nif_bytes) {
     }
   }
   return info;
+}
+
+HairTintPatch patch_hair_tint(std::string_view facegen_nif, const FaceRecipe& recipe) {
+  HairTintPatch patch;
+  const auto nif = parse_nif(std::string(facegen_nif));
+  if (!nif) {
+    issue(patch.issues, "error", "FaceGenUnreadable", "The FaceGen to update is not a readable NIF", recipe.facegen_mesh_path);
+    return patch;
+  }
+  const auto tint = hair_tint_vector(recipe.values.hair_color);
+  for (auto* shape : nif->GetShapes()) {
+    auto* shader = nif->GetShader(shape);
+    if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader);
+        lighting && lighting->GetShaderType() == kShaderHairTint) {
+      lighting->hairTintColor = tint;
+      patch.patched.push_back(shape->name.get());
+      continue;
+    }
+    const auto part = std::find_if(recipe.parts.begin(), recipe.parts.end(),
+                                   [&](const HeadPartData& p) { return text::iequals_ascii(p.editor_id, shape->name.get()); });
+    if (part != recipe.parts.end() && is_hair_colored(part->type)) hair_tint_unsupported(patch.issues, *part, shader);
+  }
+  std::ostringstream stream(std::ios::out | std::ios::binary);
+  if (nif->Save(stream) != 0) {
+    issue(patch.issues, "error", "FaceGenWriteFailed", "nifly could not serialize the FaceGen NIF", recipe.npc_form_key);
+    return patch;
+  }
+  patch.nif = std::move(stream).str();
+  return patch;
 }
 
 FaceGenComparison compare_facegen(std::string_view a, std::string_view b) {

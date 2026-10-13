@@ -26,6 +26,15 @@ internal static class OutfitValidator
             return new OutfitValidateResponse { Exportable = false, CombinedSlotMask = 0, Pieces = pieces, Issues = issues };
         }
 
+        return ValidateForNpc(session, queries, npc, request.ArmorFormKeys);
+    }
+
+    // Creation uses the same rules with a transient new NPC, never an existing NPC's draft.
+    internal static OutfitValidateResponse ValidateForNpc(LoadOrderSession session, CatalogQueries queries,
+        INpcGetter npc, IReadOnlyList<string> armorFormKeys)
+    {
+        var issues = new List<Issue>();
+        var pieces = new List<OutfitPiece>();
         var female = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
         var raceKeys = RaceAndArmorRace(session, npc);
 
@@ -38,7 +47,7 @@ internal static class OutfitValidator
                 template.ToString()));
         }
 
-        if (request.ArmorFormKeys.Count == 0)
+        if (armorFormKeys.Count == 0)
         {
             issues.Add(Issue.Warning("EmptyOutfit", "The outfit has no pieces: the NPC will appear without clothes."));
         }
@@ -46,7 +55,7 @@ internal static class OutfitValidator
         uint combined = 0;
         var owners = new Dictionary<int, string>();
         var seen = new HashSet<FormKey>();
-        foreach (var text in request.ArmorFormKeys)
+        foreach (var text in armorFormKeys)
         {
             if (!queries.TryParseAnyFormKey(text, out var armorKey)
                 || !session.LinkCache.TryResolve<IArmorGetter>(armorKey, out var armor))

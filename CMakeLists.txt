@@ -9,6 +9,14 @@ if(NOT WIN32)
   message(FATAL_ERROR "Skyrim NPC Studio targets Windows x64 only (named pipes, MO2, Skyrim SE).")
 endif()
 
+# Ninja tracks header dependencies through the /showIncludes prefix of cl.exe. A localized prefix
+# (non-ASCII) only matches when the build runs in a UTF-8 console; otherwise header changes stop
+# recompiling their users (see docs/CRASH_DIAGNOSTICS.md and tests "build:header dependencies").
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT "${CMAKE_CXX_CL_SHOWINCLUDES_PREFIX}" MATCHES "^[ -~]*$")
+  message(STATUS "Localized MSVC (/showIncludes prefix '${CMAKE_CXX_CL_SHOWINCLUDES_PREFIX}'): build from a UTF-8 "
+                 "console (scripts/dev-env.ps1 sets it) or header dependencies are not recorded.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

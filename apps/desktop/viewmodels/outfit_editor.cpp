@@ -125,7 +125,9 @@ QStringList OutfitEditor::history() const {
 }
 
 bool OutfitEditor::exportable() const {
-  return !validating_ && validation_.value("exportable").toBool() && !draft_.outfit().pieces().empty();
+  const auto& pieces = draft_.outfit().pieces();
+  return !validating_ && validation_.value("exportable").toBool() && !pieces.empty() &&
+         std::none_of(pieces.begin(), pieces.end(), [](const auto& p) { return p.material.has_value(); });
 }
 
 QVariantList OutfitEditor::project_npcs() const {
@@ -288,6 +290,16 @@ void OutfitEditor::validate() {
                   auto result = to_map(r);
                   auto issues = result.value("issues").toList();
                   issues.append(asset_issues(r));
+                  for (const auto& piece : draft_.outfit().pieces()) {
+                    if (!piece.material) continue;
+                    issues.append(QVariantMap{{"severity", "error"},
+                                              {"code", "MaterialVariantPreviewOnly"},
+                                              {"message", tr("La variante de material de %1 solo se puede previsualizar: "
+                                                             "faltan DDS generados y un mapeo comprobado a las formas NIF. "
+                                                             "Restáurala antes de exportar.").arg(qs(piece.form_key))},
+                                              {"subject", qs(piece.form_key)}});
+                    result["exportable"] = false;
+                  }
                   result["issues"] = issues;
                   validation_ = result;
                   validating_ = false;
@@ -306,6 +318,21 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
                                const QString& description, bool also_set_sleeping,
                                bool export_all_project_npcs, bool standalone, const QString& standalone_name) {
   if (exporting_ || target_.form_key.empty()) return;
+  auto has_material = [](const auto& pieces) {
+    return std::any_of(pieces.begin(), pieces.end(), [](const auto& p) { return p.material.has_value(); });
+  };
+  bool material_pending = has_material(draft_.outfit().pieces());
+  if (!standalone && export_all_project_npcs && project_ && project_->npcs.size() > 1) {
+    for (const auto& edit : project_->npcs) {
+      if (edit.target.form_key != target_.form_key && edit.outfit && has_material(edit.outfit->pieces)) material_pending = true;
+    }
+  }
+  if (material_pending) {
+    emit exportFailed(tr("Hay variantes de material solo previsualizables. Restáuralas antes de exportar."),
+                      QVariantList{QVariantMap{{"severity", "error"}, {"code", "MaterialVariantPreviewOnly"},
+                                               {"message", tr("Faltan DDS generados y una asignación comprobada de formas NIF.")}}});
+    return;
+  }
   const auto output = QDir::toNativeSeparators(local_path(output_dir_or_url));
   const auto snap = snapshot_();
   if (snap && (is_inside(output, snap->config.overwrite_dir) || is_inside(output, snap->game.root))) {

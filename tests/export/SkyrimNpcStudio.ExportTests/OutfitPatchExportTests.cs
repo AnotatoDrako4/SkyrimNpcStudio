@@ -280,7 +280,7 @@ public sealed class OutfitPatchExportTests : IDisposable
     }
 
     [Fact]
-    public void Export_WithMaterialOverride_GeneratesTxstArmaAndArmo()
+    public void Export_WithUnverifiedMaterialOverride_IsRejectedBeforePackaging()
     {
         var request = new ExportOutfitPatchRequest
         {
@@ -306,27 +306,10 @@ public sealed class OutfitPatchExportTests : IDisposable
             ],
         };
 
-        var response = Export(request);
-        using var mod = ReadBack(response.PluginPath);
-
-        // Verify TXST was generated
-        var txst = Assert.Single(mod.TextureSets);
-        Assert.Equal("textures\\armor\\steel\\cuirass_recolor_d.dds", txst.Diffuse);
-        Assert.Equal("textures\\armor\\steel\\cuirass_n.dds", txst.NormalOrGloss);
-
-        // Verify ARMA was generated and references TXST
-        var arma = Assert.Single(mod.ArmorAddons);
-        Assert.NotNull(arma.WorldModel?.Female?.AlternateTextures);
-        Assert.Contains(arma.WorldModel.Female.AlternateTextures, at => at.NewTexture.FormKey == txst.FormKey);
-
-        // Verify ARMO was generated and references the new ARMA
-        var armo = Assert.Single(mod.Armors);
-        Assert.Contains(armo.Armature, a => a.FormKey == arma.FormKey);
-
-        // Verify OTFT contains the cloned ARMO instead of the original SteelCuirass
-        var outfit = Assert.Single(mod.Outfits);
-        Assert.Contains(outfit.Items!, item => item.FormKey == armo.FormKey);
-        Assert.DoesNotContain(outfit.Items!, item => item.FormKey == SyntheticLoadOrder.SteelCuirass);
+        var error = Assert.Throws<WorkerException>(() => Export(request));
+        Assert.Equal(ErrorCodes.ValidationFailed, error.Code);
+        Assert.Contains(error.Issues, issue => issue.Code == "MaterialVariantPreviewOnly");
+        Assert.False(File.Exists(Path.Combine(_out, request.PluginName)));
     }
 
     public void Dispose()

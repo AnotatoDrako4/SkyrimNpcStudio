@@ -6,10 +6,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPointer>
+#include <QSettings>
 #include <QUuid>
 #include <algorithm>
 #include <filesystem>
 
+#include "diagnostics/crash_diagnostics.hpp"
 #include "json_bridge.hpp"
 #include "outfit_editor.hpp"
 #include "resource_context.hpp"
@@ -47,11 +49,26 @@ std::filesystem::path fs_path(const QString& p) { return std::filesystem::path(p
 
 QString sha256_hex(const QByteArray& bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()).toUpper(); }
 
+// The two states differ in nothing but the hair color (HCLF): a FaceGen for one becomes the
+// FaceGen for the other by rewriting the HairTint shader color.
+bool only_hair_color_differs(const appearance::FaceState& a, const appearance::FaceState& b) {
+  if (a.values.hair_color == b.values.hair_color) return false;
+  auto x = a;
+  x.values.hair_color = b.values.hair_color;
+  return x == b;
+}
+
+QString color_text(const std::optional<face::Rgb8>& c) {
+  return c ? QColor(c->r, c->g, c->b).name() : QStringLiteral("(sin color)");
+}
+
 }  // namespace
 
 // One regeneration of the face: the state it was made from and the exact files it produced.
 struct AppearanceEditor::Build {
-  int serial = 0;
+  std::uint64_t task = 0;
+  std::string npc;
+  std::string kind;  // "full" or "hair-patch"
   appearance::FaceState state;
   face::FaceGenBuild facegen;
   std::shared_ptr<const std::string> nif;
@@ -62,12 +79,23 @@ struct AppearanceEditor::Build {
   qint64 elapsed_ms = 0;
 };
 
+namespace {
+
+int setting_ms(const char* key, int fallback) {
+  bool ok = false;
+  const int value = QSettings().value(QString::fromLatin1(key), fallback).toInt(&ok);
+  return ok ? std::clamp(value, 0, 5000) : fallback;
+}
+
+}  // namespace
+
 AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot,
                                    appearance::AppearanceDraft& draft, EditHistory* history, QObject* parent)
     : QObject(parent), worker_(worker), console_(console), outfit_(outfit), snapshot_(std::move(snapshot)), draft_(draft), history_(history) {
   pool_.setMaxThreadCount(1);
   build_timer_.setSingleShot(true);
-  build_timer_.setInterval(60);
+  // Pause after the last edit before the FaceGen is rebuilt (configurable: preview/faceBuildDebounceMs).
+  build_timer_.setInterval(setting_ms("preview/faceBuildDebounceMs", 60));
   connect(&build_timer_, &QTimer::timeout, this, &AppearanceEditor::start_build);
   // Any undo/redo (face or outfit): refresh, and follow head part changes with a new recipe.
   connect(history_, &EditHistory::changed, this, [this] {
@@ -82,8 +110,21 @@ AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, 
 }
 
 AppearanceEditor::~AppearanceEditor() {
-  ++build_serial_;
+  // Closing with a build or analysis in flight: ask them to stop, then wait. Their results are
+  // posted to this object and dropped with it; nothing runs on a destroyed editor.
+  build_timer_.stop();
+  cancel_jobs();
   pool_.waitForDone();
+}
+
+void AppearanceEditor::cancel_jobs() {
+  if (running_) {
+    running_->cancel->store(true);
+    diag::record("facegen", QStringLiteral("cancel #%1 (npc %2)").arg(running_->task).arg(qs(running_->npc)).toStdString());
+  }
+  running_.reset();
+  rebuild_pending_ = false;
+  if (analysis_cancel_) analysis_cancel_->store(true);
 }
 
 std::shared_ptr<ResourceContext> AppearanceEditor::context() const { return ResourceContext::for_snapshot(snapshot_()); }
@@ -91,7 +132,13 @@ std::shared_ptr<ResourceContext> AppearanceEditor::context() const { return Reso
 // ------------------------------------------------------------------------------------- target
 
 void AppearanceEditor::set_target(const projects::NpcTarget& target) {
+  // Work started for the previous NPC is cancelled; anything it still reports is discarded
+  // because it carries that NPC's FormKey (finish_build).
+  build_timer_.stop();
+  cancel_jobs();
   target_ = target;
+  diag::set_context("npc", target.form_key + " " + target.editor_id + " (" + target.name + ")");
+  diag::set_context("winningPlugin", target.winning_plugin);
   base_recipe_.reset();
   recipe_.reset();
   existing_facegen_.reset();
@@ -101,9 +148,9 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   recipe_issues_.clear();
   build_.reset();
   overlay_.reset();
+  ++geometry_revision_;
   facegen_report_.clear();
   load_error_.clear();
-  ++build_serial_;
   building_ = false;
   emit targetChanged();
   emit appearanceChanged();
@@ -112,12 +159,14 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
 }
 
 void AppearanceEditor::clear() {
+  build_timer_.stop();
+  cancel_jobs();
   target_ = {};
   base_recipe_.reset();
   recipe_.reset();
   build_.reset();
   overlay_.reset();
-  ++build_serial_;
+  ++geometry_revision_;
   ++recipe_serial_;
   loading_ = building_ = false;
   emit targetChanged();
@@ -140,7 +189,9 @@ std::optional<projects::FaceConfig> AppearanceEditor::face_config_for_project() 
 
 FacePreview AppearanceEditor::preview() const {
   FacePreview p;
+  p.geometry_revision = geometry_revision_;
   if (!draft_.face_loaded()) return p;
+  p.npc_form_key = target_.form_key;
   const auto& v = draft_.face().values;
   p.weight = v.weight;
   p.height = draft_.height();
@@ -224,7 +275,10 @@ void AppearanceEditor::analyse_existing_facegen() {
   recipe.morph_extensions = morph_extensions(*ctx);
   QPointer<AppearanceEditor> self(this);
   const int recipe_serial = recipe_serial_;
-  pool_.start([self, ctx, recipe, recipe_serial] {
+  if (analysis_cancel_) analysis_cancel_->store(true);
+  analysis_cancel_ = std::make_shared<std::atomic<bool>>(false);
+  const auto task = diag::next_task_id();
+  pool_.start([self, ctx, recipe, recipe_serial, task, cancel = analysis_cancel_] {
     struct Result {
       std::shared_ptr<const std::string> existing;
       bool tint = false;
@@ -233,7 +287,10 @@ void AppearanceEditor::analyse_existing_facegen() {
       QVariantList issues;
     };
     auto result = std::make_shared<Result>();
+    diag::Operation op("facegen.analyse", task, "npc " + recipe.npc_form_key);
+    if (cancel->load()) return;
     try {
+      op.stage("read existing FaceGen");
       if (auto bytes = ctx->resolver->read(recipe.facegen_mesh_path)) result->existing = std::make_shared<const std::string>(std::move(*bytes));
       result->tint = ctx->resolver->locate(recipe.facegen_tint_path).has_value();
       if (!result->existing) {
@@ -242,8 +299,12 @@ void AppearanceEditor::analyse_existing_facegen() {
         result->issues << QVariantMap{{"severity", "warning"}, {"code", "NoFaceGen"}, {"message", result->reason},
                                       {"subject", qs(recipe.facegen_mesh_path)}};
       } else {
+        op.stage("audit + regenerate for comparison");
         for (const auto& i : face::audit_facegen(face::inspect_facegen(*result->existing), recipe)) result->issues << issue_map(i);
-        const auto regen = face::build_facegen(recipe, *ctx->face_assets);
+        face::FaceGenBuildOptions options;
+        options.cancelled = [cancel] { return cancel->load(); };
+        const auto regen = face::build_facegen(recipe, *ctx->face_assets, options);
+        if (regen.cancelled) return;
         const auto cmp = face::compare_facegen(regen.nif, *result->existing);
         if (regen.exportable() && cmp.same_topology && cmp.max_distance < 0.05f) {
           result->reason = QObject::tr("El FaceGen actual coincide con el que el registro produce (desviación máxima %1 unidades): "
@@ -259,8 +320,10 @@ void AppearanceEditor::analyse_existing_facegen() {
         }
       }
     } catch (const std::exception& e) {
+      op.fail(e.what());
       result->issues << QVariantMap{{"severity", "warning"}, {"code", "FaceGenAnalysisFailed"}, {"message", qs(e.what())}};
     }
+    op.succeed();
     QMetaObject::invokeMethod(self, [self, result, recipe_serial] {
       if (!self || recipe_serial != self->recipe_serial_) return;
       self->existing_facegen_ = result->existing;
@@ -298,9 +361,17 @@ void AppearanceEditor::start_build() {
   if (!recipe_ || !draft_.face_loaded()) return;
   // The recipe must describe the draft's head parts before a build makes sense.
   if (draft_.face().head_parts != recipe_->npc_head_parts) return;
+  // One job at a time, latest wins: the running build is asked to stop and the newest draft is
+  // built as soon as it has returned (finish_build). The queue never grows with each edit.
+  if (running_) {
+    running_->cancel->store(true);
+    rebuild_pending_ = true;
+    return;
+  }
+  rebuild_pending_ = false;
   if (!draft_.is_face_dirty()) {
-    ++build_serial_;
     build_.reset();
+    if (overlay_) ++geometry_revision_;
     overlay_.reset();
     building_ = false;
     facegen_report_ = {{"status", "unchanged"}, {"mode", geometry_mode()}};
@@ -314,67 +385,137 @@ void AppearanceEditor::start_build() {
   auto recipe = *recipe_;
   recipe.values = state.values;
   recipe.morph_extensions = morph_extensions(*ctx);
+
+  // Hair color only, compared with the FaceGen already built: rewrite its HairTint color instead
+  // of rebuilding every head part (tens of milliseconds instead of a full regeneration).
+  std::shared_ptr<const Build> base;
+  if (build_ && build_->nif && build_->npc == target_.form_key && only_hair_color_differs(build_->state, state)) base = build_;
+
   face::FaceGenBuildOptions options;
-  if (state.geometry_mode == "preserve" && existing_facegen_) {
+  if (!base && state.geometry_mode == "preserve" && existing_facegen_) {
     options.mode = face::GeometryMode::PreserveExisting;
     options.existing_facegen = existing_facegen_;
     options.baseline = baseline.values;
   }
   const bool tint_changed = state.values.tints != baseline.values.tints || state.values.skin_tone != baseline.values.skin_tone ||
                             !has_existing_tint_;
-  const int serial = ++build_serial_;
+  Job job{diag::next_task_id(), target_.form_key, std::make_shared<std::atomic<bool>>(false)};
+  options.cancelled = [cancel = job.cancel] { return cancel->load(); };
+  running_ = job;
   building_ = true;
+  const auto kind = base ? std::string("hair-patch") : std::string("full");
+  diag::record("facegen", QStringLiteral("start #%1 %2 npc=%3 mode=%4 hair=%5")
+                              .arg(job.task).arg(qs(kind), qs(job.npc), qs(state.geometry_mode), color_text(state.values.hair_color))
+                              .toStdString());
   emit faceGenChanged();
   QPointer<AppearanceEditor> self(this);
-  pool_.start([self, ctx, recipe, options, state, tint_changed, serial] {
+  pool_.start([self, ctx, recipe, options, state, tint_changed, job, base, kind] {
     auto b = std::make_shared<Build>();
-    b->serial = serial;
+    b->task = job.task;
+    b->npc = job.npc;
+    b->kind = kind;
     b->state = state;
     QElapsedTimer timer;
     timer.start();
+    diag::Operation op("facegen." + kind, job.task, "npc " + job.npc);
     try {
-      b->facegen = face::build_facegen(recipe, *ctx->face_assets, options);
-      if (!b->facegen.nif.empty()) b->nif = std::make_shared<const std::string>(b->facegen.nif);
-      if (tint_changed) {
-        auto tint = face::compose_face_tint(recipe, *ctx->face_assets);
-        b->tint_layers = tint.layers;
-        b->tint_issues = tint.issues;
-        b->tint_rgba = std::make_shared<const textures::DdsImage>(std::move(tint.rgba));
-        b->tint_preview_dds = std::make_shared<const std::string>(textures::encode_dds(*b->tint_rgba, textures::TextureFormat::RGBA8, false));
+      if (job.cancel->load()) {
+        b->facegen.cancelled = true;
+      } else if (base) {
+        op.stage("nif: patch HairTint color");
+        auto patch = face::patch_hair_tint(*base->nif, recipe);
+        b->facegen.parts = base->facegen.parts;
+        for (const auto& i : base->facegen.issues) {
+          if (i.code != "HairTintUnsupported") b->facegen.issues.push_back(i);  // re-checked by the patch
+        }
+        b->facegen.issues.insert(b->facegen.issues.end(), patch.issues.begin(), patch.issues.end());
+        b->facegen.nif = std::move(patch.nif);
+        if (!b->facegen.nif.empty()) b->nif = std::make_shared<const std::string>(b->facegen.nif);
+        // The FaceTint does not depend on the hair color: the base build's files are reused as is.
+        b->tint_rgba = base->tint_rgba;
+        b->tint_preview_dds = base->tint_preview_dds;
+        b->tint_layers = base->tint_layers;
+        b->tint_issues = base->tint_issues;
+      } else {
+        op.stage("nif: build_facegen");
+        b->facegen = face::build_facegen(recipe, *ctx->face_assets, options);
+        if (!b->facegen.nif.empty()) b->nif = std::make_shared<const std::string>(b->facegen.nif);
+        if (tint_changed && !b->facegen.cancelled && !job.cancel->load()) {
+          op.stage("dds: compose FaceTint");
+          auto tint = face::compose_face_tint(recipe, *ctx->face_assets);
+          b->tint_layers = tint.layers;
+          b->tint_issues = tint.issues;
+          b->tint_rgba = std::make_shared<const textures::DdsImage>(std::move(tint.rgba));
+          op.stage("dds: encode preview");
+          b->tint_preview_dds = std::make_shared<const std::string>(textures::encode_dds(*b->tint_rgba, textures::TextureFormat::RGBA8, false));
+        }
       }
+      if (job.cancel->load()) b->facegen.cancelled = true;
+      op.succeed();
     } catch (const std::exception& e) {
+      // A build that throws is reported as an issue; nothing half-built is installed.
+      op.fail(e.what());
+      b->nif.reset();
+      b->facegen.nif.clear();
       b->facegen.issues.push_back({"error", "FaceGenBuildFailed", e.what(), recipe.npc_form_key});
     }
     b->elapsed_ms = timer.elapsed();
-    QMetaObject::invokeMethod(self, [self, b, recipe] {
-      if (!self || b->serial != self->build_serial_) return;
-      self->building_ = false;
-      self->build_ = b;
-      auto overlay = std::make_shared<rendering::AssetOverlay>();
-      if (b->nif) (*overlay)[text::data_path_key(recipe.facegen_mesh_path)] = b->nif;
-      if (b->tint_preview_dds) (*overlay)[text::data_path_key(recipe.facegen_tint_path)] = b->tint_preview_dds;
-      self->overlay_ = overlay->empty() ? nullptr : std::shared_ptr<const rendering::AssetOverlay>(overlay);
-      QVariantList parts;
-      for (const auto& p : b->facegen.parts) {
-        QStringList applied, missing;
-        for (const auto& a : p.applied) applied << qs(a);
-        for (const auto& m : p.missing) missing << qs(m);
-        parts << QVariantMap{{"editorId", qs(p.editor_id)}, {"model", qs(p.model)}, {"status", qs(p.status)},
-                             {"source", qs(p.geometry_source)}, {"vertices", static_cast<qlonglong>(p.vertex_count)},
-                             {"applied", applied}, {"missing", missing}};
-      }
-      QStringList layers;
-      for (const auto& l : b->tint_layers) layers << qs(l);
-      self->facegen_report_ = {{"status", b->facegen.exportable() ? "built" : "failed"},
-                               {"mode", qs(b->state.geometry_mode)},
-                               {"parts", parts},
-                               {"elapsedMs", b->elapsed_ms},
-                               {"nifBytes", b->nif ? static_cast<qlonglong>(b->nif->size()) : 0},
-                               {"tintRegenerated", b->tint_rgba != nullptr},
-                               {"tintLayers", layers}};
-      emit self->faceGenChanged();
+    QMetaObject::invokeMethod(self, [self, b] {
+      if (self) self->finish_build(b);
     }, Qt::QueuedConnection);
   });
+}
+
+void AppearanceEditor::finish_build(const std::shared_ptr<Build>& b) {
+  if (running_ && running_->task == b->task) running_.reset();
+  const bool same_npc = b->npc == target_.form_key;
+  const bool current = same_npc && recipe_ && !b->facegen.cancelled && draft_.face_loaded() && b->state == draft_.face();
+  if (current) {
+    const bool geometry_changed = !build_ || b->kind != "hair-patch";
+    build_ = b;
+    auto overlay = std::make_shared<rendering::AssetOverlay>();
+    if (b->nif) (*overlay)[text::data_path_key(recipe_->facegen_mesh_path)] = b->nif;
+    if (b->tint_preview_dds) (*overlay)[text::data_path_key(recipe_->facegen_tint_path)] = b->tint_preview_dds;
+    overlay_ = overlay->empty() ? nullptr : std::shared_ptr<const rendering::AssetOverlay>(overlay);
+    if (geometry_changed) ++geometry_revision_;
+    QVariantList parts;
+    for (const auto& p : b->facegen.parts) {
+      QStringList applied, missing;
+      for (const auto& a : p.applied) applied << qs(a);
+      for (const auto& m : p.missing) missing << qs(m);
+      parts << QVariantMap{{"editorId", qs(p.editor_id)}, {"model", qs(p.model)}, {"status", qs(p.status)},
+                           {"source", qs(p.geometry_source)}, {"vertices", static_cast<qlonglong>(p.vertex_count)},
+                           {"applied", applied}, {"missing", missing}};
+    }
+    QStringList layers;
+    for (const auto& l : b->tint_layers) layers << qs(l);
+    facegen_report_ = {{"status", b->facegen.exportable() ? "built" : "failed"},
+                       {"kind", qs(b->kind)},
+                       {"mode", qs(b->state.geometry_mode)},
+                       {"parts", parts},
+                       {"elapsedMs", b->elapsed_ms},
+                       {"nifBytes", b->nif ? static_cast<qlonglong>(b->nif->size()) : 0},
+                       {"tintRegenerated", b->tint_rgba != nullptr},
+                       {"tintLayers", layers}};
+    diag::record("facegen", QStringLiteral("installed #%1 %2 (%3 ms, %4)")
+                                .arg(b->task).arg(qs(b->kind)).arg(b->elapsed_ms)
+                                .arg(b->facegen.exportable() ? "exportable" : "not exportable")
+                                .toStdString());
+  } else {
+    diag::record("facegen", QStringLiteral("discarded #%1 %2: %3")
+                                .arg(b->task).arg(qs(b->kind))
+                                .arg(!same_npc ? "another NPC is selected" : b->facegen.cancelled ? "cancelled" : "the draft changed")
+                                .toStdString());
+  }
+  building_ = false;
+  // The draft moved on while this job ran (or it was superseded): build the newest state.
+  const bool stale = same_npc && draft_.face_loaded() && draft_.is_face_dirty() && (!build_ || !(build_->state == draft_.face()));
+  if (!running_ && (rebuild_pending_ || stale)) {
+    rebuild_pending_ = false;
+    start_build();
+    return;
+  }
+  emit faceGenChanged();
 }
 
 // ------------------------------------------------------------------------------------- getters
@@ -509,7 +650,7 @@ QVariantList AppearanceEditor::issues() const {
 bool AppearanceEditor::exportable() const {
   if (!draft_.face_loaded() || building_) return false;
   if (!draft_.is_face_dirty()) return true;
-  return build_ && build_->serial == build_serial_ && build_->state == draft_.face() && build_->facegen.exportable();
+  return !running_ && build_ && build_->npc == target_.form_key && build_->state == draft_.face() && build_->facegen.exportable();
 }
 
 // ------------------------------------------------------------------------------------- edits
@@ -520,6 +661,7 @@ void AppearanceEditor::edit(appearance::FaceState next, const QString& descripti
     return;
   }
   if (next == draft_.face()) return;
+  diag::record("appearance", QStringLiteral("edit '%1' npc=%2").arg(description, qs(target_.form_key)).toStdString());
   history_->push(appearance::make_set_face(draft_, std::move(next), ss(description), ss(merge_key)));
 }
 
@@ -543,6 +685,10 @@ void AppearanceEditor::setHairColor(const QColor& color) {
   auto next = draft_.face();
   if (color.isValid()) next.values.hair_color = rgb8(color);
   else next.values.hair_color.reset();
+  diag::record("appearance", QStringLiteral("setHairColor npc=%1 (%2, winner %3) %4 -> %5")
+                                 .arg(qs(target_.form_key), qs(target_.name), qs(target_.winning_plugin),
+                                      color_text(draft_.face().values.hair_color), color_text(next.values.hair_color))
+                                 .toStdString());
   edit(std::move(next), tr("Cambiar color de cabello"), "hairColor");
 }
 
@@ -622,8 +768,14 @@ void AppearanceEditor::resetFace() {
   edit(draft_.face_baseline(), tr("Restablecer el rostro del registro"));
 }
 
-void AppearanceEditor::undo() { history_->undo(); }
-void AppearanceEditor::redo() { history_->redo(); }
+void AppearanceEditor::undo() {
+  diag::record("appearance", ("undo '" + history_->undo_text() + "'").toStdString());
+  history_->undo();
+}
+void AppearanceEditor::redo() {
+  diag::record("appearance", ("redo '" + history_->redo_text() + "'").toStdString());
+  history_->redo();
+}
 
 // ------------------------------------------------------------------------------------- donors and presets
 
@@ -798,6 +950,7 @@ void AppearanceEditor::exportCompleteOverhaul(const QString& pluginName, const Q
 }
 
 void AppearanceEditor::finish_export(bool ok, const QString& message, const QString& mod_dir, const QString& zip, const QVariantMap& extra) {
+  diag::record("export", QStringLiteral("%1: %2").arg(ok ? "done" : "FAILED", message).toStdString());
   exporting_ = false;
   last_export_ = extra;
   last_export_["success"] = ok;
@@ -814,6 +967,12 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   const bool face_edit = draft_.is_face_dirty();
   const bool body_edit = draft_.is_height_dirty();
   const bool outfit_edit = complete && outfit_ && !outfit_->current_pieces().empty();
+  if (outfit_edit && std::any_of(outfit_->current_pieces().begin(), outfit_->current_pieces().end(),
+                                 [](const auto& p) { return p.material.has_value(); })) {
+    emit exportFinished(false, tr("El atuendo contiene una variante de material solo previsualizable. "
+                                  "Restáurala antes de exportar el mod completo."), {}, {});
+    return;
+  }
   if (!face_edit && !body_edit && !outfit_edit) {
     emit exportFinished(false, tr("No hay cambios que exportar."), {}, {});
     return;
@@ -827,6 +986,9 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
+  diag::record("export", QStringLiteral("%1 npc=%2 plugin=%3 face=%4 height=%5 outfit=%6 -> %7")
+                             .arg(complete ? "complete overhaul" : "face overhaul", qs(target_.form_key), plugin_name)
+                             .arg(face_edit).arg(body_edit).arg(outfit_edit).arg(output).toStdString());
 
   // Stage the regenerated files (the exact preview bytes; the tint re-encoded to BC3 like vanilla).
   const auto stage = QDir(QDir::tempPath()).filePath("sns-generated-" + QUuid::createUuid().toString(QUuid::WithoutBraces));

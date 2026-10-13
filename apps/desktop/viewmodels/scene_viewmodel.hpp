@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QObject>
 #include <QTimer>
 #include <QVector3D>
@@ -7,9 +8,11 @@
 #include <QtQuick3D/QQuick3DGeometry>
 #include <QtQuick3D/QQuick3DTextureData>
 #include <QtQml/qqmlregistration.h>
+#include <atomic>
 #include <memory>
 #include <optional>
 
+#include "appearance_editor.hpp"
 #include "json_bridge.hpp"
 #include "mo2_snapshot.hpp"
 #include "outfit_editor.hpp"
@@ -39,6 +42,11 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QString previewMode READ preview_mode NOTIFY previewModeChanged)
   Q_PROPERTY(QString selectedArmor READ selected_armor NOTIFY previewModeChanged)
   Q_PROPERTY(QString pose READ pose WRITE setPose NOTIFY poseChanged)
+  // Color of the HairTint parts (hair, brows, beards). A hair color edit changes only this: the
+  // materials recolor at once, without rebuilding the scene or touching GPU buffers.
+  Q_PROPERTY(QColor hairTint READ hair_tint NOTIFY hairTintChanged)
+  // A viewport that is not on screen does not rebuild on every edit; it catches up when shown.
+  Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged)
  public:
   SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, AppearanceEditor* appearance, std::function<SnapshotPtr()> snapshot, QObject* parent,
                  bool armor_preview = false);
@@ -57,8 +65,11 @@ class SceneViewModel : public QObject {
   QString preview_mode() const { return preview_mode_; }
   QString selected_armor() const { return selected_armor_; }
   QString pose() const { return pose_; }
+  QColor hair_tint() const { return hair_tint_; }
+  bool active() const { return active_; }
   void setPose(const QString& pose);
   void setOriginal(bool value);
+  void setActive(bool active);
   Q_INVOKABLE void reload();
   Q_INVOKABLE void cancel();
   Q_INVOKABLE void select(const QString& id);
@@ -82,10 +93,24 @@ class SceneViewModel : public QObject {
   void originalChanged();
   void previewModeChanged();
   void poseChanged();
+  void hairTintChanged();
+  void activeChanged();
   void ready();
  private:
-  void install(const rendering::CharacterScene& scene);
+  struct Prepared;
+  struct PooledTexture {
+    QQuick3DTextureData* gpu = nullptr;
+    // Keeps the decoded image alive while its GPU copy is pooled: the pool key uses the image's
+    // address, which therefore cannot be reused by another image in the meantime.
+    std::shared_ptr<const textures::DdsImage> source;
+  };
+  void install(Prepared& prepared);
   void schedule(int delay_ms);
+  void on_face_changed();
+  void sync_hair_tint();
+  QString effective_npc() const;
+  // The face draft's preview when it belongs to the NPC this viewport shows; empty otherwise.
+  FacePreview current_preview() const;
   WorkerClient* worker_;
   OutfitEditor* outfit_;
   AppearanceEditor* appearance_ = nullptr;
@@ -95,9 +120,12 @@ class SceneViewModel : public QObject {
   std::shared_ptr<std::atomic<bool>> cancel_;
   WorkerClient::CancelToken request_cancel_;
   int serial_ = 0;
+  int reload_delay_ms_ = 200;
   bool loading_ = false;
   bool original_ = false;
   bool armor_preview_ = false;
+  bool active_ = true;
+  bool stale_ = false;
   QString preview_mode_ = "piece";
   QString selected_armor_;
   QString pose_ = "reference";
@@ -115,9 +143,15 @@ class SceneViewModel : public QObject {
   // round trip (the outfit, which is what the worker resolves, did not change).
   Json last_appearance_;
   QString last_request_key_;
+  // What the installed scene was built from.
+  bool installed_ = false;
+  QString installed_npc_;
+  FacePreview installed_preview_;
+  QColor record_hair_;
+  QColor hair_tint_ = QColor(Qt::white);
   // GPU-side objects reused across builds when a part's data did not change.
   QObject* pool_owner_ = nullptr;
   QHash<QString, QQuick3DGeometry*> geometry_pool_, uv_pool_;
-  QHash<QString, QQuick3DTextureData*> texture_pool_;
+  QHash<QString, PooledTexture> texture_pool_;
 };
 } // namespace sns::app

@@ -1,14 +1,31 @@
 #include <QCommandLineParser>
+#include <QDateTime>
 #include <QDir>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QStandardPaths>
 #include <QTimer>
 #include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <stdexcept>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#include "diagnostics/crash_diagnostics.hpp"
 #include "viewmodels/studio_controller.hpp"
+#include "components/appearance_stress.hpp"
 #include "components/viewport_verifier.hpp"
 
 namespace {
@@ -39,6 +56,57 @@ QPalette dark_palette() {
   return p;
 }
 
+// Qt warnings and errors (QML binding errors included) go to the session log too, so a crash
+// report shows what the UI was complaining about. Repeated lines are folded into a count.
+QtMessageHandler g_previous_handler = nullptr;
+void message_handler(QtMsgType type, const QMessageLogContext& context, const QString& message) {
+  if (type != QtDebugMsg && type != QtInfoMsg) {
+    static std::mutex mutex;
+    static QString last;
+    static int repeats = 0;
+    std::lock_guard lock(mutex);
+    if (message == last) {
+      ++repeats;
+    } else {
+      if (repeats > 0) sns::app::diag::record("qt", QStringLiteral("(previous message repeated %1 more times)").arg(repeats).toStdString());
+      last = message;
+      repeats = 0;
+      const char* level = type == QtWarningMsg ? "warning" : type == QtCriticalMsg ? "critical" : "fatal";
+      sns::app::diag::record("qt", (QString::fromLatin1(level) + ": " + message).toStdString());
+    }
+  }
+  if (g_previous_handler) g_previous_handler(type, context, message);
+}
+
+// Deliberate failures with an operation in progress, as a FaceGen build would have, so the test can
+// check every part of the report. No Windows error dialog: the test runs unattended.
+int crash_selftest(const QString& kind) {
+#ifdef _WIN32
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+  _set_abort_behavior(0, _WRITE_ABORT_MSG);  // no "abort() has been called" box in Debug builds
+#endif
+  sns::app::diag::set_context("npc", "0A2C8E:Skyrim.esm HousecarlWhiterun (Lydia) [selftest]");
+  sns::app::diag::record("appearance", "setHairColor npc=0A2C8E:Skyrim.esm #302321 -> #a53a1e [selftest]");
+  sns::app::diag::Operation op("facegen.full", sns::app::diag::next_task_id(), "selftest");
+  op.stage("nif: build_facegen");
+  if (kind == "access-violation") {
+#ifdef _WIN32
+    RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+#endif
+  } else if (kind == "terminate") {
+    // std::terminate while an exception is in flight, as for an exception escaping a worker task.
+    try {
+      throw std::runtime_error("selftest: exception nobody catches");
+    } catch (...) {
+      std::terminate();
+    }
+  } else if (kind == "abort") {
+    std::abort();
+  }
+  std::fprintf(stderr, "unknown crash-selftest kind\n");
+  return 2;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -47,6 +115,21 @@ int main(int argc, char* argv[]) {
   QGuiApplication::setApplicationName("SkyrimNpcStudio");
   QGuiApplication::setApplicationDisplayName("Skyrim NPC Studio");
   QGuiApplication::setApplicationVersion(SNS_VERSION);
+
+  // Crash diagnostics first: everything after this point is covered by the session log and the
+  // crash handler (minidump + report in %LOCALAPPDATA%\SkyrimNpcStudio\SkyrimNpcStudio\diagnostics,
+  // or SNS_DIAGNOSTICS_DIR).
+  const auto diagnostics_dir = qEnvironmentVariableIsSet("SNS_DIAGNOSTICS_DIR")
+                                   ? qEnvironmentVariable("SNS_DIAGNOSTICS_DIR")
+                                   : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/diagnostics";
+  const auto previous_crash = sns::app::diag::install(diagnostics_dir.toStdWString());
+  sns::app::diag::record("studio", "Skyrim NPC Studio " SNS_VERSION ", Qt " QT_VERSION_STR);
+  g_previous_handler = qInstallMessageHandler(&message_handler);
+  // Destroyed last (after the QML engine and the studio): only a complete, normal exit marks the
+  // session log as cleanly closed.
+  struct CleanExit {
+    ~CleanExit() { sns::app::diag::shutdown(); }
+  } clean_exit;
   QQuickStyle::setStyle("Fusion");
   QGuiApplication::setPalette(dark_palette());
 
@@ -62,12 +145,29 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption smoke_opt("smoke-test", "Load, print a summary to stderr and quit (exit code 0 on success).");
   const QCommandLineOption verify_opt("verify-viewport", "Verify real rendered pixels, picking, inspector, camera, visibility, UV, diagnostics and compact layout.");
   const QCommandLineOption capture_opt("capture-set", "Save five fixed-camera captures (face, hair, body, armor, outfit) with pixel metrics.", "directory");
-  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, smoke_opt, verify_opt, capture_opt});
+  const QCommandLineOption stress_opt("stress-appearance",
+                                      "Run Character Creator regression scenarios on the selected NPC (comma separated, or 'all').",
+                                      "scenarios");
+  const QCommandLineOption second_npc_opt("second-npc", "Second NPC for the switch-npc stress scenario.", "formKey",
+                                          "013BB8:Skyrim.esm");
+  const QCommandLineOption stress_work_opt("stress-work", "Folder for the files the stress scenarios export (default out/stress-work).",
+                                           "directory", QDir::current().filePath("out/stress-work"));
+  const QCommandLineOption crash_opt("crash-selftest",
+                                     "Crash on purpose (access-violation, terminate, abort) to check that the crash report and "
+                                     "minidump are written. For tests only.",
+                                     "kind");
+  cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
+                  second_npc_opt, stress_work_opt, crash_opt});
   cli.process(app);
+  if (cli.isSet(crash_opt)) return crash_selftest(cli.value(crash_opt));
 
   // The worker is published next to the executable by the build (bin/worker/).
   const auto worker = QDir(QCoreApplication::applicationDirPath()).filePath("worker/SkyrimNpcStudio.BethesdaWorker.exe");
   sns::app::StudioController studio(worker);
+  if (!previous_crash.empty()) {
+    studio.log("warning", QObject::tr("La sesión anterior se cerró de forma inesperada. Registro: %1 (informes en %2/crashes)")
+                              .arg(QString::fromStdWString(previous_crash.native()), diagnostics_dir));
+  }
 
   QQmlApplicationEngine engine;
   engine.setInitialProperties({{"studio", QVariant::fromValue(&studio)}});
@@ -77,7 +177,8 @@ int main(int argc, char* argv[]) {
   if (engine.rootObjects().isEmpty()) return 1;
 
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
-  const bool automated = cli.isSet(shot_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt);
+  const bool automated = cli.isSet(shot_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
+                         cli.isSet(stress_opt);
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
@@ -122,10 +223,23 @@ int main(int argc, char* argv[]) {
       QTimer::singleShot(2500, &app, [&] {
         if (studio.scene()->parts().isEmpty()) { finish(5); return; }
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
-        const auto then_capture = [&, window](bool valid) {
+        const auto then_stress = [&, window] {
+          if (!cli.isSet(stress_opt)) { finish(0); return; }
+          auto scenarios = cli.value(stress_opt).split(',', Qt::SkipEmptyParts);
+          if (scenarios == QStringList{"all"}) scenarios = sns::app::appearance_stress_scenarios();
+          // One folder per run: exports and the saved project never mix with an earlier run.
+          const auto work = QDir(cli.value(stress_work_opt)).filePath(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
+          QDir().mkpath(work);
+          sns::app::run_appearance_stress(window, &studio, scenarios, cli.value(second_npc_opt), work,
+                                          [&](bool ok) { finish(ok ? 0 : 8); });
+        };
+        const auto then_capture = [&, window, then_stress](bool valid) {
           if (!valid) { finish(6); return; }
-          if (!cli.isSet(capture_opt)) { finish(0); return; }
-          sns::app::capture_set(window, studio.scene(), cli.value(capture_opt), [&](bool ok) { finish(ok ? 0 : 7); });
+          if (!cli.isSet(capture_opt)) { then_stress(); return; }
+          sns::app::capture_set(window, studio.scene(), cli.value(capture_opt), [&, then_stress](bool ok) {
+            if (!ok) { finish(7); return; }
+            then_stress();
+          });
         };
         if (cli.isSet(verify_opt)) sns::app::verify_viewport(window, studio.scene(), cli.value(shot_opt), then_capture);
         else then_capture(true);

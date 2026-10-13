@@ -7,185 +7,250 @@ import SkyrimNpcStudio
 Item {
     id: root
     required property CharacterForgeViewModel forge
-
+    property string toolWithoutProject: "project"
+    readonly property string currentTool: forge.hasProject ? forge.workspace.tool || "project" : toolWithoutProject
+    function save() {
+        if (forge.projectPath.length)
+            forge.saveProject(forge.projectPath);
+        else
+            saveDialog.open();
+    }
     FolderDialog {
-        id: openForgeDialog
-        title: qsTr("Selecciona una carpeta de proyecto .sncf")
+        id: openDialog
+        title: qsTr("Selecciona un proyecto .sncf")
         onAccepted: root.forge.openProject(selectedFolder.toString())
     }
     FolderDialog {
-        id: saveForgeDialog
-        title: qsTr("Selecciona donde guardar el proyecto .sncf")
+        id: saveDialog
+        title: qsTr("Guardar proyecto .sncf")
         onAccepted: root.forge.saveProject(selectedFolder.toString())
     }
-
-    SplitView {
+    ColumnLayout {
         anchors.fill: parent
-        orientation: Qt.Horizontal
-
-        Rectangle {
-            SplitView.preferredWidth: 290
-            SplitView.minimumWidth: 235
-            color: Theme.panel
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
-                Text { text: qsTr("CHARACTER FORGE"); color: Theme.text; font.pixelSize: Theme.title; font.bold: true }
-                Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Crea personajes originales. Este espacio es independiente del editor de NPC y de los atuendos.")
-                    color: Theme.textDim
-                    wrapMode: Text.WordWrap
-                }
-                Button {
-                    text: qsTr("Nuevo proyecto")
-                    Layout.fillWidth: true
-                    onClicked: root.forge.newProject(qsTr("Nuevo personaje"))
-                }
-                Button {
-                    text: qsTr("Abrir proyecto .sncf")
-                    Layout.fillWidth: true
-                    onClicked: openForgeDialog.open()
-                }
-                Button {
-                    text: qsTr("Guardar proyecto")
-                    Layout.fillWidth: true
-                    enabled: root.forge.hasProject
-                    onClicked: root.forge.projectPath.length > 0
-                               ? root.forge.saveProject(root.forge.projectPath)
-                               : saveForgeDialog.open()
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Button {
-                        text: qsTr("Deshacer")
-                        Layout.fillWidth: true
-                        enabled: root.forge.canUndo
-                        onClicked: root.forge.undo()
-                    }
-                    Button {
-                        text: qsTr("Rehacer")
-                        Layout.fillWidth: true
-                        enabled: root.forge.canRedo
-                        onClicked: root.forge.redo()
-                    }
-                }
-                Rectangle { height: 1; Layout.fillWidth: true; color: Theme.borderSubtle }
-                Text { text: qsTr("Próximas etapas"); color: Theme.text; font.bold: true }
-                Text {
-                    Layout.fillWidth: true
-                    text: qsTr("NPC nuevo: Fase 2\nBlender y MCP: Fase 3\nModelos externos: Fase 4\nGeneración IA: Fase 6")
-                    color: Theme.textDim
-                    wrapMode: Text.WordWrap
-                }
-                Item { Layout.fillHeight: true }
-            }
+        spacing: 1
+        ForgeToolbar {
+            Layout.fillWidth: true
+            forge: root.forge
+            onOpenRequested: openDialog.open()
+            onSaveRequested: root.save()
         }
-
-        Rectangle {
-            SplitView.fillWidth: true
-            SplitView.minimumWidth: 330
-            color: Theme.surface
-            ColumnLayout {
-                anchors.centerIn: parent
-                width: Math.min(parent.width - 40, 520)
-                spacing: 16
-                Text {
-                    Layout.fillWidth: true
-                    text: root.forge.hasProject ? qsTr("Proyecto de creación preparado") : qsTr("Character Forge Studio")
-                    color: Theme.text
-                    font.pixelSize: Theme.heading
-                    font.bold: true
-                    horizontalAlignment: Text.AlignHCenter
-                }
-                Text {
-                    Layout.fillWidth: true
-                    text: root.forge.hasProject
-                          ? qsTr("Puedes editar la identidad, deshacer cambios y guardar el proyecto .sncf. La creación 3D y la exportación de NPC nuevos se incorporarán en fases posteriores.")
-                          : qsTr("Crea un proyecto vacío o abre un .sncf. No necesitas seleccionar un NPC existente.")
-                    wrapMode: Text.WordWrap
-                    horizontalAlignment: Text.AlignHCenter
-                    color: Theme.textDim
-                }
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: 55
-                    radius: Theme.radiusLarge
-                    color: Theme.panel
-                    border.color: Theme.border
-                    Text {
-                        anchors.centerIn: parent
-                        text: qsTr("Visor 3D de modelos importados — Fase 4")
-                        color: Theme.textMuted
+        SplitView {
+            id: panels
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Horizontal
+            Rectangle {
+                SplitView.preferredWidth: panels.width * 0.20
+                SplitView.minimumWidth: 210
+                color: Theme.panel
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    contentWidth: availableWidth
+                    ForgeNavigation {
+                        width: parent.width
+                        forge: root.forge
+                        currentTool: root.currentTool
+                        onToolSelected: tool => {
+                            if (!root.forge.hasProject)
+                                root.toolWithoutProject = tool;
+                        }
                     }
                 }
             }
-        }
-
-        Rectangle {
-            SplitView.preferredWidth: 300
-            SplitView.minimumWidth: 250
-            color: Theme.panel
-            ScrollView {
-                anchors.fill: parent
-                anchors.margins: 14
-                contentWidth: availableWidth
+            ForgeViewport {
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 380
+                forge: root.forge
+            }
+            Rectangle {
+                SplitView.preferredWidth: panels.width * 0.25
+                SplitView.minimumWidth: 280
+                color: Theme.panel
                 ColumnLayout {
-                    width: parent.width
-                    spacing: 12
-                    Text { text: qsTr("Propiedades del proyecto"); color: Theme.text; font.bold: true; font.pixelSize: Theme.large }
-                    Text { text: qsTr("Nombre del proyecto"); color: Theme.textDim }
-                    TextField {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+                    ScrollView {
                         Layout.fillWidth: true
-                        enabled: root.forge.hasProject
-                        text: root.forge.projectName
-                        onEditingFinished: root.forge.setProjectName(text)
-                    }
-                    Text { text: qsTr("Nombre del personaje"); color: Theme.textDim }
-                    TextField {
-                        Layout.fillWidth: true
-                        enabled: root.forge.hasProject
-                        text: root.forge.characterName
-                        onEditingFinished: root.forge.setCharacterName(text)
-                    }
-                    Text { text: qsTr("EditorID (borrador)"); color: Theme.textDim }
-                    TextField {
-                        Layout.fillWidth: true
-                        enabled: root.forge.hasProject
-                        text: root.forge.editorId
-                        placeholderText: "SNS_MiPersonaje"
-                        onEditingFinished: root.forge.setEditorId(text)
-                    }
-                    Text { text: qsTr("Descripción"); color: Theme.textDim }
-                    TextField {
-                        Layout.fillWidth: true
-                        enabled: root.forge.hasProject
-                        text: root.forge.description
-                        onEditingFinished: root.forge.setDescription(text)
+                        Layout.fillHeight: true
+                        contentWidth: availableWidth
+                        Loader {
+                            id: contextPanel
+                            width: parent.width
+                            sourceComponent: {
+                                switch (root.currentTool) {
+                                case "native":
+                                    return nativePanel;
+                                case "import":
+                                    return importPanel;
+                                case "library":
+                                    return libraryPanel;
+                                case "blender":
+                                    return blenderPanel;
+                                case "ai":
+                                    return aiPanel;
+                                case "outfit":
+                                    return outfitPanel;
+                                case "skeleton":
+                                    return skeletonPanel;
+                                case "materials":
+                                    return materialsPanel;
+                                case "validation":
+                                    return validationPanel;
+                                case "export":
+                                    return exportPanel;
+                                default:
+                                    return projectPanel;
+                                }
+                            }
+                        }
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: root.forge.projectPath.length > 0 ? root.forge.projectPath : qsTr("Sin guardar")
-                        color: Theme.textMuted
-                        wrapMode: Text.WrapAnywhere
-                    }
-                    Text {
-                        visible: root.forge.lastError.length > 0
-                        Layout.fillWidth: true
+                        visible: root.forge.lastError.length > 0 && root.currentTool !== "export"
                         text: root.forge.lastError
-                        color: Theme.error
+                        color: Theme.warn
                         wrapMode: Text.WordWrap
                     }
-                    Rectangle { height: 1; Layout.fillWidth: true; color: Theme.borderSubtle }
-                    Text {
+                    CheckBox {
+                        id: advanced
+                        text: qsTr("Inspector avanzado")
+                    }
+                    ScrollView {
+                        visible: advanced.checked
                         Layout.fillWidth: true
-                        text: qsTr("Exportar un NPC nuevo se habilitará cuando el worker pueda escribir y verificar registros NPC_ y FaceGen reales (Fase 2).")
-                        color: Theme.textDim
-                        wrapMode: Text.WordWrap
+                        Layout.preferredHeight: 220
+                        contentWidth: availableWidth
+                        ForgeAdvancedInspector {
+                            width: parent.width
+                            forge: root.forge
+                        }
                     }
                 }
             }
+        }
+    }
+    Component {
+        id: projectPanel
+        ColumnLayout {
+            Text {
+                text: qsTr("Proyecto de creación")
+                color: Theme.text
+                font.pixelSize: Theme.title
+                font.bold: true
+            }
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("Crea y guarda un personaje original. El proyecto, sus archivos de referencia y su historial son independientes de los otros workspaces.")
+                color: Theme.textDim
+                wrapMode: Text.WordWrap
+            }
+            TextField {
+                Layout.fillWidth: true
+                text: root.forge.projectName
+                placeholderText: qsTr("Nombre del proyecto")
+                enabled: root.forge.hasProject && !root.forge.busy
+                onEditingFinished: root.forge.setProjectName(text)
+            }
+            TextArea {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 100
+                text: root.forge.description
+                placeholderText: qsTr("Descripción interna")
+                wrapMode: TextEdit.WordWrap
+                enabled: root.forge.hasProject && !root.forge.busy
+                onTextChanged: if (activeFocus)
+                    root.forge.setDescription(text)
+            }
+            Button {
+                Layout.fillWidth: true
+                text: qsTr("Crear NPC")
+                enabled: root.forge.hasProject
+                onClicked: {
+                    root.currentTool = "native";
+                    root.forge.setWorkspaceValue("tool", "native");
+                }
+            }
+            Button {
+                Layout.fillWidth: true
+                text: qsTr("Guardar proyecto")
+                enabled: root.forge.hasProject && !root.forge.busy
+                onClicked: root.save()
+            }
+            Text {
+                Layout.fillWidth: true
+                text: root.forge.projectPath || qsTr("Sin guardar")
+                color: Theme.textMuted
+                wrapMode: Text.WrapAnywhere
+            }
+            Text {
+                Layout.fillWidth: true
+                text: root.forge.catalogReady ? qsTr("Perfil indexado disponible") : qsTr("Carga un perfil MO2 para elegir registros reales. Puedes preparar y guardar el resto del proyecto ahora.")
+                color: Theme.textDim
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+    Component {
+        id: nativePanel
+        NativeNpcEditor {
+            forge: root.forge
+            implicitHeight: 680
+        }
+    }
+    Component {
+        id: importPanel
+        ModelImporter {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: libraryPanel
+        ForgeModelLibrary {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: blenderPanel
+        BlenderConnectionPanel {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: aiPanel
+        AIGenerationPanel {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: outfitPanel
+        ForgeOutfitEditor {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: skeletonPanel
+        SkeletonEditor {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: materialsPanel
+        MaterialsEditor {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: validationPanel
+        ForgeValidationPanel {
+            forge: root.forge
+        }
+    }
+    Component {
+        id: exportPanel
+        ForgeExportWizard {
+            forge: root.forge
         }
     }
 }

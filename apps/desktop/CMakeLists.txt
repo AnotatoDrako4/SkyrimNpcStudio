@@ -4,6 +4,8 @@ qt_standard_project_setup(REQUIRES 6.11)
 qt_add_executable(SkyrimNpcStudio WIN32
   main.cpp
   components/viewport_verifier.cpp components/viewport_verifier.hpp
+  components/appearance_stress.cpp components/appearance_stress.hpp
+  diagnostics/crash_diagnostics.cpp diagnostics/crash_diagnostics.hpp
   viewmodels/json_bridge.hpp
   viewmodels/mo2_snapshot.hpp
   viewmodels/console_model.cpp viewmodels/console_model.hpp
@@ -48,7 +50,29 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/CharacterCreator.qml
+    qml/characterforge/AIGenerationPanel.qml
+    qml/characterforge/AppearanceEditor.qml
+    qml/characterforge/BlenderConnectionPanel.qml
+    qml/characterforge/BlenderOperations.qml
     qml/characterforge/CharacterForge.qml
+    qml/characterforge/CharacterInventory.qml
+    qml/characterforge/CharacterProperties.qml
+    qml/characterforge/ForgeAdvancedInspector.qml
+    qml/characterforge/ForgeEditorSection.qml
+    qml/characterforge/ForgeExportWizard.qml
+    qml/characterforge/ForgeModelLibrary.qml
+    qml/characterforge/ForgeNavigation.qml
+    qml/characterforge/ForgeOutfitEditor.qml
+    qml/characterforge/ForgePlacementEditor.qml
+    qml/characterforge/ForgeRecordSelector.qml
+    qml/characterforge/ForgeToolbar.qml
+    qml/characterforge/ForgeValidationPanel.qml
+    qml/characterforge/ForgeViewport.qml
+    qml/characterforge/MaterialsEditor.qml
+    qml/characterforge/ModelImporter.qml
+    qml/characterforge/NativeNpcEditor.qml
+    qml/characterforge/SkeletonEditor.qml
+    qml/characterforge/StatsEditor.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
     qml/shaders/alpha_channel.frag)
@@ -64,7 +88,8 @@ target_link_libraries(SkyrimNpcStudio PRIVATE
   sns::ipc sns::mo2 sns::projects sns::creation sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering
-  sns::compile_options)
+  sns::compile_options
+  dbghelp)
 
 if(SNS_BUILD_WORKER)
   add_dependencies(SkyrimNpcStudio bethesda_worker)

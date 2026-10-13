@@ -1,6 +1,6 @@
 # Plan de desarrollo
 
-Estado a 2026-10-11. Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
+Estado a 2026-10-12. Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
 
 ## Fase 0 — Preparación ✅
 
@@ -56,14 +56,16 @@ Adelantada respecto al orden del documento porque no depende del visor 3D.
 - [x] Atuendo para dormir desde la UI (`alsoSetSleepingOutfit` en `ExportDialog` y vista de estado)
 - [x] Multi-NPC en la UI (soporte de lote de NPCs en proyecto `.snps`, lista interactiva y exportación consolidada en un solo plugin)
 
-## Fase 4 — Edición facial y Character Creator 2.0 ✅
+## Fase 4 — Character Creator y FaceGen (núcleo verificado, límites de topología)
 
 - [x] Motor facial (`engines/face/`): sliders y morphs estándar de Skyrim (nariz, mandíbula, mejillas, ojos, cejas, labios, barbilla), HeadParts y validaciones.
 - [x] Motor de presets (`engines/presets/`): parser RaceMenu `.jslot` en VFS de MO2, compatibilidad por raza/sexo/mallas, informes de discrepancias.
 - [x] Borrador de apariencia unificada (`engines/appearance/`): `AppearanceDraft` con stack de comandos (deshacer/rehacer), paleta de colores, tono de piel, peso y altura.
-- [x] Formato de proyecto `.snps` v2: persistencia unificada de atuendo y personalización facial (`FaceConfig`, `HeadPartRef`, `ColorRgb`) con compatibilidad bidireccional v1/v2.
-- [x] Pipeline BethesdaWorker: RPCs `appearance.getDonorAppearance`, `catalog.searchHeadParts`, `export.faceOverhaul`, `export.completeOverhaul`.
-- [x] Donantes y NPC Replacers: transferencia de apariencia de NPC instalados, copia atómica de mallas FaceGen NIF y texturas FaceTint DDS al NPC objetivo.
+- [x] Formato de proyecto `.snps` v3: rostro y atuendo completos con migración de proyectos v2.
+- [x] Pipeline BethesdaWorker: `face.getRecipe`, `catalog.searchHeadParts`, `export.faceOverhaul`, `export.completeOverhaul`.
+- [x] FaceGen NIF construido desde la receta de raza, Head Parts y TRI, con modo de conservación para una cabeza existente compatible; FaceTint DDS compuesto y validado. El visor usa los mismos bytes que exporta el estudio.
+- [x] Cambios aislados de color de cabello sin reconstruir toda la geometría; la exportación escribe HCLF/CLFM y el NIF correspondiente.
+- [x] Un replacer cuya topología no coincide con sus TRI bloquea los morphs que dependen de ellos; un cambio de color no queda bloqueado por ese problema.
 - [x] Exportador de parches de rostro (`FacePatchBuilder` & `ModPackager`): Modos B (Face Overhaul) y C (Complete Overhaul con Atuendo), generación de ESP/ESL, `manifest.json`, `meta.ini` y ZIP para MO2.
 - [x] UI de Character Creator 2.0 (`apps/desktop/qml/charactercreator/`):
   - Nuevo workspace "PERSONALIZAR PERSONAJE" con conmutador en barra superior.
@@ -75,9 +77,18 @@ Adelantada respecto al orden del documento porque no depende del visor 3D.
 
 ## Fases 5–7 ⏳
 
-Personalización avanzada de prendas (variantes de texturas, BodySlide directo), exportador SPID y poses dinámicas.
+Completar y verificar variantes de materiales que generen recursos DDS/TXST/ARMA/ARMO válidos,
+adaptadores de BodySlide y cuerpos personalizados, informe central de compatibilidad y el caso de
+Lydia dentro de Skyrim. Los controles que no se puedan materializar en el juego deben mostrar un
+bloqueo antes de exportar. La animación dinámica del visor queda fuera del foco actual.
+
+Estado de variantes de material: el borrador y los campos del panel existen, pero aún no se
+representan en el visor. El antiguo TXST/ARMA
+sin DDS propio ni mapeo NIF fiable se retiró. Los modos A y C rechazan esas variantes con
+`MaterialVariantPreviewOnly` ([detalle](MATERIAL_VARIANTS.md)).
 
 ## Siguiente paso recomendado
 
 1. Probar en el juego Skyrim SE/AE los mods generados con Modo B (Face Overhaul) y Modo C (Overhaul Completo).
-2. Continuar con integraciones adicionales de animaciones y poses para el viewport 3D.
+2. Avanzar las variantes de prendas y BodySlide con pruebas de recursos y exportación, sin afirmar
+   compatibilidad universal de mallas o sculpt data.

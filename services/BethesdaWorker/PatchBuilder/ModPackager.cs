@@ -20,6 +20,12 @@ internal static class ModPackager
     public const string ManifestFormat = "skyrim-npc-studio/export";
     public const int ManifestVersion = 2;
 
+    internal static ExportResponse ExportNativeNpc(LoadOrderSession session, CatalogQueries queries,
+        CreationExportRequest request, CreationValidateResponse validation, CancellationToken ct) =>
+        ExportCore(session, request.PluginName, request.OutputDirectory, request.CreateZip, request.Author,
+            request.Npc.Description, request.PluginProviders, "native-npc-technical",
+            (path, _) => NativeNpcBuilder.Build(session, queries, request, validation, path, ct), ct);
+
     public static ExportResponse ExportOutfitPatch(
         LoadOrderSession session, CatalogQueries queries, ExportOutfitPatchRequest request, CancellationToken ct)
     {
@@ -203,6 +209,9 @@ internal static class ModPackager
         tool = new { name = "Skyrim NPC Studio", workerVersion = WorkerVersion, protocol = $"{Protocol.Major}.{Protocol.Minor}" },
         createdUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
         mode,
+        readyForGame = mode == "native-npc-technical" ? (bool?)false : null,
+        faceGenStatus = mode == "native-npc-technical" ? "pending" : null,
+        validationLevel = mode == "native-npc-technical" ? "structural-readback-only" : null,
         plugin = new { fileName = pluginName, sha256, eslFlagged = built.EslFlagged },
         masters = built.Masters.Select(m => new
         {
@@ -258,6 +267,11 @@ internal static class ModPackager
         sb.AppendLine();
         sb.AppendLine(CultureInfo.InvariantCulture, $"Mod generado por Skyrim NPC Studio (worker {WorkerVersion}) el {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC.");
         sb.AppendLine(CultureInfo.InvariantCulture, $"Modo de exportación: `{mode}`.");
+        if (mode == "native-npc-technical")
+        {
+            sb.AppendLine("NO INSTALAR EN SKYRIM: artefacto técnico de pruebas. FaceGen NIF y FaceTint DDS pendientes; no es un mod listo para jugar.");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"NPC nuevos: {built.Records.Count(r => r.RecordType == "NPC_" && r.Kind == "new")}. Solo los registros estructurales y sus referencias fueron verificados.");
+        }
         if (!string.IsNullOrWhiteSpace(description))
         {
             sb.AppendLine().AppendLine(description);

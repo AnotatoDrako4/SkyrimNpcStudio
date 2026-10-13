@@ -16,8 +16,9 @@ Modos disponibles:
 
 ## Capacidades confirmadas
 
-- **Catálogo y Galería Visual**: `ArmorCatalog.qml` muestra tarjetas enriquecidas con FormID, Slots (30 Cabeza, 32 Torso, 33 Manos, 37 Pies, etc.), origen del mod en MO2, estado de resolución NIF y badge `✦ HDT-SMP / FSMP`. Filtros por slot, tipo de armadura (Clothing, Light, Heavy), mod/plugin y solo SMP.
+- **Catálogo y Galería Visual**: `ArmorCatalog.qml` rediseñado con soporte para vistas en lista y cuadrícula (`[ ☰ ]` / `[ ⊞ ]`), iconos de siluetas por slot, resolución de mallas NIF en archivos BSA (`Skyrim - Meshes0.bsa`), badge de físicas `✦ SMP`, menú contextual por clic derecho y filtros avanzados colapsables.
 - **Detección y Diagnóstico SMP / FSMP**: `mesh.cpp` y `smp_xml.cpp` analizan `NiStringExtraData` recursivamente en busca de rutas XML, extraen nodos de huesos físicos auxiliares vs esqueleto principal y colisionadores. El inspector en `CharacterViewport.qml` presenta el badge de salud SMP (`SMP VÁLIDO`, `SMP INCOMPLETO`, `SMP ROTO`, `SIN FÍSICAS`).
+- **Visor 3D Creative Workspace**: Barra flotante minimalista en la parte superior del viewport, lienzo oscuro limpio `#16171a`, comparador de apariencia y paneles técnicos colapsables en modo avanzado.
 - **Motor de Poses (Reference, A-Pose, Relaxed, Combat)**: Cinemática directa sobre el esqueleto de Skyrim con rotación jerárquica de extremidades alrededor de sus pivotes naturales, evitando deformaciones bruscas o colapsos de vértices.
 - **Creador Autónomo de Outfits**: Es posible iniciar un outfit desde cero sin un NPC cargado (`createNewOutfit`), añadir piezas, detectar conflictos de slots y exportar como registro `OTFT` independiente con validación completa.
 - **Biblioteca de Presets de Vestuario**: Guardado, duplicación, cambio de nombre, favoritos y eliminación de presets en disco con recálculo de FormKeys contra el orden de carga activo.
@@ -25,7 +26,8 @@ Modos disponibles:
 
 ## Verificación ejecutada
 
-- **C++ Tests (Catch2 / CTest)**: 87/87 pruebas superadas al 100% (`ctest --preset debug -j 4`).
-- **.NET Tests (xUnit)**: 45/45 pruebas superadas al 100% (`dotnet test SkyrimNpcStudio.slnx`).
-- **Despliegue Release Autónomo**: Generado con éxito mediante `scripts/package.ps1` en `dist\SkyrimNpcStudio` (233.3 MB), incluyendo dependencias de Qt (windeployqt) y BethesdaWorker autocontenido.
+- **C++ Tests (Catch2 / CTest)**: 88/88 pruebas superadas al 100% (`ctest --preset debug -j 4`).
+- **.NET Tests (xUnit)**: 45/45 pruebas superadas al 100% (`dotnet test --solution SkyrimNpcStudio.slnx`).
+- **Smoke Test UI**: Verificado con arranque y captura nativa en `out/smoke.png` con 0 advertencias QML.
+- **Despliegue Release Autónomo**: Generado con éxito mediante `scripts/package.ps1` en `dist\SkyrimNpcStudio` (233.4 MB), incluyendo dependencias de Qt (windeployqt) y BethesdaWorker autocontenido.
 

@@ -185,12 +185,12 @@ DiagnosticReport CompatibilityGuardian::evaluate(
   for (const auto& piece : draft.outfit().pieces()) {
     if (piece.material.has_value()) {
       report.issues.push_back({
-          .code = "MaterialRecolorActive",
-          .severity = DiagnosticSeverity::Info,
+          .code = "MaterialVariantPreviewOnly",
+          .severity = DiagnosticSeverity::Error,
           .component = DiagnosticComponent::Wardrobe,
-          .message = "La pieza '" + (piece.name.empty() ? piece.form_key : piece.name) + "' incluye personalización de material. Se generará TXST/ARMA independiente.",
+          .message = "La pieza '" + (piece.name.empty() ? piece.form_key : piece.name) + "' tiene un material solo previsualizable; aún no se generan DDS y referencias NIF verificadas.",
           .target = piece.form_key,
-          .suggested_action = "Verificado: La variante no alterará la armadura original en otros NPCs.",
+          .suggested_action = "Restaura el material original antes de exportar.",
       });
     }
   }
