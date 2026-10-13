@@ -83,7 +83,7 @@ La rama se basa en main @ 9fb4d5b; commits posteriores de README y packaging no 
 
 ## Fase 2 — evidencia en Codex Cloud (2026-10-13)
 
-Rama `feature/character-forge-phase-2`, base c35a9f8 de Fase 1 más main e3c770b preservado. Creación nativa implementada en builder independiente, RPC 1.3, validación de referencias tipadas, estadísticas, Head Parts, slots/ARMA, inventario, facciones y ubicación interior opcional. Toda NPC_/OTFT/ACHR nueva pertenece al plugin generado; solo la CELL explícitamente elegida se incluye como contexto override al colocar ACHR. El plugin se relee, verifica campos, referencias, masters y rango ESL antes del empaquetado atómico.
+Rama de trabajo única `feature/character-forge-ui`, base c35a9f8 de Fase 1 más main e3c770b preservado. Creación nativa implementada en builder independiente, RPC 1.3, validación de referencias tipadas, estadísticas, Head Parts, slots/ARMA, inventario, facciones y ubicación interior opcional. Toda NPC_/OTFT/ACHR nueva pertenece al plugin generado; solo la CELL explícitamente elegida se incluye como contexto override al colocar ACHR. El plugin se relee, verifica campos, referencias, masters y rango ESL antes del empaquetado atómico.
 
 `.sncf` v2 incorpora NativeNpcDraft, opciones de exportación e historial propio. v1 migra solo en memoria; versiones futuras, no enteras y valores fuera de rango se rechazan. El ViewModel invalida validaciones al editar y bloquea el catálogo hasta que el perfil actual termina de indexarse.
 
@@ -93,8 +93,8 @@ Evidencia: SDK 10.0.401, restore locked, build sin warnings/errors; 35 pruebas u
 
 Revisión independiente: corregidos catálogo obsoleto durante cambio de perfil, exportOptions sin tipos y truncamiento/desbordamiento de enteros JSON. No se fusionó ningún PR remoto ni se modificó main.
 
-## UI-first — rama separada (2026-10-13)
+## UI-first — misma rama de desarrollo (2026-10-13)
 
-`feature/character-forge-ui` extiende Fase 2 sin declarar completadas las fases de Blender/importación/IA. Se añadieron navegación, toolbar, viewport preparado sin geometría ficticia, formularios modulares, importador con metadatos reales, biblioteca, configuración Blender/MCP, preparación IA, materiales, esqueleto, validación contextual, inspector avanzado y wizard. El objeto opcional `workspace` en v2 conserva estados al guardar/reabrir y participa en el historial. Datos anidados corruptos se rechazan antes de cargar la UI.
+`feature/character-forge-ui` concentra el backend de Fase 2 y la interfaz en el PR #3, dirigido a `feature/character-forge-phase-0-1` mientras el PR #1 siga abierto. Continuar todo el desarrollo en esta misma rama; no crear ramas adicionales ni fusionar PR automáticamente. No se declaran completadas las fases de Blender/importación/IA. Se añadieron navegación, toolbar, viewport preparado sin geometría ficticia, formularios modulares, importador con metadatos reales, biblioteca, configuración Blender/MCP, preparación IA, materiales, esqueleto, validación contextual, inspector avanzado y wizard. El objeto opcional `workspace` en v2 conserva estados al guardar/reabrir y participa en el historial. Datos anidados corruptos se rechazan antes de cargar la UI.
 
 Guía de capacidades y checklist pendiente: [CHARACTER_FORGE_LOCAL_TESTS.md](../CHARACTER_FORGE_LOCAL_TESTS.md). La UI reutiliza catálogos y validadores, no estados mutables de los otros workspaces. Final export sigue bloqueado por FaceGen.

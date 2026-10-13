@@ -5,6 +5,8 @@
 **Architecture:** NativeNpcDraft independiente en C++/JSON, UI Qt propia, DTO/RPC creation y NativeNpcBuilder Mutagen separado de los builders de overrides. El exportador comparte staging y empaquetado existentes.
 **Tech Stack:** C++20, Qt 6.11.2, .NET 10.0.401, Mutagen 0.54.4, xUnit 4.0.1.
 
+**Entrega:** continuar backend e interfaz en la rama única `feature/character-forge-ui`, PR #3 dirigido a Fase 1 mientras el PR #1 siga abierto. No crear ramas adicionales ni fusionar PR automáticamente.
+
 ## Restricciones globales
 - No compartir borradores ni modificar .snps; migrar .sncf v1 a v2 al cargar.
 - Mantener main reciente, sin push a main ni merge remoto.

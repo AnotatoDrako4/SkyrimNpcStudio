@@ -1,6 +1,6 @@
 # Character Forge UI — ejecución UI-1 a UI-8
 
-Base: feature/character-forge-phase-2, derivada de Fase 1 y con main reciente preservado. Solicitud UI-first del usuario: completar la experiencia Qt/QML sin afirmar compilación Windows, renderizado o integración de servicios inexistentes.
+Rama única: `feature/character-forge-ui`, derivada de Fase 1 y con main reciente preservado. Backend nativo e interfaz se entregan juntos en el PR #3 sobre `feature/character-forge-phase-0-1`. Continuar en esta rama sin crear otras ramas ni fusionar PR automáticamente. Solicitud UI-first del usuario: completar la experiencia Qt/QML sin afirmar compilación Windows, renderizado o integración de servicios inexistentes.
 
 - UI-1: tres columnas redimensionables, navegación y toolbar. Viewport central predominante, estado vacío real y toolbar de cámara inactiva sin geometría.
 - UI-2: reutilizar NativeNpcDraft/RPC/persistencia v2 ya implementados; formularios independientes e historial propio.
