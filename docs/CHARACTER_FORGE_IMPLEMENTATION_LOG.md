@@ -181,3 +181,14 @@ El primer smoke con ventana oculta falló: QML creó el workspace y cargó los d
 | `smoke-test.ps1 -ForgePreview ... -ShowWindow` | PASSED: QML y visor, Suzanne visible (8,4 %), selección y visibilidad |
 
 El script viaja embebido en el ejecutable: el paquete no depende del checkout, pero Blender debe instalarse por separado. Coste operativo: un proceso local de Blender por conversión y espacio temporal para el GLB; no se consumen APIs ni claves. Los fallos de arranque, versión, timeout, cancelación, informe y validación mantienen el modelo externo original seleccionado. Sigue pendiente comprobar manualmente el flujo completo desde los botones QML y probar el paquete `dist` con Blender instalado. CF-5 y CF-6 continúan pendientes.
+
+
+## Entrega 5 — regresiones de conversiones Blender desde Windows (CF-4.1)
+
+**Estado:** IMPLEMENTADO SIN VERIFICACIÓN EN WINDOWS (pendiente ejecución local tras integrar el PR).
+
+- `tools/blender/make_test_models.py`: nuevo modo explícito `bridge_sources`; genera una misma malla original de Blender como OBJ, FBX y BLEND en una carpeta temporal de la revisión. El modo por defecto conserva los modelos glTF anteriores.
+- `tests/app/test_forge_blender_bridge.cpp`: prueba opt-in `[forge][blender][local]` que convierte los tres formatos mediante `ForgeBlenderBridge`, comprueba el informe y valida/importa el GLB en una biblioteca `.sncf` con integridad SHA-256.
+- `scripts/local-review.ps1`: parámetro `-Blender` y nuevo paso `blender-bridge`; no se ejecutan pruebas Blender ni se presume éxito si no se indica su ruta.
+- **Validación pendiente:** `.\scripts\local-review.ps1 -Blender '<ruta real a blender.exe>'` en Windows y prueba visual desde QML/paquete `dist`.
+- **Alcance:** validación del bridge y persistencia de GLB; no genera NIF, FaceGen ni certifica funcionamiento en Skyrim.

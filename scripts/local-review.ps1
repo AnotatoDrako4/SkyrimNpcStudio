@@ -9,7 +9,8 @@ param(
     [string]$Instance,
     [string]$Profile,
     [string]$Npc,
-    [string]$Game
+    [string]$Game,
+    [string]$Blender
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,6 +75,24 @@ try {
             [void](Invoke-ReviewStep 'ctest-local' {
                 ctest --preset debug -R 'integration:\[local\]' -j 1 --output-on-failure
                 if ($LASTEXITCODE -ne 0) { throw "local ctest exited $LASTEXITCODE" }
+            })
+        }
+        # Opt-in real Blender bridge regression: generate owned FBX/OBJ/BLEND fixtures, then
+        # run the full conversion + managed .sncf import checks. This must never be marked
+        # successful when Blender is absent or the tests were merely skipped.
+        if ($Blender) {
+            [void](Invoke-ReviewStep 'blender-bridge' {
+                if (-not (Test-Path -LiteralPath $Blender -PathType Leaf)) { throw "Blender executable missing: $Blender" }
+                $env:SNS_LOCAL_BLENDER = (Resolve-Path -LiteralPath $Blender).Path
+                $inputs = Join-Path $runDir 'blender-inputs'
+                New-Item -ItemType Directory -Force -Path $inputs | Out-Null
+                & $env:SNS_LOCAL_BLENDER --background --factory-startup --disable-autoexec --python-exit-code 17 --python (Join-Path $root 'tools/blender/make_test_models.py') -- $inputs bridge_sources
+                if ($LASTEXITCODE -ne 0) { throw "Blender fixture generation exited $LASTEXITCODE" }
+                $env:SNS_LOCAL_BLENDER_FIXTURES = $inputs
+                $testExe = Join-Path $root 'build/debug/bin/sns_forge_asset_tests.exe'
+                if (-not (Test-Path -LiteralPath $testExe)) { throw "Build the Forge test executable first: $testExe" }
+                & $testExe '[blender][local]'
+                if ($LASTEXITCODE -ne 0) { throw "Real Blender bridge regression exited $LASTEXITCODE" }
             })
         }
         [void](Invoke-ReviewStep 'smoke' {
