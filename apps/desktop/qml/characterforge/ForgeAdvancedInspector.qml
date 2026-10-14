@@ -19,7 +19,15 @@ ColumnLayout {
         text: JSON.stringify({
             npc: root.forge.npc,
             model: root.forge.workspace.model || null,
-            validation: root.forge.validation
+            validation: root.forge.validation,
+            preview: {
+                state: root.forge.scene.state,
+                file: root.forge.scene.filePath,
+                operation: root.forge.scene.operation,
+                rendered: root.forge.scene.rendered,
+                inspection: root.forge.scene.inspection,
+                details: root.forge.scene.details
+            }
         }, null, 2)
         font.family: Theme.mono
         font.pixelSize: Theme.small

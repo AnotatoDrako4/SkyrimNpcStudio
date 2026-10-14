@@ -1,6 +1,6 @@
 # Plan de desarrollo
 
-Estado a 2026-10-12. Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
+Estado a 2026-10-13 (Character Forge actualizado; resto del plan a 2026-10-12). Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
 
 ## Fase 0 — Preparación ✅
 
@@ -86,6 +86,28 @@ Estado de variantes de material: el borrador y los campos del panel existen, per
 representan en el visor. El antiguo TXST/ARMA
 sin DDS propio ni mapeo NIF fiable se retiró. Los modos A y C rechazan esas variantes con
 `MaterialVariantPreviewOnly` ([detalle](MATERIAL_VARIANTS.md)).
+
+## Character Forge — Integración 3D y Blender
+
+Línea de trabajo propia del tercer workspace (creación de NPC nuevos a partir de modelos externos).
+Sus etapas **no** son las Fases 0–7 del editor de NPC de arriba; se numeran CF-0…CF-8. Estados
+según [CHARACTER_FORGE_IMPLEMENTATION_LOG.md](CHARACTER_FORGE_IMPLEMENTATION_LOG.md), fuentes en
+[CHARACTER_FORGE_TECHNICAL_SOURCES.md](CHARACTER_FORGE_TECHNICAL_SOURCES.md).
+
+| Etapa | Contenido | Estado |
+|---|---|---|
+| CF-0 | Estabilización de la base 298990d: build, `dotnet test`, `ctest`, smoke y smoke del workspace 2 | VERIFICADO EN WINDOWS |
+| CF-1 | Visor 3D real: validación `engines/gltf`, `ForgeSceneViewModel`, `RuntimeLoader`, encuadre, vistas, malla, errores visibles, recarga segura | VERIFICADO EN WINDOWS (Debug; `dist` sin verificar) |
+| CF-2 | Inspección de geometría: declarado / validado / renderizado; mallas, primitivas, huesos, materiales, imágenes, animaciones, morphs | EN DESARROLLO (datos reales en importador e inspector; selección por geometría pendiente) |
+| CF-3 | Biblioteca de assets dentro de `.sncf` (copia/enlace, SHA-256, duplicados, rutas relativas, migración) | PENDIENTE |
+| CF-4 | Blender Bridge determinista (`QProcess`, versión, FBX/OBJ/BLEND → GLB, informe JSON, timeout, cancelación) | PENDIENTE |
+| CF-5 | Personalización de modelos y vestuario reutilizando Outfit Studio | PENDIENTE |
+| CF-6 | NPC nuevos + FaceGen sobre el NativeNpcBuilder existente; exportación final bloqueada sin FaceGen verificable | PENDIENTE |
+| CF-7 | Regresiones (Character Creator, Outfit Studio, `.snps`, `.sncf`, exportaciones A/B/C, GPU, cancelación) | EN DESARROLLO (suites completas en cada entrega) |
+| CF-8 | Interfaz: viewport protagonista, datos técnicos en inspector avanzado, sin botones decorativos | EN DESARROLLO |
+
+Los estados A (modelo visible), B (preparado para Skyrim) y C (NPC listo para exportar) no se
+confunden: hoy solo existe el estado A para GLB/glTF.
 
 ## Siguiente paso recomendado
 

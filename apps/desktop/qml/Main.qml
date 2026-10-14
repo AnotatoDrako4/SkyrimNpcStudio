@@ -55,6 +55,10 @@ ApplicationWindow {
         studio: window.studio
         onBrowseInstance: instanceDialog.open()
         onBrowseGame: gameDialog.open()
+        onForgeWithoutProfile: {
+            workspaceTabs.currentIndex = 2;
+            welcome.close();
+        }
     }
     FolderDialog {
         id: gameDialog

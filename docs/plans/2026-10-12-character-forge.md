@@ -98,3 +98,25 @@ Revisión independiente: corregidos catálogo obsoleto durante cambio de perfil,
 `feature/character-forge-ui` concentra el backend de Fase 2 y la interfaz en el PR #3, dirigido a `feature/character-forge-phase-0-1` mientras el PR #1 siga abierto. Continuar todo el desarrollo en esta misma rama; no crear ramas adicionales ni fusionar PR automáticamente. No se declaran completadas las fases de Blender/importación/IA. Se añadieron navegación, toolbar, viewport preparado sin geometría ficticia, formularios modulares, importador con metadatos reales, biblioteca, configuración Blender/MCP, preparación IA, materiales, esqueleto, validación contextual, inspector avanzado y wizard. El objeto opcional `workspace` en v2 conserva estados al guardar/reabrir y participa en el historial. Datos anidados corruptos se rechazan antes de cargar la UI.
 
 Guía de capacidades y checklist pendiente: [CHARACTER_FORGE_LOCAL_TESTS.md](../CHARACTER_FORGE_LOCAL_TESTS.md). La UI reutiliza catálogos y validadores, no estados mutables de los otros workspaces. Final export sigue bloqueado por FaceGen.
+
+## Integración 3D en tiempo de ejecución (2026-10-13)
+
+Rama `feature/character-forge-runtime-3d` desde `main` 298990d (el PR #3 ya está integrado en
+`main`; no se vuelve a fusionar). Las etapas CF-0…CF-8 de esta línea están en
+[DEVELOPMENT_PLAN.md](../DEVELOPMENT_PLAN.md) (sección «Character Forge — Integración 3D y
+Blender») y el detalle de cada entrega en
+[CHARACTER_FORGE_IMPLEMENTATION_LOG.md](../CHARACTER_FORGE_IMPLEMENTATION_LOG.md).
+
+Arquitectura añadida (decisiones previas conservadas: tercer workspace, estado propio, motores sin
+Qt, sin escribir en Skyrim/MO2):
+
+- `engines/gltf`: validación e inspección GLB/glTF 2.0 sin Qt, previa a cualquier renderizado.
+- `ForgeSceneViewModel` (propiedad `scene` de `CharacterForgeViewModel`): validación en hilo,
+  copia aislada de los bytes validados, operaciones numeradas, cancelación y reinicio.
+- `ForgeViewport.qml`: `View3D` + `RuntimeLoader` (Qt 6.11.2) + `OrbitCameraController`.
+
+La antigua Fase 4 («Importación de personajes externos») se reparte así: GLB/glTF visibles y
+validados ya funcionan (CF-1, verificado en Windows); FBX/OBJ/BLEND esperan al Blender Bridge
+(CF-4); la adaptación a Skyrim (Fase 5 original) sigue pendiente. Riesgos vigentes: importación
+síncrona de RuntimeLoader, ausencia de `query()` antes de Qt 6.12 y que un modelo visible no es un
+modelo apto para Skyrim.

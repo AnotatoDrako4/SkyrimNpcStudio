@@ -26,6 +26,7 @@
 #include "diagnostics/crash_diagnostics.hpp"
 #include "viewmodels/studio_controller.hpp"
 #include "components/appearance_stress.hpp"
+#include "components/forge_preview_check.hpp"
 #include "components/viewport_verifier.hpp"
 
 namespace {
@@ -158,8 +159,12 @@ int main(int argc, char* argv[]) {
                                      "Crash on purpose (access-violation, terminate, abort) to check that the crash report and "
                                      "minidump are written. For tests only.",
                                      "kind");
+  const QCommandLineOption forge_preview_opt("forge-preview",
+                                             "Check the Character Forge 3D preview with these models (';'-separated, loaded in order).",
+                                             "files");
+  const QCommandLineOption forge_capture_opt("forge-capture", "Folder for the Character Forge preview captures.", "directory");
   cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, workspace_opt, size_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
-                  second_npc_opt, stress_work_opt, crash_opt});
+                  second_npc_opt, stress_work_opt, crash_opt, forge_preview_opt, forge_capture_opt});
   cli.process(app);
   if (cli.isSet(crash_opt)) return crash_selftest(cli.value(crash_opt));
 
@@ -200,7 +205,7 @@ int main(int argc, char* argv[]) {
 
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
   const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
-                         cli.isSet(stress_opt);
+                         cli.isSet(stress_opt) || cli.isSet(forge_preview_opt);
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
@@ -225,7 +230,13 @@ int main(int argc, char* argv[]) {
   };
   if (cli.isSet(instance_opt) && !studio.openInstance(cli.value(instance_opt)) && automated) return 2;
   if (cli.isSet(game_opt) && !studio.setGamePath(cli.value(game_opt))) return 2;
-  if (cli.isSet(profile_opt)) {
+  if (cli.isSet(forge_preview_opt)) {
+    // Character Forge needs no MO2 profile: the check starts once the window is up.
+    QTimer::singleShot(2500, &app, [&] {
+      sns::app::run_forge_preview_check(main_window, &studio, cli.value(forge_preview_opt).split(';', Qt::SkipEmptyParts),
+                                        cli.value(forge_capture_opt), [&](bool ok) { finish(ok ? 0 : 10); });
+    });
+  } else if (cli.isSet(profile_opt)) {
     QTimer::singleShot(0, &studio, [&] { studio.loadProfile(cli.value(profile_opt)); });
   } else if (automated) {
     QTimer::singleShot(3000, &app, [&] { finish(0); });  // nothing to load: capture the start screen

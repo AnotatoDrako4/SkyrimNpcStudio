@@ -32,11 +32,31 @@ flowchart LR
 | `engines/mo2` | C++ sin Qt | Instancias, INI de QSettings, `modlist`/`plugins`/`loadorder`, VFS, cabeceras TES4, idioma | Interpretar registros |
 | `engines/ipc` | C++ sin Qt | Framing, cliente JSON-RPC, transporte overlapped, lanzamiento con Job Object | — |
 | `engines/projects`, `engines/outfit` | C++ sin Qt | `.snps`, `CommandStack`, `OutfitDraft` | — |
+| `engines/creation` | C++ sin Qt | Proyecto `.sncf` de Character Forge, borrador de NPC nativo, historial propio | Tocar `.snps` ni el borrador de NPC existentes |
+| `engines/gltf` | C++ sin Qt | Validación e inspección GLB/glTF 2.0 (referencias, rangos, índices, rutas confinadas, límites) | Renderizar |
 | Worker | .NET 10 | Lectura de plugins (Mutagen), índice, validación de registros, escritura del ESP, empaquetado | Saber qué es MO2 |
 
 **Decisión clave:** el worker no conoce MO2. El motor C++ resuelve el perfil a una lista de plugins con la ruta absoluta del archivo **ganador** y se la envía en `catalog.index`. Hay una única implementación de la lógica de prioridades de MO2, y el worker se prueba con fixtures sintéticos sin necesitar una instancia (ver [ADR 0001](ADR/0001-two-process-architecture.md)).
 
 **Los motores no dependen de Qt** ([ADR 0002](ADR/0002-engines-without-qt.md)): compilan y se prueban sin el SDK de Qt (`cmake --preset engines`), y los view models los envuelven.
+
+## Vista previa de Character Forge
+
+Flujo independiente de la escena de NPC (Character Creator / Outfit Studio):
+
+```mermaid
+flowchart LR
+  SEL["ModelImporter / biblioteca<br/>selectModelFile"] --> VM["ForgeSceneViewModel<br/>operación N"]
+  VM -- "QThreadPool" --> VAL["engines/gltf<br/>load_and_inspect"]
+  VAL -- "bytes validados" --> STG[("%TEMP%/sns-forge-preview-&lt;pid&gt;/N/")]
+  VM -- "source (file URL)" --> RL["ForgeViewport.qml<br/>RuntimeLoader (Qt 6.11)"]
+  STG --> RL
+  RL -- "status, bounds tras boundsChanged" --> VM
+```
+
+RuntimeLoader no valida ni aísla el contenido (documentación de Qt) e importa de forma síncrona en
+el hilo de GUI; por eso solo recibe copias de bytes ya validados y dentro de límites de tamaño.
+Resultados e informes de una operación anterior se descartan.
 
 ## Protocolo
 

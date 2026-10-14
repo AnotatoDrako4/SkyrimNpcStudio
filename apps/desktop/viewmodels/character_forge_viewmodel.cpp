@@ -31,6 +31,7 @@ QString safe_stem(QString name) {
 
 CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment, WorkerClient* worker, QObject* parent)
     : QObject(parent), environment_(std::move(environment)), worker_(worker) {
+  scene_ = new ForgeSceneViewModel(this);
   connect(worker_, &WorkerClient::stateChanged, this, [this] { set_catalog_ready(false); });
 }
 
@@ -60,6 +61,7 @@ bool CharacterForgeViewModel::newProject(const QString& name) {
     has_project_ = true;
     project_path_.clear();
     last_error_.clear();
+    scene_->reset();
     emit changed();
     return true;
   } catch (const std::exception& ex) {
@@ -84,6 +86,7 @@ bool CharacterForgeViewModel::openProject(const QString& folder_or_url) {
     has_project_ = true;
     project_path_ = QString::fromStdWString(folder.wstring());
     last_error_.clear();
+    preview_selected_model();
     emit changed();
     return true;
   } catch (const std::exception& ex) {
@@ -140,10 +143,10 @@ void CharacterForgeViewModel::setDescription(const QString& value) {
   edit([&] { draft_.set_description(value.toStdString()); });
 }
 void CharacterForgeViewModel::undo() {
-  if (has_project_ && !busy_ && draft_.undo()) { invalidate_validation(); emit changed(); }
+  if (has_project_ && !busy_ && draft_.undo()) { invalidate_validation(); preview_selected_model(); emit changed(); }
 }
 void CharacterForgeViewModel::redo() {
-  if (has_project_ && !busy_ && draft_.redo()) { invalidate_validation(); emit changed(); }
+  if (has_project_ && !busy_ && draft_.redo()) { invalidate_validation(); preview_selected_model(); emit changed(); }
 }
 
 QVariantMap CharacterForgeViewModel::npc() const {
@@ -222,7 +225,7 @@ QVariantMap CharacterForgeViewModel::workspace() const {
   return result;
 }
 QVariantMap CharacterForgeViewModel::capabilities() const {
-  return {{"nativeRecords", true}, {"nativeFaceGen", false}, {"modelPreview", false},
+  return {{"nativeRecords", true}, {"nativeFaceGen", false}, {"modelPreview", true},
           {"blenderBridge", false}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false}};
 }
 void CharacterForgeViewModel::setWorkspaceValue(const QString& field, const QVariant& value) {
@@ -279,6 +282,20 @@ void CharacterForgeViewModel::selectModelFile(const QString& url) {
     w["library"] = library;
     draft_.set_workspace(std::move(w));
   }, false);
+  if (last_error_.isEmpty()) preview_selected_model();
+}
+
+// The preview follows the workspace's selected model (selection, undo/redo, opened project). The
+// scene validates it and renders only GLB/glTF; other formats report that they need conversion.
+void CharacterForgeViewModel::preview_selected_model() {
+  const auto model = workspace().value("model").toMap();
+  const auto path = model.value("path").toString();
+  if (path.isEmpty()) {
+    if (!scene_->file_path().isEmpty()) scene_->reset();
+    return;
+  }
+  if (QFileInfo(path).absoluteFilePath() == scene_->file_path() && scene_->state() != QStringLiteral("empty")) return;
+  scene_->load(path);
 }
 void CharacterForgeViewModel::selectBlenderExecutable(const QString& url) {
   edit([&] {

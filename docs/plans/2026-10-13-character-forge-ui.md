@@ -11,4 +11,16 @@ Rama única: `feature/character-forge-ui`, derivada de Fase 1 y con main recient
 - UI-7: validación simple con inspector avanzado y wizard de cinco pasos. Exportación técnica opt-in, final bloqueada por FaceGen.
 - UI-8: parseo QML Qt 6.11.2, C++ syntax-only/chequeo portable del dominio, suites .NET, documentación local y PR cuando API disponible.
 
+## Componentes conectados (2026-10-13, rama `feature/character-forge-runtime-3d`)
+
+| Componente QML | Backend | Estado |
+|---|---|---|
+| `ForgeViewport.qml` | `ForgeSceneViewModel` + `RuntimeLoader` | Funcional: GLB/glTF validados, encuadrar, frontal/lateral/posterior, restablecer, malla, errores, reintentar, cancelar |
+| `ModelImporter.qml` | `CharacterForgeViewModel.selectModelFile` + `scene` | Funcional: selección, niveles declarado/validado/renderizado, armatures, «Recargar vista previa»; «Preparar adaptación» deshabilitado (bridge pendiente) |
+| `ForgeModelLibrary.qml` | `selectModelFile` | Funcional: reabre modelos de la biblioteca (rutas locales; copia al proyecto pendiente en CF-3) |
+| `ForgeAdvancedInspector.qml` | `npc`, `workspace`, `validation`, `scene` | Funcional: JSON técnico, incluida la inspección y los avisos del modelo |
+| `WelcomeOverlay.qml` | señal `forgeWithoutProfile` | Funcional: entrar en Character Forge sin perfil MO2 |
+| Toolbar del visor: «Huesos», «Original / adaptado» | — | Deshabilitados con explicación (sin datos reales en 6.11 / sin modelo adaptado) |
+| `BlenderConnectionPanel.qml`, `BlenderOperations.qml`, `AIGenerationPanel.qml` | configuración local | Sin cambios: acciones de bridge/IA siguen deshabilitadas |
+
 Persistencia: objeto opcional `workspace` en .sncf v2 (compatible con v2 anterior); herramienta activa, modelo seleccionado, biblioteca, Blender, IA y materiales. Guardado atómico e historial existente. Los archivos externos siguen siendo referencias locales y requieren restauración en el PC donde se probarán.

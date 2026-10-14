@@ -90,6 +90,20 @@ try {
             & (Join-Path $PSScriptRoot 'smoke-test.ps1') @smokeArgs
             if ($LASTEXITCODE -ne 0) { throw "smoke exited $LASTEXITCODE" }
         })
+        # Character Forge: real GLB/glTF (tools/blender/make_test_models.py) rendered in the window,
+        # a truncated GLB rejected with a visible error, and a repeated load.
+        [void](Invoke-ReviewStep 'forge-preview' {
+            $inputs = Join-Path $runDir 'forge-inputs'
+            New-Item -ItemType Directory -Force -Path $inputs | Out-Null
+            $models = Join-Path $root 'tests/fixtures/models'
+            $bytes = [IO.File]::ReadAllBytes((Join-Path $models 'suzanne.glb'))
+            [IO.File]::WriteAllBytes((Join-Path $inputs 'truncated.glb'), $bytes[0..($bytes.Length - 4001)])
+            $files = @((Join-Path $models 'suzanne.glb'), (Join-Path $models 'rigged_figure.glb'),
+                       (Join-Path $models 'rigged_figure_split/rigged_figure.gltf'), (Join-Path $inputs 'truncated.glb'),
+                       (Join-Path $models 'suzanne.glb'))
+            & (Join-Path $PSScriptRoot 'smoke-test.ps1') -Screenshot (Join-Path $runDir 'forge.png') -ForgePreview $files -Size 1600x900 -ShowWindow
+            if ($LASTEXITCODE -ne 0) { throw "forge preview exited $LASTEXITCODE" }
+        })
     }
     $summary.finishedAt = (Get-Date).ToString('o')
     $summary.finalGitStatus = @(git status --porcelain)

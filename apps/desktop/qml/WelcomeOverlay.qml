@@ -9,6 +9,7 @@ Dialog {
     required property StudioController studio
     signal browseInstance()
     signal browseGame()
+    signal forgeWithoutProfile()
 
     modal: true
     anchors.centerIn: Overlay.overlay
@@ -129,6 +130,15 @@ Dialog {
                     onClicked: root.studio.cancel()
                 }
             }
+        }
+
+        // Character Forge creates projects and previews external models without MO2; only the
+        // record pickers and the export need an indexed profile.
+        Button {
+            Layout.alignment: Qt.AlignRight
+            visible: root.studio.phase !== StudioController.Ready
+            text: qsTr("Continuar en Character Forge sin perfil")
+            onClicked: root.forgeWithoutProfile()
         }
     }
 }

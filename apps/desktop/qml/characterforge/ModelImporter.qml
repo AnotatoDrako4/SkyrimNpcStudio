@@ -67,16 +67,61 @@ ColumnLayout {
             color: Theme.textDim
         }
     }
+    // Three levels, never mixed: declared (JSON), validated (data checked), rendered (viewport).
+    readonly property var scene: root.forge.scene
+    readonly property var inspection: scene.inspection
     Text {
         Layout.fillWidth: true
-        text: root.modelInfo.metadataInspected ? qsTr("Metadatos glTF 2.0 leídos del archivo. Buffers, texturas y geometría todavía no han sido importados ni validados para Skyrim.") : qsTr("Se comprueba archivo, tamaño y formato admitido. La inspección completa de FBX/OBJ/BLEND necesita el bridge.")
+        Layout.topMargin: 6
+        text: qsTr("Vista previa")
+        color: Theme.text
+        font.bold: true
+    }
+    Text {
+        Layout.fillWidth: true
+        visible: root.inspection.validated !== undefined
+        text: root.inspection.validated === undefined ? "" : qsTr("Validado: %1 vértices · %2 triángulos · índices %3 · %4 recurso(s) externo(s)")
+            .arg(root.inspection.validated.vertices).arg(root.inspection.validated.triangles)
+            .arg(root.inspection.validated.indicesChecked ? qsTr("comprobados") : qsTr("sin índices"))
+            .arg(root.inspection.resources.length)
         color: Theme.textDim
         wrapMode: Text.WordWrap
     }
+    Text {
+        Layout.fillWidth: true
+        visible: root.inspection.declared !== undefined
+        text: root.inspection.declared === undefined ? "" : qsTr("Declarado: %1 nodos · %2 mallas · %3 materiales · %4 texturas · %5 huesos · %6 animaciones · %7 morph targets")
+            .arg(root.inspection.declared.nodes).arg(root.inspection.declared.meshes).arg(root.inspection.declared.materials)
+            .arg(root.inspection.declared.textures).arg(root.inspection.declared.joints).arg(root.inspection.declared.animations)
+            .arg(root.inspection.declared.morphTargets)
+        color: Theme.textDim
+        wrapMode: Text.WordWrap
+    }
+    Text {
+        Layout.fillWidth: true
+        text: root.scene.hasModel ? qsTr("Renderizado en el visor (Qt Quick 3D RuntimeLoader).")
+            : root.scene.message.length ? root.scene.message
+            : qsTr("Las vistas previas admiten GLB y glTF 2.0; FBX/OBJ/BLEND necesitan el puente de Blender.")
+        color: root.scene.state === "error" ? Theme.warn : Theme.textDim
+        wrapMode: Text.WordWrap
+    }
+    Repeater {
+        model: (root.inspection.skins || []).length ? root.inspection.skins : []
+        Text {
+            required property var modelData
+            Layout.fillWidth: true
+            text: qsTr("Armature %1: %2").arg(modelData.name || qsTr("(sin nombre)")).arg(modelData.joints.join(", "))
+            color: Theme.textMuted
+            wrapMode: Text.WordWrap
+        }
+    }
     Button {
         Layout.fillWidth: true
-        text: qsTr("Previsualizar · backend pendiente")
-        enabled: false
+        text: qsTr("Recargar vista previa")
+        enabled: root.forge.hasProject && root.scene.filePath.length > 0 && !root.scene.busy
+        onClicked: root.scene.reload()
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("Vuelve a validar y cargar el archivo (por ejemplo, después de editarlo fuera del estudio).")
     }
     Button {
         Layout.fillWidth: true

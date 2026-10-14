@@ -23,6 +23,9 @@ param(
     [string]$SecondNpc,
     [string]$StressWork,
     [switch]$VerifyViewport,
+    # Character Forge 3D preview check: models loaded in order (validated ones must render, rejected
+    # ones must show an error). Captures go next to the screenshot.
+    [string[]]$ForgePreview,
     [string]$CaptureSet,
     # Show the window instead of starting it hidden. A hidden window is never exposed, so it only
     # renders through grabWindow(); picking needs the real, exposed render path.
@@ -55,6 +58,11 @@ if ($StressAppearance) { $arguments += @('--stress-appearance', $StressAppearanc
 if ($SecondNpc) { $arguments += @('--second-npc', $SecondNpc) }
 if ($StressWork) { $arguments += @('--stress-work', "`"$StressWork`"") }
 if ($VerifyViewport) { $arguments += '--verify-viewport' }
+if ($ForgePreview) {
+    $models = ($ForgePreview | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }) -join ';'
+    $forgeCaptures = Join-Path (Split-Path -Parent $Screenshot) 'forge-preview'
+    $arguments += @('--forge-preview', "`"$models`"", '--forge-capture', "`"$forgeCaptures`"")
+}
 if ($CaptureSet) {
     New-Item -ItemType Directory -Force $CaptureSet | Out-Null
     $arguments += @('--capture-set', "`"$((Resolve-Path $CaptureSet).Path)`"")
@@ -70,7 +78,7 @@ $process.WaitForExit()
 # QML warnings and runtime shader compilation errors (custom materials compile at run time).
 $warnings = Select-String -Path $log -Pattern '\.qml:\d+|Failed to compile|QSpirvCompiler|Failed to build graphics pipeline' |
     Where-Object { $_.Line -notmatch 'propertyCache' }
-Get-Content $log | Select-String 'smoke:|screenshot|viewport:|capture:'
+Get-Content $log | Select-String 'smoke:|screenshot|viewport:|capture:|forge:'
 if ($warnings) {
     $warnings | Select-Object -First 20 | ForEach-Object { Write-Warning $_.Line }
     throw "QML or shader warnings found ($(@($warnings).Count)); see $log"

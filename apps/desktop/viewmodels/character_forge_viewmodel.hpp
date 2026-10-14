@@ -4,6 +4,7 @@
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 #include <functional>
+#include "forge_scene_viewmodel.hpp"
 #include "worker_client.hpp"
 
 #include "sns/creation/forge_project.hpp"
@@ -34,6 +35,8 @@ class CharacterForgeViewModel final : public QObject {
   Q_PROPERTY(QVariantMap workspace READ workspace NOTIFY changed)
   Q_PROPERTY(QVariantMap capabilities READ capabilities CONSTANT)
   Q_PROPERTY(bool canExportTechnical READ can_export_technical NOTIFY changed)
+  // The 3D preview of the selected model (independent from the NPC scenes of the other workspaces).
+  Q_PROPERTY(ForgeSceneViewModel* scene READ scene CONSTANT)
 
  public:
   using EnvironmentProvider = std::function<creation::ForgeEnvironment()>;
@@ -58,6 +61,7 @@ class CharacterForgeViewModel final : public QObject {
   QVariantMap workspace() const;
   QVariantMap capabilities() const;
   bool can_export_technical() const { return catalog_ready_ && !busy_ && validation_.value("technicallyExportable").toBool(); }
+  ForgeSceneViewModel* scene() const { return scene_; }
 
   Q_INVOKABLE bool newProject(const QString& name);
   Q_INVOKABLE bool openProject(const QString& folder_or_url);
@@ -88,7 +92,9 @@ class CharacterForgeViewModel final : public QObject {
 
  private:
   template <class F> void edit(F&& change, bool affects_validation = true);
+  void preview_selected_model();
   EnvironmentProvider environment_;
+  ForgeSceneViewModel* scene_ = nullptr;
   creation::ForgeDraft draft_;
   bool has_project_ = false;
   QString project_path_;

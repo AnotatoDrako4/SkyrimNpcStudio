@@ -5,6 +5,7 @@ qt_add_executable(SkyrimNpcStudio WIN32
   main.cpp
   components/viewport_verifier.cpp components/viewport_verifier.hpp
   components/appearance_stress.cpp components/appearance_stress.hpp
+  components/forge_preview_check.cpp components/forge_preview_check.hpp
   diagnostics/crash_diagnostics.cpp diagnostics/crash_diagnostics.hpp
   viewmodels/json_bridge.hpp
   viewmodels/mo2_snapshot.hpp
@@ -17,7 +18,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
-  viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp)
+  viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
+  viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -85,7 +87,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D
-  sns::ipc sns::mo2 sns::projects sns::creation sns::outfit
+  sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering
   sns::compile_options

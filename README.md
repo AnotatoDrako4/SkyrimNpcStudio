@@ -17,6 +17,7 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 - Las configuraciones de material de prendas se conservan en el proyecto, pero aún no afectan al visor ni al juego. La exportación las bloquea hasta que puedan generar DDS y referencias NIF verificadas; ver [estado de materiales](docs/MATERIAL_VARIANTS.md).
 - Visor Qt Quick 3D: NIF mediante nifly, recursos sueltos/BSA 105, DDS mediante DirectXTex, mezcla de peso y skinning CPU. Transparencias traducidas de la `NiAlphaProperty` y del alfa real de cada textura, FaceGen con tinte compuesto, formas de física SMP ocultas como en el juego. Cámara orbital, paneo, zoom, selección, ocultación, UV, huesos, comparación del atuendo original/borrador, inspector por geometría (origen MO2, shader, texturas, alfa, huesos, avisos) y vistas de diagnóstico (canal alfa, normales, tangentes, alambre, solo difusa, sin luz).
 - Recursos incompatibles o ausentes generan diagnósticos. No reproduce shaders, animaciones ni física de Skyrim; el visor no certifica exportaciones faciales.
+- **Character Forge** (tercer workspace, también sin perfil MO2): proyectos `.sncf` de NPC nuevos y vista previa 3D de modelos **GLB/glTF 2.0** validados antes de cargarlos (estructura, referencias, índices, rutas confinadas, límites), con encuadre y vistas de cámara. Un modelo visible no está adaptado a Skyrim: FBX/OBJ/BLEND, conversión a NIF y FaceGen de NPC nuevos siguen pendientes ([registro](docs/CHARACTER_FORGE_IMPLEMENTATION_LOG.md)).
 
 ## Ejecutar Sin Compilar
 

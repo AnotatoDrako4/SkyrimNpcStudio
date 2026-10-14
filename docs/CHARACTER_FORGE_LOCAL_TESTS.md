@@ -1,6 +1,36 @@
-# Character Forge — verificación local pendiente
+# Character Forge — verificación local
 
-La nube preparó .NET y comprobó pruebas sintéticas y sintaxis. **No se ha compilado ni ejecutado la aplicación Windows desde esta sesión.** Ningún resultado certifica el renderizado, Blender, MO2 o Skyrim. Los paneles con motores pendientes muestran acciones inactivas.
+Resultados separados por entorno. Las secciones «Evidencia Cloud» son de sesiones en la nube sin
+Windows; la sección «Evidencia Windows» es de ejecuciones reales en Windows. Ningún resultado
+certifica Skyrim. Los paneles con motores pendientes muestran acciones inactivas.
+
+## Evidencia Windows (2026-10-13, rama `feature/character-forge-runtime-3d`)
+
+Windows 11, MSVC 14.44 (español), Qt 6.11.2, .NET 10.0.401, Blender 5.2.2, D3D11.
+
+| Prueba | Comando | Resultado |
+|---|---|---|
+| Base 298990d | `.\scripts\local-review.ps1` | build, dotnet-test, ctest, smoke: passed |
+| Workspace Character Forge | `.\scripts\smoke-test.ps1 -WorkspaceIndex 2 -Size 1600x900 -ShowWindow` | OK, sin avisos QML |
+| Validador glTF | `build\debug\bin\sns_engine_tests.exe "[gltf]"` | 8 casos / 112 aserciones |
+| Suites | `ctest --preset debug -j 4 --output-on-failure`; `dotnet test --solution SkyrimNpcStudio.slnx` | 114/114 (8 `[local]` omitidas); 65/65 |
+| Vista previa GLB/glTF | `.\scripts\local-review.ps1` (paso `forge-preview`) | passed: 3 modelos visibles (7,5–8,5 % de píxeles del View3D), GLB truncado rechazado con mensaje, recarga |
+
+### Procedimiento de la vista previa 3D
+
+```powershell
+# Modelos de prueba reales (opcional: ya están versionados en tests/fixtures/models)
+& 'D:\Program Files\blender.exe' --background --factory-startup --python tools\blender\make_test_models.py -- tests\fixtures\models
+# Comprobación automática en la ventana real (sin perfil MO2); capturas junto a la captura principal
+.\scripts\smoke-test.ps1 -Screenshot out\local-review\forge.png -Size 1600x900 -ShowWindow `
+  -ForgePreview tests\fixtures\models\suzanne.glb, tests\fixtures\models\rigged_figure.glb, tests\fixtures\models\rigged_figure_split\rigged_figure.gltf
+```
+
+Manual: en el diálogo de instancia pulsar «Continuar en Character Forge sin perfil», «Nuevo»,
+«Importar personaje» → «Seleccionar archivo 3D…». Comprobar órbita (arrastrar), zoom (rueda),
+desplazamiento (Ctrl+arrastrar), «Encuadrar», «Frontal», «Lateral», «Posterior», «Restablecer» y
+«Malla». Un GLB truncado o un glTF que apunta a `../` debe mostrar el error en el visor y no cargar
+nada. Pendiente en Windows: la misma prueba con el paquete `dist` y la órbita con ratón real.
 
 ## Capacidades y límites
 
@@ -8,8 +38,8 @@ La nube preparó .NET y comprobó pruebas sintéticas y sintaxis. **No se ha com
 | --- | --- | --- |
 | NPC original | DTO/RPC 1.3, validación, builder Mutagen, NPC_/OTFT/ACHR interior opcional y relectura | Assets reales y validación dentro de Skyrim |
 | Proyecto | .sncf v2, migración v1 en memoria, guardado atómico, undo/redo propio, workspace contextual | Ejecución de Catch2 y UI Windows |
-| Viewport | Contenedor para escena de creación, toolbar y estado vacío explícito | Backend de geometría original; no usa la escena del NPC seleccionado |
-| Modelos | Archivos GLB/glTF/FBX/OBJ/BLEND; nombre/tamaño, metadatos glTF 2.0 y cabecera BLEND; biblioteca de referencias | Importación de buffers/geometría, previsualización y adaptación NIF |
+| Viewport | `View3D` + `RuntimeLoader` con modelos GLB/glTF validados, cámara, vistas, malla, errores (verificado en Windows) | Selección por geometría, huesos visibles, comparación original/adaptado |
+| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`) y vista previa; FBX/OBJ/BLEND: selección y cabecera BLEND; biblioteca de referencias | Conversión FBX/OBJ/BLEND (bridge), copia al proyecto, adaptación NIF |
 | Blender/MCP | Selector, detección en PATH, configuración no verificada, interfaces C++ tipadas | Bridge, versión real y conexión MCP |
 | IA | Descripción, proveedor futuro e imágenes de referencia verificadas; persistencia local | Adaptadores, costos confirmados y generación; no se usan APIs/claves |
 | Equipo | Catálogo ARMO/ARMA, slots/raza/sexo, inventario y OTFT propio | Disponibilidad de assets reales y física en juego |
