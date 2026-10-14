@@ -1,4 +1,4 @@
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D Quick3DAssetUtils)
 qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(SkyrimNpcStudio WIN32
@@ -86,7 +86,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 # compiler back end, where /external:W0 does not apply. Only this warning is relaxed, only here.
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
-  Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D
+  Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering

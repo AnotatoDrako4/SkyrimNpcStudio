@@ -115,6 +115,82 @@ ColumnLayout {
             wrapMode: Text.WordWrap
         }
     }
+    // Drawable parts as RuntimeLoader created them (see ForgeSceneViewModel.partMatch).
+    readonly property var parts: scene.parts
+    readonly property var selectedPart: scene.selectedPart >= 0 && scene.selectedPart < parts.length ? parts[scene.selectedPart] : null
+    Text {
+        Layout.fillWidth: true
+        Layout.topMargin: 6
+        visible: root.parts.length > 0
+        text: qsTr("Partes del modelo (%1)").arg(root.parts.length)
+        color: Theme.text
+        font.bold: true
+    }
+    Text {
+        Layout.fillWidth: true
+        visible: root.parts.length > 0
+        text: root.scene.partMatch === "order"
+            ? qsTr("Nombres del glTF asignados por orden de escena: materiales, skin, morph targets y jerarquía coinciden.")
+            : root.scene.partMatch === "order-unconfirmed"
+            ? qsTr("Asignación por orden no confirmada: alguna parte no coincide con su nodo glTF.")
+            : qsTr("El visor creó %1 parte(s) para %2 nodo(s) con malla: sin nombres del glTF.")
+                .arg(root.parts.length).arg((root.inspection.meshNodes || []).length)
+        color: root.scene.partMatch === "order" ? Theme.textMuted : Theme.warn
+        font.pixelSize: Theme.small
+        wrapMode: Text.WordWrap
+    }
+    Repeater {
+        model: root.parts
+        delegate: RowLayout {
+            id: partRow
+            required property var modelData
+            Layout.fillWidth: true
+            spacing: 2
+            CheckBox {
+                checked: partRow.modelData.visible
+                onToggled: root.scene.setPartVisible(partRow.modelData.index, checked)
+                ToolTip.visible: hovered
+                ToolTip.text: partRow.modelData.hiddenBy.length
+                    ? qsTr("Visible, pero oculta porque %1 está oculta (Qt Quick 3D no dibuja los hijos de un nodo oculto).").arg(partRow.modelData.hiddenBy)
+                    : qsTr("Mostrar u ocultar esta parte en el visor")
+            }
+            ItemDelegate {
+                Layout.fillWidth: true
+                highlighted: root.scene.selectedPart === partRow.modelData.index
+                text: partRow.modelData.label
+                    + (partRow.modelData.triangles !== undefined ? qsTr(" · %1 triángulos").arg(partRow.modelData.triangles) : "")
+                    + (partRow.modelData.hiddenBy.length ? qsTr(" · oculta por %1").arg(partRow.modelData.hiddenBy) : "")
+                onClicked: root.scene.selectPart(highlighted ? -1 : partRow.modelData.index)
+            }
+        }
+    }
+    Text {
+        Layout.fillWidth: true
+        visible: root.selectedPart !== null
+        text: {
+            const p = root.selectedPart;
+            if (!p)
+                return "";
+            const size = qsTr("tamaño local %1 × %2 × %3").arg(p.size.x.toFixed(3)).arg(p.size.y.toFixed(3)).arg(p.size.z.toFixed(3));
+            const rendered = qsTr("%1 material(es)%2%3").arg(p.materials)
+                .arg(p.skinned ? qsTr(" · con skin") : "")
+                .arg(p.morphTargets > 0 ? qsTr(" · %1 morph target(s)").arg(p.morphTargets) : "");
+            if (p.node === undefined)
+                return qsTr("%1: %2 · %3").arg(p.label).arg(rendered).arg(size);
+            return qsTr("%1: nodo glTF %2 · malla «%3» · %4 primitiva(s) · %5 vértices · %6 triángulos · %7 · %8%9")
+                .arg(p.label).arg(p.node).arg(p.meshName || qsTr("sin nombre")).arg(p.primitives).arg(p.vertices).arg(p.triangles)
+                .arg(rendered).arg(size).arg(p.agrees ? "" : qsTr(" · no coincide con el nodo"));
+        }
+        color: Theme.textDim
+        wrapMode: Text.WordWrap
+    }
+    Button {
+        Layout.fillWidth: true
+        visible: root.parts.length > 0
+        enabled: root.parts.some(p => !p.visible)
+        text: qsTr("Mostrar todas las partes")
+        onClicked: root.scene.showAllParts()
+    }
     Button {
         Layout.fillWidth: true
         text: qsTr("Recargar vista previa")

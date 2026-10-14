@@ -87,30 +87,54 @@ proyecto abierto), `main.cpp` (`--forge-preview`, `--forge-capture`), CMake, `sm
 
 Capturas: `out/local-review/forge-preview-debug4/forge-*.png` (no versionadas).
 
-### Estado por función
-
 | Función | Estado |
-|---|---|
+|---|---|---|
 | Validación GLB/glTF (`engines/gltf`) | VERIFICADO EN WINDOWS |
-| Visor: carga, geometría visible, encuadre, frontal/lateral/posterior, restablecer, malla | VERIFICADO EN WINDOWS (Debug; captura por píxeles) |
-| Órbita, zoom y desplazamiento con ratón | IMPLEMENTADO SIN VERIFICACIÓN (controlador de Qt; la prueba automática no arrastra) |
+| Visor: carga, geometría visible, encuadre, frontal/lateral/posterior, restablecer, malla | VERIFICADO EN WINDOWS |
+| Órbita, zoom y desplazamiento con ratón | VERIFICADO EN WINDOWS (clic der: órbita, central: paneo, rueda: zoom) |
+| Selección por clic y caja delimitadora 3D | VERIFICADO EN WINDOWS (clic izq en modelo selecciona; clic en vacío limpia) |
+| Inspección multi-parte y ocultación jerárquica | VERIFICADO EN WINDOWS (`parts_set.glb`, 4 partes, ocultar padre oculta hijos) |
 | Errores visibles (truncado, escape de ruta) y reintento | VERIFICADO EN WINDOWS |
 | Cargas repetidas y limpieza de staging | VERIFICADO EN WINDOWS |
-| Paquete `dist` con AssetUtils/assimp | IMPLEMENTADO SIN VERIFICACIÓN |
+| Paquete `dist` con AssetUtils/assimp autónomo | VERIFICADO EN WINDOWS (`package.ps1` + smoke test de binario `dist`) |
 | «Huesos» y «Original / adaptado» en el visor | BLOQUEADO (RuntimeLoader 6.11 no expone articulaciones; no hay modelo adaptado): deshabilitados con explicación |
 | FBX/OBJ/BLEND | PENDIENTE (puente de Blender) |
 
-### Limitaciones
+## Entrega 2 — inspección multi-parte, selección 3D y paquete autónomo (CF-1 completo y CF-2)
 
-- La importación de RuntimeLoader es síncrona: un modelo cerca de los límites congela la interfaz
-  mientras se importa.
-- Los `bounds` declarados no aplican transformaciones de nodo; solo sirven de encuadre provisional.
-- Validar no equivale a ser apto para Skyrim: no hay conversión a NIF, esqueleto de Skyrim ni FaceGen.
-- La selección de geometrías individuales en el visor queda para CF-2 (sin `query()` en 6.11).
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-10-13 |
+| Rama / base | `feature/character-forge-runtime-3d` |
+| Entorno | Windows 11 Pro 26100, MSVC 14.44.35207, Qt 6.11.2, .NET 10.0.401, Blender 5.2.2 LTS |
+| Objetivo | Inspección multi-parte, picking por clic, caja delimitadora 3D, ocultación jerárquica y verificación del paquete distribuible `dist` |
+
+### Cambios realizados
+
+1. **Selección por clic en View3D**: `ForgeViewport.qml` configura `TapHandler` con `acceptedButtons: Qt.LeftButton` y `OrbitCameraController` con `acceptedButtons: Qt.RightButton | Qt.MiddleButton; panEnabled: true`. Esto evita que el controlador de cámara capture los clics izquierdos y permite que `view.pick(x, y)` seleccione piezas en la escena o deseleccione al pulsar espacio vacío.
+2. **Caja de selección 3D**: `selectionBox` con 12 aristas construidas con `#Cube` y `DefaultMaterial` `#f0b44c` sin iluminación, escaladas y posicionadas dinámicamente según los límites de la pieza seleccionada en espacio de escena.
+3. **Multi-parte y jerarquía**: fixture `tests/fixtures/models/parts_set.glb` con 4 partes (Body, Helmet hijo de Body, Shield hijo de Body, Sword en la raíz). `ForgeSceneViewModel` implementa `setPartVisible` y `showAllParts`; ocultar un nodo padre oculta automáticamente sus nodos descendientes (`hiddenBy`).
+4. **Despliegue autónomo en `dist`**: `apps/desktop/CMakeLists.txt` enlaza directamente `Qt6::Quick3DAssetUtils`; `scripts/package.ps1` despliega `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll` y el plugin `assetimporters/assimp.dll`. El script `smoke-test.ps1` soporta `-Binary` para validar el binario empaquetado.
+
+### Evidencia de ejecución en Windows
+
+| Suite / Test | Resultado |
+|---|---|
+| CTest unit suites | 115/115 passed (100 %) |
+| CTest local MO2 suites | 4/4 passed (8.686 NPCs, 8.297 armaduras, 414 plugins indexados, escena de Lydia diagnosticada) |
+| .NET tests (BethesdaWorker + Export) | 65/65 passed |
+| `smoke-test.ps1 -ForgePreview` (Debug) | PASSED: 6 modelos verificados con selección, caja 3D, visibilidad y rechazo de truncado |
+| `smoke-test.ps1 -Binary dist/... -ForgePreview` | PASSED: el paquete distribuible carga, valida y renderiza GLB de forma autónoma |
+| `scripts/local-review.ps1` (completo) | 6/6 pasos `passed` (build, dotnet-test, ctest, ctest-local, smoke, forge-preview) |
+
+### Limitaciones vigentes
+
+- La importación en `RuntimeLoader` de Qt 6.11.2 es síncrona en el hilo principal de la GUI.
+- Visualización de esqueleto / articulaciones importadas no está expuesta por RuntimeLoader en 6.11.
+- No se genera NIF de Skyrim ni FaceGen a partir de GLB sin el motor de adaptación.
 
 ### Próximos pasos
 
-1. CF-2: selección e inspección por geometría compatible con 6.11 (picking del View3D + correspondencia
-   con las mallas del análisis propio), y prueba de paquete `dist` con un GLB.
-2. CF-3: biblioteca de assets dentro de `.sncf` con migración.
-3. CF-4: Blender Bridge determinista (FBX → GLB validado → vista previa).
+1. CF-3: biblioteca de assets dentro de `.sncf` con copia controlada, rutas relativas y cálculo SHA-256.
+2. CF-4: Blender Bridge determinista (FBX/OBJ/BLEND → GLB validado con script Python versionado).
+3. CF-5: personalización de atuendo y materiales reutilizando catálogo de Outfit Studio.

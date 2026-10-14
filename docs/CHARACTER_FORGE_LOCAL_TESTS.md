@@ -13,8 +13,9 @@ Windows 11, MSVC 14.44 (español), Qt 6.11.2, .NET 10.0.401, Blender 5.2.2, D3D1
 | Base 298990d | `.\scripts\local-review.ps1` | build, dotnet-test, ctest, smoke: passed |
 | Workspace Character Forge | `.\scripts\smoke-test.ps1 -WorkspaceIndex 2 -Size 1600x900 -ShowWindow` | OK, sin avisos QML |
 | Validador glTF | `build\debug\bin\sns_engine_tests.exe "[gltf]"` | 8 casos / 112 aserciones |
-| Suites | `ctest --preset debug -j 4 --output-on-failure`; `dotnet test --solution SkyrimNpcStudio.slnx` | 114/114 (8 `[local]` omitidas); 65/65 |
-| Vista previa GLB/glTF | `.\scripts\local-review.ps1` (paso `forge-preview`) | passed: 3 modelos visibles (7,5–8,5 % de píxeles del View3D), GLB truncado rechazado con mensaje, recarga |
+| Suites | `ctest --preset debug -j 4 --output-on-failure`; `dotnet test --solution SkyrimNpcStudio.slnx` | 115/115 CTest unit tests passed; 4/4 MO2 local passed (8.686 NPCs, 8.297 armaduras, 414 plugins); 65/65 .NET passed |
+| Vista previa GLB/glTF y multi-parte | `.\scripts\local-review.ps1` (paso `forge-preview`) | passed: 6 verificaciones; modelos visibles, selección por clic con caja 3D, ocultación por piezas y en cascada (`parts_set.glb`), GLB truncado rechazado, recarga |
+| Paquete distribuible (`dist`) | `.\scripts\package.ps1` + `smoke-test.ps1 -Binary dist\SkyrimNpcStudio\SkyrimNpcStudio.exe -ForgePreview` | passed: `dist` autónomo con `assetimporters/assimp.dll` y `Qt6Quick3DAssetUtils.dll`, 6/6 modelos validados y renderizados sin entorno de desarrollo |
 
 ### Procedimiento de la vista previa 3D
 
@@ -23,14 +24,14 @@ Windows 11, MSVC 14.44 (español), Qt 6.11.2, .NET 10.0.401, Blender 5.2.2, D3D1
 & 'D:\Program Files\blender.exe' --background --factory-startup --python tools\blender\make_test_models.py -- tests\fixtures\models
 # Comprobación automática en la ventana real (sin perfil MO2); capturas junto a la captura principal
 .\scripts\smoke-test.ps1 -Screenshot out\local-review\forge.png -Size 1600x900 -ShowWindow `
-  -ForgePreview tests\fixtures\models\suzanne.glb, tests\fixtures\models\rigged_figure.glb, tests\fixtures\models\rigged_figure_split\rigged_figure.gltf
+  -ForgePreview tests\fixtures\models\suzanne.glb, tests\fixtures\models\rigged_figure.glb, tests\fixtures\models\rigged_figure_split\rigged_figure.gltf, tests\fixtures\models\parts_set.glb
 ```
 
 Manual: en el diálogo de instancia pulsar «Continuar en Character Forge sin perfil», «Nuevo»,
-«Importar personaje» → «Seleccionar archivo 3D…». Comprobar órbita (arrastrar), zoom (rueda),
-desplazamiento (Ctrl+arrastrar), «Encuadrar», «Frontal», «Lateral», «Posterior», «Restablecer» y
+«Importar personaje» → «Seleccionar archivo 3D…». Comprobar órbita (clic derecho y arrastrar), zoom (rueda),
+desplazamiento (clic central y arrastrar), selección de partes (clic izquierdo), «Encuadrar», «Frontal», «Lateral», «Posterior», «Restablecer» y
 «Malla». Un GLB truncado o un glTF que apunta a `../` debe mostrar el error en el visor y no cargar
-nada. Pendiente en Windows: la misma prueba con el paquete `dist` y la órbita con ratón real.
+nada. Verificado tanto en compilación de desarrollo como en el paquete `dist`.
 
 ## Capacidades y límites
 
@@ -38,8 +39,8 @@ nada. Pendiente en Windows: la misma prueba con el paquete `dist` y la órbita c
 | --- | --- | --- |
 | NPC original | DTO/RPC 1.3, validación, builder Mutagen, NPC_/OTFT/ACHR interior opcional y relectura | Assets reales y validación dentro de Skyrim |
 | Proyecto | .sncf v2, migración v1 en memoria, guardado atómico, undo/redo propio, workspace contextual | Ejecución de Catch2 y UI Windows |
-| Viewport | `View3D` + `RuntimeLoader` con modelos GLB/glTF validados, cámara, vistas, malla, errores (verificado en Windows) | Selección por geometría, huesos visibles, comparación original/adaptado |
-| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`) y vista previa; FBX/OBJ/BLEND: selección y cabecera BLEND; biblioteca de referencias | Conversión FBX/OBJ/BLEND (bridge), copia al proyecto, adaptación NIF |
+| Viewport | `View3D` + `RuntimeLoader` con modelos GLB/glTF validados, cámara, vistas, malla, errores, selección por clic con caja 3D, ocultación jerárquica (verificado en Windows y en `dist`) | Huesos visibles, comparación original/adaptado |
+| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`), vista previa y multi-parte; FBX/OBJ/BLEND: selección y cabecera BLEND; biblioteca de referencias | Conversión FBX/OBJ/BLEND (bridge), copia al proyecto, adaptación NIF |
 | Blender/MCP | Selector, detección en PATH, configuración no verificada, interfaces C++ tipadas | Bridge, versión real y conexión MCP |
 | IA | Descripción, proveedor futuro e imágenes de referencia verificadas; persistencia local | Adaptadores, costos confirmados y generación; no se usan APIs/claves |
 | Equipo | Catálogo ARMO/ARMA, slots/raza/sexo, inventario y OTFT propio | Disponibilidad de assets reales y física en juego |

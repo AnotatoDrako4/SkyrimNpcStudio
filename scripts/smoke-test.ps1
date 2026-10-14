@@ -30,14 +30,15 @@ param(
     # Show the window instead of starting it hidden. A hidden window is never exposed, so it only
     # renders through grabWindow(); picking needs the real, exposed render path.
     [switch]$ShowWindow,
+    [string]$Binary,
     [string]$Screenshot = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Screenshot) { $Screenshot = Join-Path $root 'out\smoke.png' }
-$exe = Join-Path $root "build\$Preset\bin\SkyrimNpcStudio.exe"
-if (-not (Test-Path $exe)) { throw "Build first: $exe not found." }
+$exe = if ($Binary) { (Resolve-Path $Binary).Path } else { Join-Path $root "build\$Preset\bin\SkyrimNpcStudio.exe" }
+if (-not (Test-Path $exe)) { throw "Binary not found: $exe" }
 . (Join-Path $PSScriptRoot 'dev-env.ps1') | Out-Null
 
 New-Item -ItemType Directory -Force (Split-Path -Parent $Screenshot) | Out-Null

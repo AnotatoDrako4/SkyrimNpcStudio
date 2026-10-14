@@ -25,6 +25,9 @@ ColumnLayout {
                 file: root.forge.scene.filePath,
                 operation: root.forge.scene.operation,
                 rendered: root.forge.scene.rendered,
+                parts: root.forge.scene.parts,
+                partMatch: root.forge.scene.partMatch,
+                selectedPart: root.forge.scene.selectedPart,
                 inspection: root.forge.scene.inspection,
                 details: root.forge.scene.details
             }

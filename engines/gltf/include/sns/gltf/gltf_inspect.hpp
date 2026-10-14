@@ -80,6 +80,14 @@ struct Animation {
   std::size_t channels = 0;
 };
 
+struct Node {
+  std::string name;
+  int mesh = -1;
+  int skin = -1;
+  int parent = -1;
+  std::size_t children = 0;
+};
+
 // An external file the asset needs, resolved inside the asset's folder.
 struct Resource {
   std::string uri;             // as written in the JSON (percent-decoded)
@@ -108,6 +116,10 @@ struct Inspection {
   std::optional<std::array<double, 6>> position_bounds;
 
   std::vector<Mesh> mesh_list;
+  std::vector<Node> node_list;
+  // Nodes that draw a mesh, depth-first from the default scene's roots (scene 0 when "scene" is
+  // absent; every root node when there are no scenes), children in array order.
+  std::vector<std::size_t> mesh_nodes_in_scene_order;
   std::vector<Skin> skin_list;
   std::vector<Material> material_list;
   std::vector<Image> image_list;

@@ -113,10 +113,12 @@ Qt, sin escribir en Skyrim/MO2):
 - `engines/gltf`: validación e inspección GLB/glTF 2.0 sin Qt, previa a cualquier renderizado.
 - `ForgeSceneViewModel` (propiedad `scene` de `CharacterForgeViewModel`): validación en hilo,
   copia aislada de los bytes validados, operaciones numeradas, cancelación y reinicio.
-- `ForgeViewport.qml`: `View3D` + `RuntimeLoader` (Qt 6.11.2) + `OrbitCameraController`.
+- `ForgeViewport.qml`: `View3D` + `RuntimeLoader` (Qt 6.11.2) + `OrbitCameraController` (órbita con clic derecho/central, zoom con rueda, selección con clic izquierdo) + caja de selección 3D.
+- Multi-parte e inspección: selección de piezas, cajas delimitadoras en espacio de escena y ocultación jerárquica (CF-2, verificado en Windows).
+- Paquete distribuible: `dist/SkyrimNpcStudio` empaqueta `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll` y `assetimporters/assimp.dll` para ejecución autónoma (verificado en Windows).
 
-La antigua Fase 4 («Importación de personajes externos») se reparte así: GLB/glTF visibles y
-validados ya funcionan (CF-1, verificado en Windows); FBX/OBJ/BLEND esperan al Blender Bridge
+La antigua Fase 4 («Importación de personajes externos») se reparte así: GLB/glTF visibles,
+validados e inspeccionables por piezas ya funcionan (CF-1 y CF-2, verificados en Windows y en `dist`); FBX/OBJ/BLEND esperan al Blender Bridge
 (CF-4); la adaptación a Skyrim (Fase 5 original) sigue pendiente. Riesgos vigentes: importación
 síncrona de RuntimeLoader, ausencia de `query()` antes de Qt 6.12 y que un modelo visible no es un
 modelo apto para Skyrim.

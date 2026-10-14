@@ -705,12 +705,24 @@ class Checker {
     const auto& nodes = items("nodes");
     std::vector<long long> parent(nodes.size(), -1);
     bool hierarchy_ok = true;
+    // Index stored in the node list only when it references an existing object.
+    const auto valid_index = [](const Json& n, const char* key, std::size_t count) {
+      if (!n.contains(key) || !n[key].is_number_integer()) return -1;
+      const auto v = n[key].get<long long>();
+      return v >= 0 && static_cast<std::size_t>(v) < count ? static_cast<int>(v) : -1;
+    };
+    out_.node_list.resize(nodes.size());
     for (std::size_t i = 0; i < nodes.size(); ++i) {
       const auto where = "/nodes/" + std::to_string(i);
       const auto& n = nodes[i];
       ref(n, "mesh", out_.meshes, where);
       ref(n, "skin", out_.skins, where);
       ref(n, "camera", out_.cameras, where);
+      auto& info = out_.node_list[i];
+      info.name = n.value("name", std::string());
+      info.mesh = valid_index(n, "mesh", out_.meshes);
+      info.skin = valid_index(n, "skin", out_.skins);
+      if (n.contains("children") && n["children"].is_array()) info.children = n["children"].size();
       if (n.contains("matrix") && !finite_numbers(n["matrix"], 16)) error("JsonInvalid", "matrix needs 16 finite numbers", where);
       if (n.contains("translation") && !finite_numbers(n["translation"], 3)) error("JsonInvalid", "invalid translation", where);
       if (n.contains("rotation") && !finite_numbers(n["rotation"], 4)) error("JsonInvalid", "invalid rotation", where);
@@ -771,8 +783,50 @@ class Checker {
       }
     }
     if (root_.contains("scene")) ref(root_, "scene", out_.scenes, "");
+    for (std::size_t i = 0; i < nodes.size(); ++i) out_.node_list[i].parent = static_cast<int>(parent[i]);
+    if (hierarchy_ok) mesh_nodes_in_order(parent);
     const bool any_mesh_node = std::any_of(nodes.begin(), nodes.end(), [](const Json& n) { return n.contains("mesh"); });
     if (out_.meshes > 0 && !any_mesh_node) warn("MeshNotInstanced", "no node uses a mesh: nothing may be drawn", "/nodes");
+  }
+
+  // Depth-first walk of the default scene (iterative: a 200k-node chain must not overflow the
+  // stack). Only called on a validated forest, so every child index is in range and unique.
+  void mesh_nodes_in_order(const std::vector<long long>& parent) {
+    const auto& nodes = items("nodes");
+    const auto& scenes = items("scenes");
+    std::vector<std::size_t> roots;
+    const Json* scene = nullptr;
+    if (root_.contains("scene") && root_["scene"].is_number_integer()) {
+      const auto s = root_["scene"].get<long long>();
+      if (s >= 0 && static_cast<std::size_t>(s) < scenes.size()) scene = &scenes[static_cast<std::size_t>(s)];
+    } else if (!scenes.empty()) {
+      scene = &scenes[0];
+    }
+    if (scene) {
+      if (scene->contains("nodes") && (*scene)["nodes"].is_array()) {
+        for (const auto& n : (*scene)["nodes"]) {
+          if (!n.is_number_integer() || n.get<long long>() < 0) continue;
+          const auto i = static_cast<std::size_t>(n.get<long long>());
+          if (i < nodes.size() && parent[i] == -1) roots.push_back(i);
+        }
+      }
+    } else if (scenes.empty()) {
+      for (std::size_t i = 0; i < nodes.size(); ++i)
+        if (parent[i] == -1) roots.push_back(i);
+    }
+    std::vector<unsigned char> seen(nodes.size(), 0);
+    std::vector<std::size_t> stack(roots.rbegin(), roots.rend());
+    while (!stack.empty()) {
+      const auto i = stack.back();
+      stack.pop_back();
+      if (seen[i]) continue;  // a scene may list the same root twice
+      seen[i] = 1;
+      if (out_.node_list[i].mesh >= 0) out_.mesh_nodes_in_scene_order.push_back(i);
+      const auto& n = nodes[i];
+      if (!n.contains("children")) continue;
+      const auto& children = n["children"];
+      for (auto c = children.rbegin(); c != children.rend(); ++c) stack.push_back(static_cast<std::size_t>(c->get<long long>()));
+    }
   }
 
   void skins() {

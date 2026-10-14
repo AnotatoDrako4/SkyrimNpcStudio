@@ -58,6 +58,7 @@ oficial de la versión, (4) código fuente oficial, (5) prueba reproducible.
 
 | Campo | Valor |
 |---|---|
-| API | `windeployqt` 6.11.2 |
-| Comprobado | `windeployqt --dry-run --release --qmldir apps/desktop/qml` añade `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll`, `assetimporters/assimp.dll` y `qml/QtQuick3D/AssetUtils`. |
-| Estado | IMPLEMENTADO SIN VERIFICACIÓN para `dist` (falta abrir un GLB con un paquete generado por `package.ps1`). |
+| API | `windeployqt` 6.11.2 + `scripts/package.ps1` |
+| Comprobado | `apps/desktop/CMakeLists.txt` enlaza `Qt6::Quick3DAssetUtils`; `scripts/package.ps1` despliega `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll`, `assetimporters/assimp.dll` y `qml/QtQuick3D/AssetUtils`. |
+| Verificación | Paquete `dist/SkyrimNpcStudio` probado de forma autónoma con `smoke-test.ps1 -Binary dist/SkyrimNpcStudio/SkyrimNpcStudio.exe -ForgePreview`: 6/6 modelos procesados (carga, selección por clic, caja 3D, visibilidad y rechazo de truncado) con salida PASSED y código 0. |
+| Estado | VERIFICADO EN WINDOWS. |

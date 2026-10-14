@@ -1,12 +1,15 @@
 """Builds the glTF test models of Character Forge with Blender's own exporter.
 
-    blender --background --factory-startup --python tools/blender/make_test_models.py -- <output folder>
+    blender --background --factory-startup --python tools/blender/make_test_models.py -- <output folder> [model...]
 
 Everything is made from Blender primitives (no third-party asset):
   suzanne.glb          Suzanne, one material, smooth normals.
   rigged_figure.glb    body + head mesh, 4-bone armature with automatic weights, one shape key,
                        a 12-frame bone animation and an embedded generated texture.
   rigged_figure_split/ the same figure as .gltf + .bin + .png (external resources).
+  parts_set.glb        four mesh nodes in a hierarchy (Body > Helmet, Body > Shield, Sword at the
+                       root); Body has two materials, so its mesh has two primitives.
+Naming models (suzanne, rigged_figure, parts_set) builds only those.
 Prints one "SNS_MODEL <path> <bytes>" line per file and exits with 1 on failure.
 """
 import os
@@ -15,13 +18,13 @@ import sys
 import bpy
 
 
-def out_dir():
+def arguments():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if not args:
-        raise SystemExit("usage: ... --python make_test_models.py -- <output folder>")
+        raise SystemExit("usage: ... --python make_test_models.py -- <output folder> [model...]")
     path = os.path.abspath(args[0])
     os.makedirs(path, exist_ok=True)
-    return path
+    return path, args[1:]
 
 
 def reset():
@@ -130,11 +133,57 @@ def rigged_figure(folder):
             print("SNS_MODEL %s %d" % (os.path.join(split, name), os.path.getsize(os.path.join(split, name))), flush=True)
 
 
+def parented(child, parent):
+    # Keeps the child's world placement under its new parent.
+    child.parent = parent
+    child.matrix_parent_inverse = parent.matrix_world.inverted()
+
+
+def parts_set(folder):
+    reset()
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 0.9))
+    body = bpy.context.active_object
+    body.name = "Body"
+    body.scale = (0.4, 0.25, 0.9)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    body.data.materials.append(material("BodyCloth", (0.25, 0.35, 0.60, 1.0)))
+    body.data.materials.append(material("BodyLeather", (0.45, 0.30, 0.18, 1.0)))
+    for polygon in body.data.polygons:
+        polygon.material_index = 1 if polygon.center.z > 0 else 0
+
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, radius=0.18, location=(0, 0, 1.55))
+    helmet = bpy.context.active_object
+    helmet.name = "Helmet"
+    helmet.data.materials.append(material("HelmetSteel", (0.70, 0.70, 0.72, 1.0)))
+    parented(helmet, body)
+
+    bpy.ops.mesh.primitive_cylinder_add(vertices=24, radius=0.3, depth=0.05, location=(-0.32, 0, 1.0), rotation=(0, 1.5708, 0))
+    shield = bpy.context.active_object
+    shield.name = "Shield"
+    shield.data.materials.append(material("ShieldWood", (0.55, 0.40, 0.20, 1.0)))
+    parented(shield, body)
+
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.45, 0, 0.9))
+    sword = bpy.context.active_object
+    sword.name = "Sword"
+    sword.scale = (0.04, 0.02, 0.9)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    sword.data.materials.append(material("SwordSteel", (0.85, 0.85, 0.90, 1.0)))
+
+    export(os.path.join(folder, "parts_set.glb"), "GLB")
+
+
+MODELS = {"suzanne": suzanne, "rigged_figure": rigged_figure, "parts_set": parts_set}
+
+
 def main():
-    folder = out_dir()
+    folder, names = arguments()
     print("SNS_BLENDER " + bpy.app.version_string, flush=True)
-    suzanne(folder)
-    rigged_figure(folder)
+    unknown = [n for n in names if n not in MODELS]
+    if unknown:
+        raise SystemExit("unknown model(s): " + ", ".join(unknown))
+    for name in names or MODELS:
+        MODELS[name](folder)
 
 
 try:

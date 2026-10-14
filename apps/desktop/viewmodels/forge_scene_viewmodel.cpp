@@ -106,6 +106,28 @@ QVariantMap to_variant(const gltf::Inspection& i) {
   for (const auto& e : i.extensions_required) required << qs(e);
   QVariantList bounds;
   if (i.position_bounds) for (const auto v : *i.position_bounds) bounds << v;
+  // Nodes that draw a mesh in the order RuntimeLoader's scene tree is walked (depth first).
+  QVariantList mesh_nodes;
+  std::vector<int> order_of(i.node_list.size(), -1);
+  for (std::size_t k = 0; k < i.mesh_nodes_in_scene_order.size(); ++k) order_of[i.mesh_nodes_in_scene_order[k]] = static_cast<int>(k);
+  for (const auto n : i.mesh_nodes_in_scene_order) {
+    const auto& node = i.node_list[n];
+    // Nearest ancestor that draws a mesh, as a position in this list (-1 = none).
+    int mesh_parent = -1;
+    for (int a = node.parent; a >= 0 && mesh_parent < 0; a = i.node_list[static_cast<std::size_t>(a)].parent) mesh_parent = order_of[static_cast<std::size_t>(a)];
+    if (node.mesh < 0 || static_cast<std::size_t>(node.mesh) >= i.mesh_list.size()) continue;
+    const auto& mesh = i.mesh_list[static_cast<std::size_t>(node.mesh)];
+    qulonglong vertices = 0, triangles = 0, morph_targets = 0;
+    for (const auto& p : mesh.primitives) {
+      vertices += p.vertices;
+      triangles += p.triangles;
+      morph_targets = std::max<qulonglong>(morph_targets, p.morph_targets);
+    }
+    mesh_nodes << QVariantMap{{"node", static_cast<qulonglong>(n)}, {"name", qs(node.name)}, {"mesh", node.mesh},
+                              {"meshName", qs(mesh.name)}, {"primitives", static_cast<qulonglong>(mesh.primitives.size())},
+                              {"vertices", vertices}, {"triangles", triangles}, {"skinned", node.skin >= 0},
+                              {"morphTargets", morph_targets}, {"meshParent", mesh_parent}};
+  }
   return {{"container", qs(i.container)},
           {"generator", qs(i.generator)},
           {"version", qs(i.version)},
@@ -121,6 +143,7 @@ QVariantMap to_variant(const gltf::Inspection& i) {
           {"validated", QVariantMap{{"vertices", static_cast<qulonglong>(i.vertices)}, {"indices", static_cast<qulonglong>(i.indices)},
                                     {"triangles", static_cast<qulonglong>(i.triangles)}, {"indicesChecked", i.indices_checked}}},
           {"positionBounds", bounds},
+          {"meshNodes", mesh_nodes},
           {"meshes", meshes},
           {"skins", skins},
           {"materials", materials},
@@ -201,7 +224,16 @@ void ForgeSceneViewModel::set_state(const QString& state, const QString& message
   emit changed();
 }
 
+void ForgeSceneViewModel::clear_parts() {
+  if (parts_.isEmpty() && selected_ == -1 && part_match_.isEmpty()) return;
+  parts_.clear();
+  selected_ = -1;
+  part_match_.clear();
+  emit partsChanged();
+}
+
 void ForgeSceneViewModel::clear_source() {
+  clear_parts();  // parts belong to the asset being shown
   if (source_.isEmpty()) return;
   source_.clear();
   emit sourceChanged();  // the viewport unloads the current asset now
@@ -347,6 +379,116 @@ void ForgeSceneViewModel::reportBounds(const QUrl& loaded_source, const QVector3
                {"radius", size.length() * 0.5f}};
   emit changed();
   if (first) emit frameRequested();
+}
+
+void ForgeSceneViewModel::reportParts(const QUrl& loaded_source, const QVariantList& rendered_parts) {
+  if (source_.isEmpty() || loaded_source != source_ || state_ != QStringLiteral("loaded")) return;
+  const auto nodes = inspection_.value(QStringLiteral("meshNodes")).toList();
+  const bool by_order = !rendered_parts.isEmpty() && rendered_parts.size() == nodes.size();
+  const bool same_parts = parts_.size() == rendered_parts.size();  // a repeated report keeps the user's choices
+  bool consistent = by_order;
+  QVariantList parts;
+  for (qsizetype i = 0; i < rendered_parts.size(); ++i) {
+    const auto r = rendered_parts[i].toMap();
+    const auto minimum = r.value(QStringLiteral("minimum")).value<QVector3D>();
+    const auto maximum = r.value(QStringLiteral("maximum")).value<QVector3D>();
+    const int materials = r.value(QStringLiteral("materials")).toInt();
+    const bool skinned = r.value(QStringLiteral("skinned")).toBool();
+    const int morph_targets = r.value(QStringLiteral("morphTargets")).toInt();
+    // Nearest Model above this one in the render tree; listed depth first, so it comes earlier.
+    const int parent = r.value(QStringLiteral("parent"), -1).toInt();
+    QVariantMap part{{"index", static_cast<int>(i)},
+                     {"parent", parent >= 0 && parent < i ? parent : -1},
+                     {"visible", same_parts ? parts_[i].toMap().value(QStringLiteral("visible"), true).toBool() : true},
+                     {"materials", materials},
+                     {"skinned", skinned},
+                     {"morphTargets", morph_targets},
+                     {"size", QVariant::fromValue(maximum - minimum)}};
+    if (by_order) {
+      const auto n = nodes[i].toMap();
+      // Qt's importer gives a Model one material per glTF primitive, keeps skins and morph targets
+      // on it and mirrors the node hierarchy; a disagreement means the order assumption does not
+      // hold for this asset.
+      const bool agrees = n.value(QStringLiteral("primitives")).toInt() == materials &&
+                          n.value(QStringLiteral("skinned")).toBool() == skinned &&
+                          n.value(QStringLiteral("morphTargets")).toInt() == morph_targets &&
+                          n.value(QStringLiteral("meshParent")).toInt() == part.value(QStringLiteral("parent")).toInt();
+      consistent &= agrees;
+      const auto name = n.value(QStringLiteral("name")).toString();
+      const auto mesh_name = n.value(QStringLiteral("meshName")).toString();
+      part.insert(QVariantMap{
+          {"label", !name.isEmpty() ? name : !mesh_name.isEmpty() ? mesh_name : tr("Nodo %1").arg(n.value("node").toInt())},
+          {"node", n.value("node")},
+          {"nodeName", name},
+          {"meshName", mesh_name},
+          {"primitives", n.value("primitives")},
+          {"vertices", n.value("vertices")},
+          {"triangles", n.value("triangles")},
+          {"agrees", agrees}});
+    } else {
+      part.insert(QStringLiteral("label"), tr("Parte %1").arg(i + 1));
+    }
+    parts << part;
+  }
+  parts_ = parts;
+  refresh_visibility();
+  part_match_ = parts_.isEmpty() ? QString() : !by_order ? QStringLiteral("none") : consistent ? QStringLiteral("order") : QStringLiteral("order-unconfirmed");
+  if (!same_parts || selected_ >= parts_.size()) selected_ = -1;
+  if (!same_parts) {
+    diag::record("forge", QStringLiteral("preview #%1: %2 part(s), %3 glTF mesh node(s), match %4")
+                              .arg(operation_).arg(parts_.size()).arg(nodes.size()).arg(part_match_).toStdString().c_str());
+  }
+  emit partsChanged();
+}
+
+void ForgeSceneViewModel::selectPart(int index) {
+  const int selected = index >= 0 && index < parts_.size() ? index : -1;
+  if (selected == selected_) return;
+  selected_ = selected;
+  emit partsChanged();
+}
+
+void ForgeSceneViewModel::setPartVisible(int index, bool visible) {
+  if (index < 0 || index >= parts_.size()) return;
+  auto part = parts_[index].toMap();
+  if (part.value(QStringLiteral("visible")).toBool() == visible) return;
+  part.insert(QStringLiteral("visible"), visible);
+  parts_[index] = part;
+  refresh_visibility();
+  emit partsChanged();
+}
+
+// Qt Quick 3D does not render the children of a hidden node: "shown" is the part's own choice and
+// every ancestor's, "hiddenBy" names the nearest hidden ancestor.
+void ForgeSceneViewModel::refresh_visibility() {
+  for (qsizetype i = 0; i < parts_.size(); ++i) {
+    auto part = parts_[i].toMap();
+    QString hidden_by;
+    for (int a = part.value(QStringLiteral("parent")).toInt(); a >= 0 && a < i; a = parts_[a].toMap().value(QStringLiteral("parent")).toInt()) {
+      const auto ancestor = parts_[a].toMap();
+      if (!ancestor.value(QStringLiteral("visible")).toBool()) {
+        hidden_by = ancestor.value(QStringLiteral("label")).toString();
+        break;
+      }
+    }
+    part.insert(QStringLiteral("hiddenBy"), hidden_by);
+    part.insert(QStringLiteral("shown"), part.value(QStringLiteral("visible")).toBool() && hidden_by.isEmpty());
+    parts_[i] = part;
+  }
+}
+
+void ForgeSceneViewModel::showAllParts() {
+  bool any = false;
+  for (auto& p : parts_) {
+    auto part = p.toMap();
+    if (part.value(QStringLiteral("visible")).toBool()) continue;
+    part.insert(QStringLiteral("visible"), true);
+    p = part;
+    any = true;
+  }
+  if (!any) return;
+  refresh_visibility();
+  emit partsChanged();
 }
 
 void ForgeSceneViewModel::reload() {

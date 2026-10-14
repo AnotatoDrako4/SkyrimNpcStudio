@@ -17,7 +17,7 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 - Las configuraciones de material de prendas se conservan en el proyecto, pero aún no afectan al visor ni al juego. La exportación las bloquea hasta que puedan generar DDS y referencias NIF verificadas; ver [estado de materiales](docs/MATERIAL_VARIANTS.md).
 - Visor Qt Quick 3D: NIF mediante nifly, recursos sueltos/BSA 105, DDS mediante DirectXTex, mezcla de peso y skinning CPU. Transparencias traducidas de la `NiAlphaProperty` y del alfa real de cada textura, FaceGen con tinte compuesto, formas de física SMP ocultas como en el juego. Cámara orbital, paneo, zoom, selección, ocultación, UV, huesos, comparación del atuendo original/borrador, inspector por geometría (origen MO2, shader, texturas, alfa, huesos, avisos) y vistas de diagnóstico (canal alfa, normales, tangentes, alambre, solo difusa, sin luz).
 - Recursos incompatibles o ausentes generan diagnósticos. No reproduce shaders, animaciones ni física de Skyrim; el visor no certifica exportaciones faciales.
-- **Character Forge** (tercer workspace, también sin perfil MO2): proyectos `.sncf` de NPC nuevos y vista previa 3D de modelos **GLB/glTF 2.0** validados antes de cargarlos (estructura, referencias, índices, rutas confinadas, límites), con encuadre y vistas de cámara. Un modelo visible no está adaptado a Skyrim: FBX/OBJ/BLEND, conversión a NIF y FaceGen de NPC nuevos siguen pendientes ([registro](docs/CHARACTER_FORGE_IMPLEMENTATION_LOG.md)).
+- **Character Forge** (tercer workspace, también sin perfil MO2): proyectos `.sncf` de NPC nuevos y vista previa 3D de modelos **GLB/glTF 2.0** validados antes de cargarlos (estructura, referencias, índices, rutas confinadas, límites), con encuadre, vistas de cámara, inspección multi-parte, selección por clic con caja delimitadora 3D y conmutación de visibilidad jerárquica. Verificado tanto en compilación de desarrollo como en el paquete distribuible `dist/SkyrimNpcStudio`. Un modelo visible no está adaptado a Skyrim: FBX/OBJ/BLEND, conversión a NIF y FaceGen de NPC nuevos siguen pendientes ([registro](docs/CHARACTER_FORGE_IMPLEMENTATION_LOG.md)).
 
 ## Ejecutar Sin Compilar
 
@@ -61,10 +61,10 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (49) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación |
-| C++ (96, con MO2 local configurado) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, informes de fallos y dependencias de compilación |
-| Locales `[local]` | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2; se omiten si no están definidas |
-| UI | `.\scripts\smoke-test.ps1` | verificación de carga QML completa, renderizado nativo y captura gráfica de la ventana |
+| .NET (65) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación (unit + export) |
+| C++ (115) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, validador glTF, informes de fallos y dependencias de compilación |
+| Locales `[local]` (4) | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2 (8.686 NPCs, 8.297 armaduras, 414 plugins, Lydia); se omiten si no están definidas |
+| UI & Forge 3D | `.\scripts\smoke-test.ps1` / `.\scripts\local-review.ps1` | verificación de carga QML completa, renderizado nativo, captura gráfica y suite `-ForgePreview` con 6 modelos GLB/glTF |
 
 La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all`; incluye 18 escenarios de Lydia, cambios rápidos de cabello, cambio de NPC, rechazo de material no exportable, vestuario, guardado/reapertura y exportación. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
 

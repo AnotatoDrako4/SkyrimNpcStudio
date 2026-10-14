@@ -59,15 +59,18 @@ struct Check : std::enable_shared_from_this<Check> {
     }
     return nullptr;
   }
-  bool click(const QString& text) {
-    auto* item = find_text(text);
-    if (!item) return false;
-    const auto pos = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+  // A left click delivered to the window like a real one (press + release at a scene position).
+  void click_at(QPointF pos) {
     const auto global = window->mapToGlobal(pos);
     QMouseEvent press(QEvent::MouseButtonPress, pos, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QMouseEvent release(QEvent::MouseButtonRelease, pos, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(window, &press);
     QCoreApplication::sendEvent(window, &release);
+  }
+  bool click(const QString& text) {
+    auto* item = find_text(text);
+    if (!item) return false;
+    click_at(item->mapToScene(QPointF(item->width() / 2, item->height() / 2)));
     return true;
   }
   QQuickItem* view() const {
@@ -157,11 +160,75 @@ struct Check : std::enable_shared_from_this<Check> {
       check(scene()->state() == "loaded" && scene()->has_model(), "RuntimeLoader loaded the staged model and reported bounds");
       check(share > 0.02, QStringLiteral("model pixels in the View3D (%1%)").arg(share * 100, 0, 'f', 1));
       check(!scene()->source().isEmpty(), "viewport shows the staged copy " + scene()->source().toLocalFile());
+      if (scene()->has_model()) {
+        parts_and_selection();
+        return;
+      }
     } else {
       check(scene()->state() == "error" && !scene()->message().isEmpty(), "rejected with a visible message: " + scene()->message());
       check(scene()->source().isEmpty() && !scene()->has_model(), "nothing handed to RuntimeLoader");
     }
     next();
+  }
+
+  QString part_label(int i) const {
+    const auto parts = scene()->parts();
+    return i >= 0 && i < parts.size() ? parts[i].toMap().value("label").toString() : QStringLiteral("(none)");
+  }
+
+  // Parts reported by the viewport, a click on the model and on empty space, hiding and showing.
+  void parts_and_selection() {
+    const auto parts = scene()->parts();
+    const auto nodes = scene()->inspection().value("meshNodes").toList();
+    QStringList labels;
+    for (const auto& p : parts) labels << p.toMap().value("label").toString();
+    log(QStringLiteral("parts: %1 rendered, %2 glTF mesh node(s), match '%3': %4")
+            .arg(parts.size()).arg(nodes.size()).arg(scene()->part_match(), labels.join(", ")));
+    check(!parts.isEmpty(), "the viewport reported the Models RuntimeLoader created");
+    check(parts.size() == nodes.size() && scene()->part_match() == "order",
+          "every part matched to its glTF mesh node by scene order (materials, skin, morph targets, hierarchy)");
+    auto* v = view();
+    click_at(v->mapToScene(QPointF(v->width() / 2, v->height() / 2)));
+    after(400, [self = shared_from_this()] {
+      auto* v = self->view();
+      const int hit = self->scene()->selected_part();
+      self->check(hit >= 0, "a click on the model centre selects the part under the pointer: " + self->part_label(hit));
+      auto* box = self->window->findChild<QObject*>("forgeSelectionBox");
+      self->check(box && box->property("visible").toBool(), "selection box shown around the selected part");
+      self->click_at(v->mapToScene(QPointF(4, 4)));
+      self->after(400, [self] {
+        self->check(self->scene()->selected_part() == -1, "a click on empty space clears the selection");
+        self->hide_and_show();
+      });
+    });
+  }
+
+  void hide_and_show() {
+    const auto parts = scene()->parts();
+    // A part with a parent part: hiding the parent must mark it hidden by that parent.
+    int child = -1;
+    for (int i = 0; i < parts.size() && child < 0; ++i) {
+      if (parts[i].toMap().value("parent").toInt() >= 0) child = i;
+    }
+    if (child >= 0) {
+      const int parent = parts[child].toMap().value("parent").toInt();
+      scene()->setPartVisible(parent, false);
+      const auto c = scene()->parts()[child].toMap();
+      check(c.value("visible").toBool() && !c.value("shown").toBool() && c.value("hiddenBy").toString() == part_label(parent),
+            QStringLiteral("hiding %1 also hides its child %2 (hiddenBy '%3')").arg(part_label(parent), part_label(child), c.value("hiddenBy").toString()));
+      scene()->setPartVisible(parent, true);
+    }
+    for (int i = 0; i < parts.size(); ++i) scene()->setPartVisible(i, false);
+    after(500, [self = shared_from_this()] {
+      const double hidden = self->coverage(self->window->grabWindow(), self->view());
+      self->check(hidden < 0.005, QStringLiteral("all parts hidden: the View3D shows only its background (%1%)").arg(hidden * 100, 0, 'f', 2));
+      self->scene()->showAllParts();
+      self->after(500, [self] {
+        const double shown = self->coverage(self->window->grabWindow(), self->view());
+        self->check(shown > 0.02, QStringLiteral("all parts shown again (%1%)").arg(shown * 100, 0, 'f', 1));
+        self->next();
+      });
+    });
   }
 };
 

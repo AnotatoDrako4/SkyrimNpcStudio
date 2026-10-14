@@ -140,6 +140,64 @@ TEST_CASE("Rigged figure: skin joints, morph target, animation and embedded text
   CHECK(i.indices_checked);
 }
 
+TEST_CASE("Node list and the scene order of nodes that draw a mesh", "[gltf]") {
+  const auto figure = gltf::load_and_inspect(kModels / "rigged_figure.glb").inspection;
+  REQUIRE(figure.node_list.size() == figure.nodes);
+  const auto named = [&](const std::string& name) {
+    const auto it = std::find_if(figure.node_list.begin(), figure.node_list.end(), [&](const gltf::Node& n) { return n.name == name; });
+    REQUIRE(it != figure.node_list.end());
+    return static_cast<std::size_t>(it - figure.node_list.begin());
+  };
+  const auto body = named("Figure");
+  const auto rig = named("FigureRig");
+  CHECK(figure.node_list[body].mesh == 0);
+  CHECK(figure.node_list[body].skin == 0);
+  CHECK(figure.node_list[body].parent == static_cast<int>(rig));
+  CHECK(figure.node_list[rig].parent == -1);
+  CHECK(figure.node_list[rig].children == 2);
+  CHECK(figure.node_list[named("Head")].mesh == -1);
+  CHECK(figure.mesh_nodes_in_scene_order == std::vector<std::size_t>{body});
+
+  const auto suzanne = gltf::load_and_inspect(kModels / "suzanne.glb").inspection;
+  REQUIRE(suzanne.mesh_nodes_in_scene_order.size() == 1);
+  CHECK(suzanne.node_list[suzanne.mesh_nodes_in_scene_order[0]].name == "Suzanne");
+
+  // Blender export with a hierarchy: Body > Helmet, Body > Shield, Sword at the root.
+  const auto set = gltf::load_and_inspect(kModels / "parts_set.glb").inspection;
+  INFO(codes(set));
+  REQUIRE(set.loadable());
+  std::vector<std::string> names;
+  for (const auto n : set.mesh_nodes_in_scene_order) names.push_back(set.node_list[n].name);
+  CHECK(names == std::vector<std::string>{"Body", "Helmet", "Shield", "Sword"});
+  const auto& set_body = set.node_list[set.mesh_nodes_in_scene_order[0]];
+  REQUIRE(set_body.mesh >= 0);
+  CHECK(set.mesh_list[static_cast<std::size_t>(set_body.mesh)].primitives.size() == 2);  // two materials
+  CHECK(set_body.children == 2);
+  CHECK(set.node_list[set.mesh_nodes_in_scene_order[1]].parent == static_cast<int>(set.mesh_nodes_in_scene_order[0]));
+
+  // Scene roots in their listed order, then depth first with children in array order.
+  auto j = triangle();
+  j["nodes"] = Json::array({Json{{"mesh", 0}, {"children", Json::array({3, 1})}}, Json{{"mesh", 0}}, Json{{"mesh", 0}},
+                            Json{{"name", "group"}, {"children", Json::array({4})}}, Json{{"mesh", 0}}});
+  j["scenes"] = Json::array({Json{{"nodes", Json::array({2, 0})}}});
+  auto order = inspect_json(j);
+  INFO(codes(order));
+  REQUIRE(order.loadable());
+  CHECK(order.mesh_nodes_in_scene_order == std::vector<std::size_t>{2, 0, 4, 1});
+
+  // "scene" absent: scene 0. No scenes at all: every root node in index order.
+  j.erase("scene");
+  CHECK(inspect_json(j).mesh_nodes_in_scene_order == std::vector<std::size_t>{2, 0, 4, 1});
+  j.erase("scenes");
+  CHECK(inspect_json(j).mesh_nodes_in_scene_order == std::vector<std::size_t>{0, 4, 1, 2});
+
+  // An invalid hierarchy gives no order (nothing would be matched by position).
+  j["nodes"][4]["children"] = Json::array({3});
+  const auto cyclic = inspect_json(j);
+  CHECK(has(cyclic, "NodeHierarchyInvalid"));
+  CHECK(cyclic.mesh_nodes_in_scene_order.empty());
+}
+
 TEST_CASE("Split glTF: external .bin and .png are read from the asset folder", "[gltf]") {
   const auto asset = gltf::load_and_inspect(kModels / "rigged_figure_split" / "rigged_figure.gltf");
   const auto& i = asset.inspection;

@@ -103,6 +103,17 @@ try {
     if ($LASTEXITCODE) { throw "windeployqt failed ($LASTEXITCODE)" }
     # windeployqt only ships the "windows" platform; "offscreen" lets the package run headless smoke tests.
     Copy-Item (Join-Path $env:SNS_QT_DIR 'plugins\platforms\qoffscreen.dll') (Join-Path $full 'platforms')
+    # RuntimeLoader (QtQuick3D.AssetUtils) requires the assetimporters plugin (assimp) to load GLB/glTF files:
+    $assetImporters = Join-Path $full 'assetimporters'
+    if (-not (Test-Path $assetImporters)) {
+        New-Item -ItemType Directory -Force $assetImporters | Out-Null
+    }
+    Copy-Item (Join-Path $env:SNS_QT_DIR 'plugins\assetimporters\assimp.dll') $assetImporters
+    # Ensure AssetUtils and AssetImport runtime DLLs are present:
+    foreach ($dll in 'Qt6Quick3DAssetUtils.dll', 'Qt6Quick3DAssetImport.dll') {
+        $src = Join-Path $env:SNS_QT_DIR "bin\$dll"
+        if (Test-Path $src) { Copy-Item $src $full -Force }
+    }
 
     Write-Host '[3/4] Publicando el worker .NET (self-contained, no requiere .NET instalado)...'
     dotnet publish (Join-Path $root 'services\BethesdaWorker\BethesdaWorker.csproj') -c Release -r win-x64 `

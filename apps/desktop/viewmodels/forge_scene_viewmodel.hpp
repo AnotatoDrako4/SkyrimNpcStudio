@@ -35,6 +35,16 @@ class ForgeSceneViewModel : public QObject {
   Q_PROPERTY(bool hasModel READ has_model NOTIFY changed)        // loaded and drawn with non-empty bounds
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(int operation READ operation NOTIFY changed)
+  // Drawable parts: one per Model that RuntimeLoader created, in its scene-tree order. Each entry:
+  // index, label, visible, rendered data (materials, skinned, morphTargets, size) and, when the
+  // part is matched to a glTF node, node, nodeName, meshName, primitives, vertices, triangles.
+  Q_PROPERTY(QVariantList parts READ parts NOTIFY partsChanged)
+  Q_PROPERTY(int selectedPart READ selected_part NOTIFY partsChanged)  // -1 = none
+  // How parts relate to glTF nodes. RuntimeLoader (Qt 6.11) gives its Models no names and no
+  // node index, so the match is by depth-first order and only when the counts agree:
+  // "order" (counts equal, every part's materials/skin/morph targets agree with its node),
+  // "order-unconfirmed" (counts equal, some part disagrees), "none" (counts differ), "" (no parts).
+  Q_PROPERTY(QString partMatch READ part_match NOTIFY partsChanged)
 
  public:
   explicit ForgeSceneViewModel(QObject* parent = nullptr);
@@ -51,6 +61,9 @@ class ForgeSceneViewModel : public QObject {
   [[nodiscard]] bool has_model() const { return state_ == QStringLiteral("loaded") && !rendered_.isEmpty(); }
   [[nodiscard]] bool busy() const { return state_ == QStringLiteral("validating") || state_ == QStringLiteral("loading"); }
   [[nodiscard]] int operation() const { return operation_; }
+  [[nodiscard]] QVariantList parts() const { return parts_; }
+  [[nodiscard]] int selected_part() const { return selected_; }
+  [[nodiscard]] QString part_match() const { return part_match_; }
 
   // Formats the preview can validate and render (RuntimeLoader also reads .obj, but OBJ is not
   // validated here: it goes through the Blender bridge like FBX and BLEND).
@@ -64,17 +77,26 @@ class ForgeSceneViewModel : public QObject {
   // status: 0 Empty, 1 Success, 2 Error (RuntimeLoader.Status).
   Q_INVOKABLE void reportLoaderStatus(const QUrl& loaded_source, int status, const QString& error_string);
   Q_INVOKABLE void reportBounds(const QUrl& loaded_source, const QVector3D& minimum, const QVector3D& maximum);
+  // The Models found under the RuntimeLoader, each {materials, skinned, morphTargets, minimum,
+  // maximum} (local bounds). Visibility and selection survive a repeated report of the same count.
+  Q_INVOKABLE void reportParts(const QUrl& loaded_source, const QVariantList& rendered_parts);
+  Q_INVOKABLE void selectPart(int index);  // out of range clears the selection
+  Q_INVOKABLE void setPartVisible(int index, bool visible);
+  Q_INVOKABLE void showAllParts();
 
  signals:
   void changed();
   void sourceChanged();
   void frameRequested();  // new geometry: the viewport frames the camera on it
+  void partsChanged();
 
  private:
   struct Result;
   void finish(const std::shared_ptr<Result>& result);
   void set_state(const QString& state, const QString& message, const QString& details = {});
   void clear_source();
+  void clear_parts();
+  void refresh_visibility();
   void remove_staging(const QString& folder);
 
   QThreadPool pool_;
@@ -88,6 +110,9 @@ class ForgeSceneViewModel : public QObject {
   QString details_;
   QVariantMap inspection_;
   QVariantMap rendered_;
+  QVariantList parts_;
+  int selected_ = -1;
+  QString part_match_;
   QString root_;  // per-process staging root
 };
 

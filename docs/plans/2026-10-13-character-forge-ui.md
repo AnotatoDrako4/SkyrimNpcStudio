@@ -15,7 +15,7 @@ Rama única: `feature/character-forge-ui`, derivada de Fase 1 y con main recient
 
 | Componente QML | Backend | Estado |
 |---|---|---|
-| `ForgeViewport.qml` | `ForgeSceneViewModel` + `RuntimeLoader` | Funcional: GLB/glTF validados, encuadrar, frontal/lateral/posterior, restablecer, malla, errores, reintentar, cancelar |
+| `ForgeViewport.qml` | `ForgeSceneViewModel` + `RuntimeLoader` | Funcional: GLB/glTF validados, encuadrar, frontal/lateral/posterior, restablecer, malla, errores, reintentar, cancelar, selección de piezas por clic con caja delimitadora 3D, ocultación jerárquica |
 | `ModelImporter.qml` | `CharacterForgeViewModel.selectModelFile` + `scene` | Funcional: selección, niveles declarado/validado/renderizado, armatures, «Recargar vista previa»; «Preparar adaptación» deshabilitado (bridge pendiente) |
 | `ForgeModelLibrary.qml` | `selectModelFile` | Funcional: reabre modelos de la biblioteca (rutas locales; copia al proyecto pendiente en CF-3) |
 | `ForgeAdvancedInspector.qml` | `npc`, `workspace`, `validation`, `scene` | Funcional: JSON técnico, incluida la inspección y los avisos del modelo |

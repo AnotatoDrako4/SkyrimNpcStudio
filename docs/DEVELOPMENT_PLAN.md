@@ -97,14 +97,14 @@ según [CHARACTER_FORGE_IMPLEMENTATION_LOG.md](CHARACTER_FORGE_IMPLEMENTATION_LO
 | Etapa | Contenido | Estado |
 |---|---|---|
 | CF-0 | Estabilización de la base 298990d: build, `dotnet test`, `ctest`, smoke y smoke del workspace 2 | VERIFICADO EN WINDOWS |
-| CF-1 | Visor 3D real: validación `engines/gltf`, `ForgeSceneViewModel`, `RuntimeLoader`, encuadre, vistas, malla, errores visibles, recarga segura | VERIFICADO EN WINDOWS (Debug; `dist` sin verificar) |
-| CF-2 | Inspección de geometría: declarado / validado / renderizado; mallas, primitivas, huesos, materiales, imágenes, animaciones, morphs | EN DESARROLLO (datos reales en importador e inspector; selección por geometría pendiente) |
+| CF-1 | Visor 3D real: validación `engines/gltf`, `ForgeSceneViewModel`, `RuntimeLoader`, encuadre, vistas, malla, errores visibles, recarga segura, paquete `dist` | VERIFICADO EN WINDOWS (Debug y dist) |
+| CF-2 | Inspección de geometría y multi-parte: declarado/validado/renderizado, selección de partes por clic con caja 3D, ocultación/visibilidad con jerarquía | VERIFICADO EN WINDOWS |
 | CF-3 | Biblioteca de assets dentro de `.sncf` (copia/enlace, SHA-256, duplicados, rutas relativas, migración) | PENDIENTE |
 | CF-4 | Blender Bridge determinista (`QProcess`, versión, FBX/OBJ/BLEND → GLB, informe JSON, timeout, cancelación) | PENDIENTE |
 | CF-5 | Personalización de modelos y vestuario reutilizando Outfit Studio | PENDIENTE |
 | CF-6 | NPC nuevos + FaceGen sobre el NativeNpcBuilder existente; exportación final bloqueada sin FaceGen verificable | PENDIENTE |
-| CF-7 | Regresiones (Character Creator, Outfit Studio, `.snps`, `.sncf`, exportaciones A/B/C, GPU, cancelación) | EN DESARROLLO (suites completas en cada entrega) |
-| CF-8 | Interfaz: viewport protagonista, datos técnicos en inspector avanzado, sin botones decorativos | EN DESARROLLO |
+| CF-7 | Regresiones (Character Creator, Outfit Studio, `.snps`, `.sncf`, exportaciones A/B/C, GPU, cancelación, 115 tests C++, 65 .NET, 4 MO2 local) | VERIFICADO EN WINDOWS |
+| CF-8 | Interfaz: viewport protagonista, controles de órbita/paneo/zoom (clic izq: parte, clic der: órbita, central: paneo), inspector avanzado | VERIFICADO EN WINDOWS |
 
 Los estados A (modelo visible), B (preparado para Skyrim) y C (NPC listo para exportar) no se
 confunden: hoy solo existe el estado A para GLB/glTF.

@@ -52,11 +52,19 @@ flowchart LR
   VM -- "source (file URL)" --> RL["ForgeViewport.qml<br/>RuntimeLoader (Qt 6.11)"]
   STG --> RL
   RL -- "status, bounds tras boundsChanged" --> VM
+  RL -- "click / pick(x, y)" --> VM
+  VM -- "selectedPart, box bounds" --> BOX["ForgeViewport<br/>BoundingBox 3D"]
 ```
 
 RuntimeLoader no valida ni aísla el contenido (documentación de Qt) e importa de forma síncrona en
 el hilo de GUI; por eso solo recibe copias de bytes ya validados y dentro de límites de tamaño.
 Resultados e informes de una operación anterior se descartan.
+
+La interacción en `ForgeViewport.qml` separa la selección de la cámara:
+- **Clic izquierdo**: `view.pick(x, y)` selecciona la parte bajo el cursor (destacada con una caja delimitadora 3D de 12 aristas) o deselecciona al clicar espacio vacío. Las partes pueden ocultarse/mostrarse individualmente o en cascada según su jerarquía de nodos.
+- **Clic derecho / central**: `OrbitCameraController` orbita y desplaza la vista; la rueda gestiona el zoom.
+
+En el paquete distribuible (`dist/SkyrimNpcStudio`), se empaquetan `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll` y el plugin `assetimporters/assimp.dll` para carga autónoma de GLB/glTF.
 
 ## Protocolo
 

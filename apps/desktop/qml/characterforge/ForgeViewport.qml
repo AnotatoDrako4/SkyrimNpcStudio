@@ -44,6 +44,14 @@ Rectangle {
         const distance = radius / Math.sin(halfFov) * 1.15;
         camera.position = Qt.vector3d(0, 0, distance);
         camera.eulerRotation = Qt.vector3d(0, 0, 0);
+        root.updateClipping();
+    }
+    // Near/far planes follow the camera distance and the model size, also after zooming
+    // (OrbitCameraController's automaticClipping would reset them to fixed 0.01/0.1/1 steps).
+    function updateClipping() {
+        const f = root.framing();
+        const radius = f ? Math.max(f.radius, 0.001) : 1;
+        const distance = Math.max(Math.abs(camera.z), 0.0001);
         camera.clipNear = Math.max(distance / 1000, 0.0001);
         camera.clipFar = distance + radius * 100;
     }
@@ -59,13 +67,107 @@ Rectangle {
     // that signal would store empty bounds and suppress the signal, so they are read only after it.
     property bool boundsReady: false
     function reportBounds() {
-        if (root.boundsReady && loader.status === RuntimeLoader.Success)
-            root.scene.reportBounds(loader.source, loader.bounds.minimum, loader.bounds.maximum);
+        if (!root.boundsReady || loader.status !== RuntimeLoader.Success)
+            return;
+        root.scene.reportBounds(loader.source, loader.bounds.minimum, loader.bounds.maximum);
+        root.reportParts();
+    }
+
+    // Models created by RuntimeLoader (owned by it), depth first like the glTF scene. Qt 6.11 gives
+    // them no name and makes them not pickable; the forge makes them pickable for selection.
+    property var models: []
+    function collectModels(node, found) {
+        const kids = node.children;
+        for (let i = 0; i < kids.length; ++i) {
+            const child = kids[i];
+            if (child.materials !== undefined && child.bounds !== undefined)
+                found.push(child);
+            root.collectModels(child, found);
+        }
+        return found;
+    }
+    function reportParts() {
+        const found = root.collectModels(loader, []);
+        const report = [];
+        for (let i = 0; i < found.length; ++i) {
+            const m = found[i];
+            m.pickable = true;
+            let parent = -1;
+            for (let p = m.parent; p && p !== loader && parent < 0; p = p.parent)
+                parent = found.indexOf(p);
+            report.push({
+                materials: m.materials.length,
+                skinned: m.skin !== null,
+                morphTargets: m.morphTargets.length,
+                minimum: m.bounds.minimum,
+                maximum: m.bounds.maximum,
+                parent: parent
+            });
+        }
+        root.models = found;
+        root.scene.reportParts(loader.source, report);
+    }
+    function applyParts() {
+        const parts = root.scene.parts;
+        if (parts.length !== root.models.length) {
+            selectionBox.visible = false;
+            return;
+        }
+        for (let i = 0; i < parts.length; ++i)
+            root.models[i].visible = parts[i].visible;
+        root.updateSelectionBox();
+    }
+    function pickAt(x, y) {
+        const hit = view.pick(x, y);
+        root.scene.selectPart(hit.objectHit ? root.models.indexOf(hit.objectHit) : -1);
+    }
+    // Axis-aligned box, in scene space, around the selected part's bounds.
+    function updateSelectionBox() {
+        const i = root.scene.selectedPart;
+        const parts = root.scene.parts;
+        if (i < 0 || i >= root.models.length || i >= parts.length || !parts[i].shown) {
+            selectionBox.visible = false;
+            return;
+        }
+        const m = root.models[i];
+        const lo = m.bounds.minimum, hi = m.bounds.maximum;
+        let min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let c = 0; c < 8; ++c) {
+            const p = m.mapPositionToScene(Qt.vector3d(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y, c & 4 ? hi.z : lo.z));
+            const v = [p.x, p.y, p.z];
+            for (let k = 0; k < 3; ++k) {
+                min[k] = Math.min(min[k], v[k]);
+                max[k] = Math.max(max[k], v[k]);
+            }
+        }
+        selectionBox.position = Qt.vector3d((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
+        selectionBox.size = Qt.vector3d(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+        selectionBox.visible = true;
+    }
+    // The 12 edges of the selection box: 4 along each axis, at the corners of the other two.
+    function edgePosition(i, size) {
+        const axis = Math.floor(i / 4), u = (axis + 1) % 3, v = (axis + 2) % 3;
+        const half = [size.x / 2, size.y / 2, size.z / 2];
+        const p = [0, 0, 0];
+        p[u] = (i & 1 ? 1 : -1) * half[u];
+        p[v] = (i & 2 ? 1 : -1) * half[v];
+        return Qt.vector3d(p[0], p[1], p[2]);
+    }
+    function edgeScale(i, size, thickness) {
+        const axis = Math.floor(i / 4);
+        const s = [thickness, thickness, thickness];
+        s[axis] = [size.x, size.y, size.z][axis] + thickness;
+        return Qt.vector3d(s[0] / 100, s[1] / 100, s[2] / 100);  // #Cube is 100 units wide
     }
 
     Connections {
         target: root.scene
         function onFrameRequested() { root.frame(0) }
+        function onPartsChanged() { root.applyParts() }
+    }
+    Connections {
+        target: camera
+        function onZChanged() { root.updateClipping() }
     }
 
     ColumnLayout {
@@ -122,7 +224,7 @@ Rectangle {
                 }
                 Item { Layout.fillWidth: true }
                 Label {
-                    text: root.hasGeometry ? qsTr("Arrastrar: orbitar · Rueda: zoom · Ctrl+arrastrar: desplazar") : ""
+                    text: root.hasGeometry ? qsTr("Clic izq: seleccionar parte · Clic der: orbitar · Rueda: zoom · Clic central: desplazar") : ""
                     color: Theme.textMuted
                     font.pixelSize: Theme.small
                 }
@@ -169,6 +271,8 @@ Rectangle {
                     source: root.scene.source
                     onSourceChanged: {
                         root.boundsReady = false;
+                        root.models = [];  // the previous asset's Models are gone
+                        selectionBox.visible = false;
                         Qt.callLater(root.reportStatus);
                     }
                     onStatusChanged: Qt.callLater(root.reportStatus)
@@ -177,11 +281,45 @@ Rectangle {
                         Qt.callLater(root.reportBounds);
                     }
                 }
+                DefaultMaterial {
+                    id: selectionMaterial
+                    lighting: DefaultMaterial.NoLighting
+                    diffuseColor: "#f0b44c"
+                }
+                Node {
+                    id: selectionBox
+                    objectName: "forgeSelectionBox"
+                    property vector3d size: Qt.vector3d(0, 0, 0)
+                    readonly property real thickness: Math.max(size.x, size.y, size.z) * 0.006
+                    visible: false
+                    Repeater3D {
+                        model: 12
+                        delegate: Model {
+                            required property int index
+                            source: "#Cube"
+                            pickable: false
+                            castsShadows: false
+                            receivesShadows: false
+                            position: root.edgePosition(index, selectionBox.size)
+                            scale: root.edgeScale(index, selectionBox.size, selectionBox.thickness)
+                            materials: [selectionMaterial]
+                        }
+                    }
+                }
                 OrbitCameraController {
                     anchors.fill: parent
                     origin: orbitOrigin
                     camera: camera
                     enabled: root.hasGeometry
+                    automaticClipping: false  // root.updateClipping() keeps the planes on the model
+                    acceptedButtons: Qt.RightButton | Qt.MiddleButton
+                    panEnabled: true
+                }
+                // Click (without dragging) selects the part under the pointer; empty space clears.
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    enabled: root.hasGeometry
+                    onTapped: (eventPoint, button) => root.pickAt(eventPoint.position.x, eventPoint.position.y)
                 }
             }
 
@@ -233,8 +371,11 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             Layout.margins: 12
+            readonly property var selected: root.scene.selectedPart >= 0 && root.scene.selectedPart < root.scene.parts.length
+                ? root.scene.parts[root.scene.selectedPart] : null
             text: root.hasGeometry
-                ? qsTr("Vista previa de %1 · %2 vértices · %3 triángulos (validados) · no adaptado a Skyrim · FaceGen pendiente")
+                ? (selected ? qsTr("Seleccionado: %1 · ").arg(selected.label) : "")
+                    + qsTr("Vista previa de %1 · %2 vértices · %3 triángulos (validados) · no adaptado a Skyrim · FaceGen pendiente")
                     .arg(root.scene.fileName).arg(root.scene.inspection.validated.vertices).arg(root.scene.inspection.validated.triangles)
                 : qsTr("FaceGen pendiente · verificación en Skyrim pendiente")
             color: Theme.textMuted
