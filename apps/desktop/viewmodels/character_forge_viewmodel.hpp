@@ -80,6 +80,8 @@ class CharacterForgeViewModel final : public QObject {
   Q_INVOKABLE void cancelOperation();
   Q_INVOKABLE void setWorkspaceValue(const QString& field, const QVariant& value);
   Q_INVOKABLE void selectModelFile(const QString& url);
+  Q_INVOKABLE void copySelectedModelToProject();
+  Q_INVOKABLE void selectLibraryModel(int index);
   Q_INVOKABLE void selectBlenderExecutable(const QString& url);
   Q_INVOKABLE void detectBlender();
   Q_INVOKABLE void selectReferenceImage(const QString& role, const QString& url);

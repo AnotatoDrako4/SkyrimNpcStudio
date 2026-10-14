@@ -19,6 +19,7 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
+  viewmodels/forge_asset_library.cpp viewmodels/forge_asset_library.hpp
   viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.

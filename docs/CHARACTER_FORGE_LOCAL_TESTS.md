@@ -40,14 +40,14 @@ nada. Verificado tanto en compilación de desarrollo como en el paquete `dist`.
 | NPC original | DTO/RPC 1.3, validación, builder Mutagen, NPC_/OTFT/ACHR interior opcional y relectura | Assets reales y validación dentro de Skyrim |
 | Proyecto | .sncf v2, migración v1 en memoria, guardado atómico, undo/redo propio, workspace contextual | Ejecución de Catch2 y UI Windows |
 | Viewport | `View3D` + `RuntimeLoader` con modelos GLB/glTF validados, cámara, vistas, malla, errores, selección por clic con caja 3D, ocultación jerárquica (verificado en Windows y en `dist`) | Huesos visibles, comparación original/adaptado |
-| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`), vista previa y multi-parte; FBX/OBJ/BLEND: selección y cabecera BLEND; biblioteca de referencias | Conversión FBX/OBJ/BLEND (bridge), copia al proyecto, adaptación NIF |
+| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`), vista previa y multi-parte, enlaces externos o copia de modelos y recursos validados a `.sncf` con SHA-256 y deduplicación; FBX/OBJ/BLEND: selección y cabecera BLEND | Conversión FBX/OBJ/BLEND (bridge), adaptación NIF |
 | Blender/MCP | Selector, detección en PATH, configuración no verificada, interfaces C++ tipadas | Bridge, versión real y conexión MCP |
 | IA | Descripción, proveedor futuro e imágenes de referencia verificadas; persistencia local | Adaptadores, costos confirmados y generación; no se usan APIs/claves |
 | Equipo | Catálogo ARMO/ARMA, slots/raza/sexo, inventario y OTFT propio | Disponibilidad de assets reales y física en juego |
 | Materiales/esqueleto | Referencias y opacidad como borrador; estado de rigging sin huesos ficticios | Escritura DDS/NIF, análisis del rig y skinning |
 | Exportación | Wizard de cinco pasos y paquete técnico opt-in con SHA-256/manifest/ZIP | FaceGen NIF + FaceTint DDS certificados; exportación final bloqueada |
 
-Los archivos externos se guardan como rutas, sin copiar contenido. Un proyecto creado en otra máquina puede requerir seleccionar nuevamente modelos, imágenes y texturas. No se modifican .snps ni Skyrim/MO2.
+Los modelos GLB/glTF externos siguen siendo enlaces hasta pulsar «Copiar modelo validado al proyecto» después de guardar `.sncf`. La copia incluye buffers y texturas glTF externas validadas; el visor verifica su SHA-256 antes de cargarla. Las imágenes y texturas seleccionadas en otras secciones siguen siendo referencias externas. Para trasladar un proyecto con modelos copiados, mover o copiar la carpeta `.sncf` completa; «Guardar como» en otra carpeta se rechaza mientras haya modelos administrados. No se modifican .snps ni Skyrim/MO2.
 
 ## Compilación y registros en Windows
 
@@ -76,6 +76,7 @@ No usar `-SkipTests` como evidencia de pruebas aprobadas. Revisar cada código d
 - [ ] Cambiar perfil después de validar: búsqueda/validación/exportación deshabilitadas hasta finalizar el nuevo índice; no reutilizar respuesta antigua.
 - [ ] Seleccionar GLB/glTF: confirmar tamaño y counts contra el archivo; rechazar cabeceras/truncamientos inválidos. FBX/OBJ solo selección de archivo; BLEND cabecera básica, sin promesa de conversión.
 - [ ] Biblioteca real: seleccionar nuevamente un archivo, moverlo y confirmar estado ausente; nunca mostrar modelo genérico como preview.
+- [ ] Biblioteca CF-3: guardar `.sncf`, copiar un GLB y un glTF con recursos, guardar de nuevo, reabrir y seleccionar ambos; trasladar la carpeta completa y comprobar la vista previa. Alterar un archivo administrado y confirmar que el visor lo rechaza. Los casos de copia, traslado, duplicado, recurso faltante y alteración tienen pruebas automáticas en Windows; esta interacción manual sigue pendiente.
 - [ ] Blender: detectar PATH/elegir executable; estado configurado no verificado. Abrir/sincronizar/importar/exportar/MCP deben permanecer inactivos hasta implementar bridge.
 - [ ] IA: conservar descripción/proveedor/imágenes front/side/back; rechazar archivos no legibles; Generar inactivo y sin consumo de API.
 - [ ] Materiales: referencias y opacidad se guardan, pero no cambian DDS/NIF. Esqueleto vacío sin datos reales; pruebas de NIF/rig quedan para el motor futuro.

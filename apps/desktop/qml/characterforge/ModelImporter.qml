@@ -32,6 +32,20 @@ ColumnLayout {
         nameFilters: ["Modelos 3D (*.glb *.gltf *.fbx *.obj *.blend)"]
         onAccepted: root.forge.selectModelFile(selectedFile.toString())
     }
+    Button {
+        Layout.fillWidth: true
+        text: qsTr("Copiar modelo validado al proyecto")
+        enabled: root.forge.hasProject && root.forge.projectPath.length > 0 && !root.forge.busy &&
+                 root.modelInfo.storage !== "managed" && (root.modelInfo.format === "glb" || root.modelInfo.format === "gltf")
+        onClicked: root.forge.copySelectedModelToProject()
+    }
+    Text {
+        Layout.fillWidth: true
+        visible: root.modelInfo.storage === "managed"
+        text: qsTr("Guardado en este proyecto · SHA-256: %1").arg(root.modelInfo.sha256 || "")
+        color: Theme.textDim
+        wrapMode: Text.WordWrap
+    }
     Text {
         Layout.fillWidth: true
         text: root.modelInfo.name || qsTr("Sin archivo seleccionado")

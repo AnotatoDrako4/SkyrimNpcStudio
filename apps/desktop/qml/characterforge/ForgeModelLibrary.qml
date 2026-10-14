@@ -14,7 +14,7 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: qsTr("Archivos que seleccionaste. Se conservan referencias locales; no se copian recursos al proyecto ni se garantiza su disponibilidad en otra máquina.")
+        text: qsTr("Los modelos externos son enlaces locales. Los modelos copiados viven dentro de la carpeta .sncf y conservan sus recursos glTF validados.")
         color: Theme.textDim
         wrapMode: Text.WordWrap
     }
@@ -26,10 +26,13 @@ ColumnLayout {
     Repeater {
         model: root.forge.workspace.library || []
         ItemDelegate {
+            required property int index
             required property var modelData
             Layout.fillWidth: true
-            text: modelData.name + " · " + modelData.format.toUpperCase()
-            onClicked: root.forge.selectModelFile(modelData.path)
+            text: modelData.name + " · " + modelData.format.toUpperCase() + " · " +
+                  (modelData.storage === "managed" ? qsTr("en proyecto") : qsTr("enlace externo")) +
+                  (modelData.available ? "" : qsTr(" · falta el archivo"))
+            onClicked: root.forge.selectLibraryModel(index)
             enabled: !root.forge.busy
         }
     }

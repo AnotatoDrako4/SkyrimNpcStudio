@@ -1,6 +1,8 @@
 #include "sns/creation/forge_workspace.hpp"
 #include "sns/core/error.hpp"
 #include <cmath>
+#include <cctype>
+#include <algorithm>
 
 namespace sns::creation {
 using Json = nlohmann::json;
@@ -19,6 +21,20 @@ void model(const Json& entry) {
   for (const auto* key : {"sizeBytes", "meshes", "materials", "textures", "skins"})
     if (entry.contains(key)) require(entry.at(key).is_number_integer() && entry.at(key) >= 0 && entry.at(key) <= 2147483648ULL);
   for (const auto* key : {"convertedToNif", "metadataInspected"}) if (entry.contains(key)) require(entry.at(key).is_boolean());
+  if (entry.contains("storage")) {
+    require(entry.at("storage").is_string());
+    const auto storage = entry.at("storage").get<std::string>();
+    require(storage == "external" || storage == "managed");
+    if (storage == "managed") {
+      const auto path = entry.at("path").get<std::string>();
+      require(path.rfind("assets/models/", 0) == 0 && path.find('\\') == std::string::npos &&
+              path.find(':') == std::string::npos && path.find("../") == std::string::npos &&
+              path.find("//") == std::string::npos && path.find('%') == std::string::npos);
+      require(entry.contains("sha256") && entry.at("sha256").is_string());
+      const auto sha = entry.at("sha256").get<std::string>();
+      require(sha.size() == 64 && std::all_of(sha.begin(), sha.end(), [](unsigned char c) { return std::isxdigit(c); }));
+    }
+  }
 }
 }
 void validate_forge_workspace(const Json& w) {

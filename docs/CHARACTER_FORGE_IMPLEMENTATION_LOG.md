@@ -135,6 +135,27 @@ Capturas: `out/local-review/forge-preview-debug4/forge-*.png` (no versionadas).
 
 ### Próximos pasos
 
-1. CF-3: biblioteca de assets dentro de `.sncf` con copia controlada, rutas relativas y cálculo SHA-256.
-2. CF-4: Blender Bridge determinista (FBX/OBJ/BLEND → GLB validado con script Python versionado).
-3. CF-5: personalización de atuendo y materiales reutilizando catálogo de Outfit Studio.
+1. CF-4: Blender Bridge determinista (FBX/OBJ/BLEND → GLB validado con script Python versionado).
+2. CF-5: personalización de atuendo y materiales reutilizando catálogo de Outfit Studio.
+
+## Entrega 3 — biblioteca portátil de modelos (CF-3)
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-10-14 |
+| Rama | `feature/character-forge-runtime-3d` |
+| Entorno | Windows 11, MSVC 14.44.35207, Qt 6.11.2, .NET 10.0.401 |
+| Alcance | Copia validada de GLB/glTF y recursos, SHA-256, rutas relativas, deduplicación y selección desde la biblioteca |
+
+El modelo seleccionado empieza como enlace externo, compatible con proyectos `.sncf` anteriores. Tras guardar el proyecto, «Copiar modelo validado al proyecto» incorpora el GLB/glTF y sus buffers/texturas externas validados bajo `assets/models/<sha256>/`. La copia se prepara en una carpeta temporal dentro del proyecto, se vuelve a inspeccionar y se renombra al destino final. Si el mismo contenido ya existe, se reutiliza. La vista previa de un modelo administrado exige que el archivo y sus recursos sigan presentes y que su SHA-256 coincida. La biblioteca indica disponibilidad y permite volver a seleccionar cada entrada. «Guardar como» en otra ubicación se rechaza si existen modelos administrados; para trasladarlos se copia la carpeta `.sncf` completa.
+
+| Verificación | Resultado |
+|---|---|
+| `cmake --preset debug` y `cmake --build --preset debug -j 4` | Compilación exitosa |
+| `sns_forge_asset_tests.exe` | 2 casos, 14 aserciones: traslado, duplicado, alteración, recursos glTF y recurso faltante |
+| `sns_engine_tests.exe "[forge]"` | 10 casos, 53 aserciones |
+| `ctest --preset debug -j 4 --output-on-failure` | 117/117 aprobadas; 4 pruebas locales MO2 omitidas por falta de `SNS_LOCAL_*` |
+| `dotnet test --solution SkyrimNpcStudio.slnx --no-restore` | 65/65 aprobadas |
+| `smoke-test.ps1 -ForgePreview … -ShowWindow` (Suzanne) | PASSED: QML, View3D, geometría, selección y visibilidad; 8,4 % de píxeles de modelo |
+
+El primer smoke con ventana oculta falló: QML creó el workspace y cargó los dos modelos, pero el View3D informó límites vacíos y 0 % de píxeles tras ~64 s por modelo. Se repitió con `-ShowWindow` y pasó. La interacción manual de copiar, guardar, reabrir y trasladar desde la interfaz sigue pendiente; las rutas y la integridad sí están cubiertas por pruebas automáticas. Los modelos administrados no implican adaptación NIF ni FaceGen.

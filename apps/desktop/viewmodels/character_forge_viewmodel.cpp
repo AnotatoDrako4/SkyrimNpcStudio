@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <utility>
 #include "sns/ipc/protocol.hpp"
+#include "forge_asset_library.hpp"
 #include <chrono>
 #include <algorithm>
 
@@ -104,6 +105,14 @@ bool CharacterForgeViewModel::saveProject(const QString& folder_or_url) {
       throw std::invalid_argument("Cannot create Character Forge inside an existing .snps project");
     if (folder.extension() != L".sncf") {
       folder /= (safe_stem(project_name()) + QStringLiteral(".sncf")).toStdWString();
+    }
+    if (!project_path_.isEmpty() && std::filesystem::weakly_canonical(folder) !=
+        std::filesystem::weakly_canonical(std::filesystem::path(project_path_.toStdWString()))) {
+      const auto& w = draft_.current().workspace;
+      const auto managed = [](const Json& item) { return item.is_object() && item.value("storage", std::string{}) == "managed"; };
+      if ((w.contains("model") && managed(w.at("model"))) ||
+          (w.contains("library") && std::any_of(w.at("library").begin(), w.at("library").end(), managed)))
+        throw std::invalid_argument("Move or copy the complete .sncf folder to keep its managed model assets together");
     }
     creation::ForgeProjectStore::save(folder, draft_.current());
     draft_.mark_saved();
@@ -220,8 +229,19 @@ void CharacterForgeViewModel::cancelOperation() {
 QVariantMap CharacterForgeViewModel::workspace() const {
   if (!has_project_) return {};
   auto result = to_map(draft_.current().workspace);
+  const auto available = [this](QVariantMap& model) {
+    if (model.isEmpty()) return;
+    const auto path = model.value("path").toString();
+    if (model.value("storage").toString() == QStringLiteral("managed"))
+      model["available"] = !forge_assets::locate_model(project_path_, path).isEmpty();
+    else model["available"] = QFileInfo(path).isFile();
+  };
   auto model = result.value("model").toMap();
-  if (!model.isEmpty()) { model["available"] = QFileInfo(model.value("path").toString()).isFile(); result["model"] = model; }
+  available(model);
+  if (!model.isEmpty()) result["model"] = model;
+  auto library = result.value("library").toList();
+  for (auto& item : library) { auto entry = item.toMap(); available(entry); item = entry; }
+  result["library"] = library;
   return result;
 }
 QVariantMap CharacterForgeViewModel::capabilities() const {
@@ -240,6 +260,7 @@ void CharacterForgeViewModel::selectModelFile(const QString& url) {
     if (!QStringList{"glb", "gltf", "fbx", "obj", "blend"}.contains(extension))
       throw std::invalid_argument("Supported selections: GLB, glTF, FBX, OBJ, BLEND");
     Json model{{"name", ss(info.fileName())}, {"path", ss(info.canonicalFilePath())}, {"format", ss(extension)},
+               {"storage", "external"},
                {"sizeBytes", info.size()}, {"status", "selected-only"}, {"convertedToNif", false}};
     QFile file(info.absoluteFilePath());
     if (!file.open(QIODevice::ReadOnly)) throw std::invalid_argument("Cannot read selected file");
@@ -288,14 +309,71 @@ void CharacterForgeViewModel::selectModelFile(const QString& url) {
 // The preview follows the workspace's selected model (selection, undo/redo, opened project). The
 // scene validates it and renders only GLB/glTF; other formats report that they need conversion.
 void CharacterForgeViewModel::preview_selected_model() {
-  const auto model = workspace().value("model").toMap();
-  const auto path = model.value("path").toString();
+  const auto model = to_map(draft_.current().workspace.value("model", Json::object()));
+  auto path = model.value("path").toString();
   if (path.isEmpty()) {
     if (!scene_->file_path().isEmpty()) scene_->reset();
     return;
   }
+  if (model.value("storage").toString() == QStringLiteral("managed")) {
+    path = forge_assets::resolve_model(project_path_, path, model.value("sha256").toString());
+    if (path.isEmpty()) {
+      scene_->reset();
+      last_error_ = tr("Modelo administrado ausente, modificado o fuera del proyecto .sncf.");
+      return;
+    }
+  }
   if (QFileInfo(path).absoluteFilePath() == scene_->file_path() && scene_->state() != QStringLiteral("empty")) return;
   scene_->load(path);
+}
+
+void CharacterForgeViewModel::copySelectedModelToProject() {
+  if (!has_project_ || busy_) return;
+  try {
+    const auto& w = draft_.current().workspace;
+    if (!w.contains("model") || !w.at("model").is_object()) throw std::invalid_argument("Select a model first");
+    auto model = w.at("model");
+    if (model.value("storage", std::string{}) == "managed") return;
+    const auto path = QString::fromStdString(model.at("path").get<std::string>());
+    const auto imported = forge_assets::import_model(project_path_, path);
+    model["path"] = imported.relative_path.toStdString();
+    model["storage"] = "managed";
+    model["sha256"] = imported.sha256.toStdString();
+    model["sizeBytes"] = imported.size_bytes;
+    model["status"] = "validated-managed";
+    auto next = w;
+    next["model"] = model;
+    auto library = next.value("library", Json::array());
+    bool found = false;
+    for (auto& entry : library) if (entry.is_object() && entry.value("storage", std::string{}) == "managed" &&
+                                     entry.value("sha256", std::string{}) == imported.sha256.toStdString()) {
+      entry = model; found = true; break;
+    }
+    if (!found) {
+      if (library.size() >= 100) throw std::invalid_argument("The model library already has 100 entries");
+      library.push_back(model);
+    }
+    next["library"] = library;
+    draft_.set_workspace(std::move(next));
+    last_error_.clear();
+    preview_selected_model();
+  } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+  emit changed();
+}
+
+void CharacterForgeViewModel::selectLibraryModel(int index) {
+  if (!has_project_ || busy_) return;
+  try {
+    auto next = draft_.current().workspace;
+    const auto library = next.value("library", Json::array());
+    if (!library.is_array() || index < 0 || static_cast<std::size_t>(index) >= library.size())
+      throw std::invalid_argument("Invalid model library selection");
+    next["model"] = library.at(static_cast<std::size_t>(index));
+    draft_.set_workspace(std::move(next));
+    last_error_.clear();
+    preview_selected_model();
+  } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+  emit changed();
 }
 void CharacterForgeViewModel::selectBlenderExecutable(const QString& url) {
   edit([&] {

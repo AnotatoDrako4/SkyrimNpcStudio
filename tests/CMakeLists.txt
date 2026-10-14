@@ -34,6 +34,15 @@ endif()
 
 # ---- Desktop app: the crash handler writes a report and a minidump ----------------------------
 if(SNS_BUILD_APP AND WIN32)
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
+  add_executable(sns_forge_asset_tests
+    app/test_forge_asset_library.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_asset_library.cpp)
+  target_include_directories(sns_forge_asset_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_compile_definitions(sns_forge_asset_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
+  target_link_libraries(sns_forge_asset_tests PRIVATE
+    Qt6::Core sns::creation sns::gltf sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_forge_asset_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
   foreach(kind access-violation terminate abort)
     add_test(NAME "app:crash report and minidump (${kind})"
       COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:SkyrimNpcStudio> -DKIND=${kind}

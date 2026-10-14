@@ -154,4 +154,8 @@ TEST_CASE("Forge UI preparation persists without changing native NPC or .snps", 
   CHECK_THROWS_AS(validate_forge_workspace({{"library", {nlohmann::json::object()}}}), sns::Error);
   CHECK_THROWS_AS(validate_forge_workspace({{"ai", {{"provider", 123}}}}), sns::Error);
   CHECK_THROWS_AS(validate_forge_workspace({{"exportWizard", {{"step", 2.5}}}}), sns::Error);
+  CHECK_THROWS_AS(validate_forge_workspace({{"model", {{"name", "bad"}, {"path", "assets/models/../outside.glb"},
+      {"format", "glb"}, {"storage", "managed"}, {"sha256", std::string(64, 'a')}}}}), sns::Error);
+  CHECK_THROWS_AS(validate_forge_workspace({{"model", {{"name", "bad"}, {"path", "assets/models/x/model.glb"},
+      {"format", "glb"}, {"storage", "managed"}, {"sha256", "not-a-hash"}}}}), sns::Error);
 }
