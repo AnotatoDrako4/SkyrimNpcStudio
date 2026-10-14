@@ -33,6 +33,24 @@ desplazamiento (clic central y arrastrar), selección de partes (clic izquierdo)
 «Malla». Un GLB truncado o un glTF que apunta a `../` debe mostrar el error en el visor y no cargar
 nada. Verificado tanto en compilación de desarrollo como en el paquete `dist`.
 
+### Blender Bridge (CF-4)
+
+Instalar Blender 4 o 5 y, en el panel Blender de Character Forge, usar «Detectar en PATH» o
+«Seleccionar…». Guardar primero el proyecto `.sncf`, seleccionar un FBX/OBJ/BLEND externo y pulsar
+«Convertir modelo seleccionado a GLB». «Cancelar conversión» detiene el proceso. Para desactivar el
+bridge, no configurar Blender; la conversión queda inactiva. No requiere MCP ni credenciales.
+
+```powershell
+. .\scripts\dev-env.ps1
+$env:SNS_LOCAL_BLENDER = 'D:\Program Files\blender.exe'  # ajustar a la instalación local
+.\build\debug\bin\sns_forge_asset_tests.exe "[blender]"
+```
+
+El script versionado está embebido en el ejecutable y crea un GLB temporal. El proceso tiene 15 s
+para la comprobación de versión y 5 min para convertir. Si falla o se cancela, el modelo de origen
+permanece seleccionado; el proyecto no recibe un modelo convertido. Blender se instala por separado
+del paquete `dist`.
+
 ## Capacidades y límites
 
 | Área | Implementado | Pendiente |
@@ -40,8 +58,8 @@ nada. Verificado tanto en compilación de desarrollo como en el paquete `dist`.
 | NPC original | DTO/RPC 1.3, validación, builder Mutagen, NPC_/OTFT/ACHR interior opcional y relectura | Assets reales y validación dentro de Skyrim |
 | Proyecto | .sncf v2, migración v1 en memoria, guardado atómico, undo/redo propio, workspace contextual | Ejecución de Catch2 y UI Windows |
 | Viewport | `View3D` + `RuntimeLoader` con modelos GLB/glTF validados, cámara, vistas, malla, errores, selección por clic con caja 3D, ocultación jerárquica (verificado en Windows y en `dist`) | Huesos visibles, comparación original/adaptado |
-| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`), vista previa y multi-parte, enlaces externos o copia de modelos y recursos validados a `.sncf` con SHA-256 y deduplicación; FBX/OBJ/BLEND: selección y cabecera BLEND | Conversión FBX/OBJ/BLEND (bridge), adaptación NIF |
-| Blender/MCP | Selector, detección en PATH, configuración no verificada, interfaces C++ tipadas | Bridge, versión real y conexión MCP |
+| Modelos | GLB/glTF: validación completa de datos (`engines/gltf`), vista previa y multi-parte, enlaces externos o copia de modelos y recursos validados a `.sncf` con SHA-256 y deduplicación; FBX/OBJ/BLEND: conversión a GLB por Blender 4/5 y validación del resultado | Adaptación NIF |
+| Blender/MCP | Selector, detección en PATH, verificación de versión, proceso con timeout/cancelación e informe JSON; Blender MCP independiente y deshabilitado | Conexión MCP |
 | IA | Descripción, proveedor futuro e imágenes de referencia verificadas; persistencia local | Adaptadores, costos confirmados y generación; no se usan APIs/claves |
 | Equipo | Catálogo ARMO/ARMA, slots/raza/sexo, inventario y OTFT propio | Disponibilidad de assets reales y física en juego |
 | Materiales/esqueleto | Referencias y opacidad como borrador; estado de rigging sin huesos ficticios | Escritura DDS/NIF, análisis del rig y skinning |
@@ -77,7 +95,7 @@ No usar `-SkipTests` como evidencia de pruebas aprobadas. Revisar cada código d
 - [ ] Seleccionar GLB/glTF: confirmar tamaño y counts contra el archivo; rechazar cabeceras/truncamientos inválidos. FBX/OBJ solo selección de archivo; BLEND cabecera básica, sin promesa de conversión.
 - [ ] Biblioteca real: seleccionar nuevamente un archivo, moverlo y confirmar estado ausente; nunca mostrar modelo genérico como preview.
 - [ ] Biblioteca CF-3: guardar `.sncf`, copiar un GLB y un glTF con recursos, guardar de nuevo, reabrir y seleccionar ambos; trasladar la carpeta completa y comprobar la vista previa. Alterar un archivo administrado y confirmar que el visor lo rechaza. Los casos de copia, traslado, duplicado, recurso faltante y alteración tienen pruebas automáticas en Windows; esta interacción manual sigue pendiente.
-- [ ] Blender: detectar PATH/elegir executable; estado configurado no verificado. Abrir/sincronizar/importar/exportar/MCP deben permanecer inactivos hasta implementar bridge.
+- [ ] Blender CF-4: seleccionar un OBJ, FBX y BLEND externos, guardar `.sncf`, elegir Blender 4/5, convertir, comprobar nuevo GLB administrado y volver a abrir el proyecto. Probar cancelación y archivo sin mallas. La conversión real de los tres formatos, importación al proyecto y cancelación tienen pruebas de proceso en Windows; la interacción manual UI queda pendiente. Abrir/sincronizar escena y MCP siguen inactivos.
 - [ ] IA: conservar descripción/proveedor/imágenes front/side/back; rechazar archivos no legibles; Generar inactivo y sin consumo de API.
 - [ ] Materiales: referencias y opacidad se guardan, pero no cambian DDS/NIF. Esqueleto vacío sin datos reales; pruebas de NIF/rig quedan para el motor futuro.
 - [ ] Wizard: resumen, dependencias, validación, destino y exportación técnica; advertencia explícita. Comprobar ESP nuevo y manifest `readyForGame:false`, `inGameVerified:false`, FaceGen pendiente.

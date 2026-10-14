@@ -48,11 +48,11 @@ oficial de la versión, (4) código fuente oficial, (5) prueba reproducible.
 
 | Campo | Valor |
 |---|---|
-| Componente | `tools/blender/make_test_models.py` (fixtures); Blender Bridge pendiente |
+| Componente | `tools/blender/make_test_models.py` (fixtures), `tools/blender/forge_bridge.py` (conversión versionada), `ForgeBlenderBridge` (`QProcess`) |
 | Versión | Blender 5.2.2 LTS (`D:\Program Files\blender.exe`, build 2026-09-15) |
 | Fuente | (2) Introspección en la versión instalada (`blender --background --factory-startup --python`): existen `bpy.ops.export_scene.gltf` (propiedades `filepath`, `export_format`, `use_selection`, `export_apply`, `export_skins`, `export_morph`, `export_animations`, `export_yup`), `bpy.ops.import_scene.gltf`, `bpy.ops.import_scene.fbx`, `bpy.ops.wm.obj_import`, `bpy.ops.mesh.primitive_monkey_add`. `export_format` es un enum dinámico (sin elementos estáticos en RNA); los valores `GLB` y `GLTF_SEPARATE` se comprobaron exportando de verdad. |
-| Referencias a consultar en la fase del bridge | https://docs.blender.org/api/current/bpy.ops.export_scene.html y https://docs.blender.org/api/current/bpy.ops.import_scene.html (no consultadas aún en esta sesión: la evidencia actual es la introspección de la versión instalada). |
-| Estado | Generación de fixtures VERIFICADA EN WINDOWS; bridge PENDIENTE. |
+| Referencias | [API Blender 5.2: import_scene.fbx](https://docs.blender.org/api/5.2/bpy.ops.import_scene.html), [wm.obj_import](https://docs.blender.org/api/5.2/bpy.ops.wm.html), [export_scene.gltf](https://docs.blender.org/api/5.2/bpy.ops.export_scene.html), [argumentos y `--disable-autoexec`](https://docs.blender.org/manual/en/3.6/advanced/command_line/arguments.html). APIs contrastadas también por introspección y ejecución local en Blender 5.2.2. |
+| Estado | Bridge VERIFICADO EN WINDOWS: OBJ, FBX y BLEND reales → GLB + informe JSON; proceso Qt, validación de GLB y cancelación probados. Interacción manual UI pendiente. |
 
 ## Windows / despliegue
 

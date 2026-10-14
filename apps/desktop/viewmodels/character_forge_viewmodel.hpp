@@ -11,6 +11,8 @@
 
 namespace sns::app {
 
+class ForgeBlenderBridge;
+
 // Creation-only state. Neither an NPC catalog selection nor an AppearanceDraft is required.
 class CharacterForgeViewModel final : public QObject {
   Q_OBJECT
@@ -31,6 +33,7 @@ class CharacterForgeViewModel final : public QObject {
   Q_PROPERTY(QVariantMap validation READ validation NOTIFY changed)
   Q_PROPERTY(QVariantList recordChoices READ record_choices NOTIFY recordsChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool blenderBusy READ blender_busy NOTIFY changed)
   Q_PROPERTY(bool catalogReady READ catalog_ready NOTIFY changed)
   Q_PROPERTY(QVariantMap workspace READ workspace NOTIFY changed)
   Q_PROPERTY(QVariantMap capabilities READ capabilities CONSTANT)
@@ -57,6 +60,7 @@ class CharacterForgeViewModel final : public QObject {
   QVariantMap validation() const { return validation_; }
   QVariantList record_choices() const { return record_choices_; }
   bool busy() const { return busy_; }
+  bool blender_busy() const;
   bool catalog_ready() const { return catalog_ready_; }
   QVariantMap workspace() const;
   QVariantMap capabilities() const;
@@ -84,6 +88,7 @@ class CharacterForgeViewModel final : public QObject {
   Q_INVOKABLE void selectLibraryModel(int index);
   Q_INVOKABLE void selectBlenderExecutable(const QString& url);
   Q_INVOKABLE void detectBlender();
+  Q_INVOKABLE void convertSelectedModelWithBlender();
   Q_INVOKABLE void selectReferenceImage(const QString& role, const QString& url);
   void invalidate_validation();
   void set_catalog_ready(bool ready);
@@ -97,6 +102,7 @@ class CharacterForgeViewModel final : public QObject {
   void preview_selected_model();
   EnvironmentProvider environment_;
   ForgeSceneViewModel* scene_ = nullptr;
+  ForgeBlenderBridge* blender_bridge_ = nullptr;
   creation::ForgeDraft draft_;
   bool has_project_ = false;
   QString project_path_;

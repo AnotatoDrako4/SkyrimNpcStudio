@@ -37,7 +37,13 @@ if(SNS_BUILD_APP AND WIN32)
   find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
   add_executable(sns_forge_asset_tests
     app/test_forge_asset_library.cpp
+    app/test_forge_blender_bridge.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_blender_bridge.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_asset_library.cpp)
+  set_target_properties(sns_forge_asset_tests PROPERTIES AUTOMOC ON)
+  set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
+  qt_add_resources(sns_forge_asset_tests forge_bridge_test_script PREFIX "/forge"
+    FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py)
   target_include_directories(sns_forge_asset_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
   target_compile_definitions(sns_forge_asset_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
   target_link_libraries(sns_forge_asset_tests PRIVATE

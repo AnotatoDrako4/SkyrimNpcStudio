@@ -12,6 +12,7 @@
 #include <utility>
 #include "sns/ipc/protocol.hpp"
 #include "forge_asset_library.hpp"
+#include "forge_blender_bridge.hpp"
 #include <chrono>
 #include <algorithm>
 
@@ -33,8 +34,46 @@ QString safe_stem(QString name) {
 CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment, WorkerClient* worker, QObject* parent)
     : QObject(parent), environment_(std::move(environment)), worker_(worker) {
   scene_ = new ForgeSceneViewModel(this);
+  blender_bridge_ = new ForgeBlenderBridge(this);
+  connect(blender_bridge_, &ForgeBlenderBridge::completed, this, [this](const QString& glb, const QVariantMap& report) {
+    try {
+      const auto source = draft_.current().workspace.at("model");
+      const auto imported = forge_assets::import_model(project_path_, glb);
+      Json model{{"name", source.at("name").get<std::string>() + ".glb"},
+                 {"path", imported.relative_path.toStdString()}, {"format", "glb"},
+                 {"storage", "managed"}, {"sha256", imported.sha256.toStdString()},
+                 {"sizeBytes", imported.size_bytes}, {"status", "validated-managed"},
+                 {"convertedToNif", false}, {"metadataInspected", true},
+                 {"sourceFormat", source.at("format")}, {"sourcePath", source.at("path")},
+                 {"blenderVersion", report.value("blenderVersion").toString().toStdString()}};
+      auto next = draft_.current().workspace;
+      next["model"] = model;
+      auto library = next.value("library", Json::array());
+      bool found = false;
+      for (auto& entry : library) if (entry.is_object() && entry.value("storage", std::string{}) == "managed" &&
+                                       entry.value("sha256", std::string{}) == imported.sha256.toStdString()) {
+        entry = model; found = true; break;
+      }
+      if (!found) library.push_back(model);
+      next["library"] = library;
+      auto blender = next.value("blender", Json::object());
+      blender["status"] = "verified";
+      blender["version"] = report.value("blenderVersion").toString().toStdString();
+      next["blender"] = blender;
+      draft_.set_workspace(std::move(next));
+      last_error_.clear();
+      preview_selected_model();
+    } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+    busy_ = false;
+    emit changed();
+  });
+  connect(blender_bridge_, &ForgeBlenderBridge::failed, this, [this](const QString& message) {
+    busy_ = false; last_error_ = message; emit changed();
+  });
   connect(worker_, &WorkerClient::stateChanged, this, [this] { set_catalog_ready(false); });
 }
+
+bool CharacterForgeViewModel::blender_busy() const { return blender_bridge_->busy(); }
 
 QString CharacterForgeViewModel::project_name() const {
   return has_project_ ? QString::fromStdString(draft_.current().name) : QString();
@@ -223,6 +262,7 @@ void CharacterForgeViewModel::exportTechnical(const QString& folder_or_url) {
     [this, serial](int, const QString& error, const Json&) { if (serial != operation_serial_) return; busy_ = false; last_error_ = error; emit changed(); });
 }
 void CharacterForgeViewModel::cancelOperation() {
+  if (blender_bridge_->busy()) { blender_bridge_->cancel(); return; }
   if (operation_cancel_) operation_cancel_->store(true);
   // Remain busy until cancellation is acknowledged, preventing a racing duplicate export.
 }
@@ -246,7 +286,7 @@ QVariantMap CharacterForgeViewModel::workspace() const {
 }
 QVariantMap CharacterForgeViewModel::capabilities() const {
   return {{"nativeRecords", true}, {"nativeFaceGen", false}, {"modelPreview", true},
-          {"blenderBridge", false}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false}};
+          {"blenderBridge", true}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false}};
 }
 void CharacterForgeViewModel::setWorkspaceValue(const QString& field, const QVariant& value) {
   edit([&] { auto w = draft_.current().workspace; w[ss(field)] = to_json(value); draft_.set_workspace(std::move(w)); }, false);
@@ -400,8 +440,27 @@ void CharacterForgeViewModel::detectBlender() {
     }
 #endif
   }
-  if (path.isEmpty()) { last_error_ = tr("Blender no encontrado en PATH. Puedes seleccionar el ejecutable; el bridge aún no está implementado."); emit changed(); return; }
+  if (path.isEmpty()) { last_error_ = tr("Blender no encontrado en PATH. Puedes seleccionar su ejecutable."); emit changed(); return; }
   selectBlenderExecutable(path);
+}
+void CharacterForgeViewModel::convertSelectedModelWithBlender() {
+  if (!has_project_ || busy_) return;
+  try {
+    if (project_path_.isEmpty()) throw std::invalid_argument("Save the .sncf project before converting a model");
+    const auto& w = draft_.current().workspace;
+    const auto& model = w.at("model");
+    const auto format = model.at("format").get<std::string>();
+    if (model.value("storage", std::string{}) == "managed" ||
+        (format != "fbx" && format != "obj" && format != "blend"))
+      throw std::invalid_argument("Select an external FBX, OBJ or BLEND model");
+    if (w.value("library", Json::array()).size() >= 100)
+      throw std::invalid_argument("The model library already has 100 entries");
+    const auto executable = QString::fromStdString(w.at("blender").at("executable").get<std::string>());
+    const auto source = QString::fromStdString(model.at("path").get<std::string>());
+    blender_bridge_->convert(executable, source);
+    busy_ = true; last_error_.clear();
+  } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+  emit changed();
 }
 void CharacterForgeViewModel::selectReferenceImage(const QString& role, const QString& url) {
   edit([&] {

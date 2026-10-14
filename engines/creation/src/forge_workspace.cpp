@@ -17,7 +17,7 @@ void model(const Json& entry) {
   require(entry.is_object());
   for (const auto* key : {"name", "path", "format"})
     require(entry.contains(key) && entry.at(key).is_string() && !entry.at(key).get_ref<const std::string&>().empty());
-  for (const auto* key : {"name", "path", "format", "status"}) text(entry, key);
+  for (const auto* key : {"name", "path", "format", "status", "sourcePath", "sourceFormat", "blenderVersion"}) text(entry, key);
   for (const auto* key : {"sizeBytes", "meshes", "materials", "textures", "skins"})
     if (entry.contains(key)) require(entry.at(key).is_number_integer() && entry.at(key) >= 0 && entry.at(key) <= 2147483648ULL);
   for (const auto* key : {"convertedToNif", "metadataInspected"}) if (entry.contains(key)) require(entry.at(key).is_boolean());
@@ -47,7 +47,10 @@ void validate_forge_workspace(const Json& w) {
   }
   for (const auto* key : {"blender", "ai", "materials", "recordLabels", "exportWizard"})
     if (w.contains(key)) require(w.at(key).is_object());
-  if (w.contains("blender")) { text(w.at("blender"), "executable"); text(w.at("blender"), "status", 64); }
+  if (w.contains("blender")) {
+    text(w.at("blender"), "executable"); text(w.at("blender"), "status", 64);
+    text(w.at("blender"), "version", 64);
+  }
   if (w.contains("ai")) {
     const auto& ai = w.at("ai"); text(ai, "description"); text(ai, "provider", 32);
     for (const auto* key : {"front", "side", "back"}) if (ai.contains(key)) {

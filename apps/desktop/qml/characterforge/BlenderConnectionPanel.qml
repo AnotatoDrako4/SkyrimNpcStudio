@@ -15,7 +15,10 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: root.forge.workspace.blender ? qsTr("Ejecutable configurado · versión y conexión no comprobadas") : qsTr("No configurado")
+        text: root.forge.workspace.blender ?
+                  (root.forge.workspace.blender.status === "verified" ?
+                       qsTr("Última conversión con Blender %1").arg(root.forge.workspace.blender.version || "") :
+                       qsTr("Ejecutable configurado · versión no comprobada")) : qsTr("No configurado")
         color: Theme.textDim
         wrapMode: Text.WordWrap
     }
@@ -45,7 +48,7 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: qsTr("El bridge aún no ejecuta procesos ni comprueba Blender. Elegir un archivo no establece una conexión.")
+        text: qsTr("Convierte FBX, OBJ o BLEND a GLB validado. El resultado se guarda en la biblioteca del proyecto; aún no se convierte a NIF de Skyrim.")
         color: Theme.textDim
         wrapMode: Text.WordWrap
     }

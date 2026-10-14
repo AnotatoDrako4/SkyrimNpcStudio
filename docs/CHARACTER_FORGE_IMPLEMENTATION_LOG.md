@@ -159,3 +159,25 @@ El modelo seleccionado empieza como enlace externo, compatible con proyectos `.s
 | `smoke-test.ps1 -ForgePreview … -ShowWindow` (Suzanne) | PASSED: QML, View3D, geometría, selección y visibilidad; 8,4 % de píxeles de modelo |
 
 El primer smoke con ventana oculta falló: QML creó el workspace y cargó los dos modelos, pero el View3D informó límites vacíos y 0 % de píxeles tras ~64 s por modelo. Se repitió con `-ShowWindow` y pasó. La interacción manual de copiar, guardar, reabrir y trasladar desde la interfaz sigue pendiente; las rutas y la integridad sí están cubiertas por pruebas automáticas. Los modelos administrados no implican adaptación NIF ni FaceGen.
+
+## Entrega 4 — Blender Bridge controlado (CF-4)
+
+| Campo | Valor |
+|---|---|
+| Fecha | 2026-10-14 |
+| Blender probado | 5.2.2 LTS (`D:\Program Files\blender.exe`) |
+| Entrada | Un archivo externo FBX, OBJ o BLEND seleccionado en Character Forge |
+| Salida | GLB inspeccionado por `engines/gltf`, copiado a `.sncf/assets/models/<sha256>/`, informe JSON local |
+
+`ForgeBlenderBridge` inicia Blender mediante `QProcess`, comprueba `--version` (4/5), ejecuta únicamente el script versionado y embebido en la aplicación, limita el arranque a 15 s y la conversión a 5 minutos, y permite cancelarla. El proceso usa `--background --factory-startup --disable-autoexec --python-exit-code 17`; el script importa el formato permitido desde una escena vacía y exporta un GLB. El informe exige esquema, estado, número de mallas y tamaño coherentes. Antes de agregar el resultado a la biblioteca, `import_model` inspecciona y valida todos sus datos. El nuevo modelo conserva formato y ruta de origen como metadatos; sigue en estado A (visible), sin NIF ni FaceGen.
+
+| Verificación | Resultado |
+|---|---|
+| Script con Blender 5.2.2 y OBJ sintético | GLB de 880 bytes, una malla, informe `status: ok` |
+| Script con FBX y BLEND generados desde una esfera | Ambos GLB e informes correctos, una malla cada uno |
+| `sns_forge_asset_tests.exe "[blender]"` con `SNS_LOCAL_BLENDER` | 4 casos, 10 aserciones: entrada inválida, ejecutable ajeno, conversión Qt → GLB validado y cancelación |
+| Script con OBJ sin geometría | Salida 17, informe `status: error`, ningún GLB generado |
+| `ctest --preset debug -j 4 --output-on-failure` | 121/121 aprobadas; 2 pruebas locales Blender y 4 MO2 omitidas sin variables locales |
+| `smoke-test.ps1 -ForgePreview ... -ShowWindow` | PASSED: QML y visor, Suzanne visible (8,4 %), selección y visibilidad |
+
+El script viaja embebido en el ejecutable: el paquete no depende del checkout, pero Blender debe instalarse por separado. Coste operativo: un proceso local de Blender por conversión y espacio temporal para el GLB; no se consumen APIs ni claves. Los fallos de arranque, versión, timeout, cancelación, informe y validación mantienen el modelo externo original seleccionado. Sigue pendiente comprobar manualmente el flujo completo desde los botones QML y probar el paquete `dist` con Blender instalado. CF-5 y CF-6 continúan pendientes.

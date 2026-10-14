@@ -20,7 +20,12 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
   viewmodels/forge_asset_library.cpp viewmodels/forge_asset_library.hpp
+  viewmodels/forge_blender_bridge.cpp viewmodels/forge_blender_bridge.hpp
   viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp)
+
+set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
+qt_add_resources(SkyrimNpcStudio forge_bridge_script PREFIX "/forge"
+  FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)

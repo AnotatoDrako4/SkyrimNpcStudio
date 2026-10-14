@@ -115,7 +115,7 @@ ColumnLayout {
         Layout.fillWidth: true
         text: root.scene.hasModel ? qsTr("Renderizado en el visor (Qt Quick 3D RuntimeLoader).")
             : root.scene.message.length ? root.scene.message
-            : qsTr("Las vistas previas admiten GLB y glTF 2.0; FBX/OBJ/BLEND necesitan el puente de Blender.")
+            : qsTr("Las vistas previas admiten GLB y glTF 2.0. Para FBX/OBJ/BLEND, guarda el proyecto y usa «Convertir modelo seleccionado a GLB» en Blender.")
         color: root.scene.state === "error" ? Theme.warn : Theme.textDim
         wrapMode: Text.WordWrap
     }
