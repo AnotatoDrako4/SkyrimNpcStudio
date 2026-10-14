@@ -1,0 +1,5 @@
+# Test models are compared byte for byte (sizes, buffer lengths): never normalize them.
+*.glb binary
+*.bin binary
+*.png binary
+*.gltf -text

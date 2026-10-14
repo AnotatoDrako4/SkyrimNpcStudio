@@ -17,10 +17,12 @@ add_executable(sns_engine_tests
   unit/engines/test_facegen.cpp
   unit/engines/test_outfit_presets.cpp
   unit/engines/test_compatibility_guardian.cpp)
-target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp)
+target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
+target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
-  sns::core sns::ipc sns::mo2 sns::projects sns::creation sns::outfit sns::appearance sns::presets sns::face sns::rendering nifly lz4 sns::compile_options Catch2::Catch2WithMain)
+  sns::core sns::ipc sns::mo2 sns::projects sns::creation sns::outfit sns::appearance sns::presets sns::face sns::rendering
+  sns::gltf nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
 
 # ---- Build tree: every first-party object has its header dependencies recorded ---------------
