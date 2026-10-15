@@ -51,12 +51,12 @@ $env:QT_FORCE_STDERR_LOGGING = '1'
 $arguments = @('--smoke-test', '--screenshot', "`"$Screenshot`"")
 if ($Instance) { $arguments += @('--instance', "`"$Instance`"") }
 if ($MO2Profile) { $arguments += @('--profile', "`"$MO2Profile`"") }
-if ($Npc) { $arguments += @('--npc', $Npc) }
+if ($Npc) { $arguments += @('--npc', "`"$Npc`"") }
 if ($Game) { $arguments += @('--game', "`"$Game`"") }
 if ($null -ne $WorkspaceIndex) { $arguments += @('--smoke-workspace', [string]$WorkspaceIndex) }
 if ($Size) { $arguments += @('--smoke-size', $Size) }
 if ($StressAppearance) { $arguments += @('--stress-appearance', $StressAppearance) }
-if ($SecondNpc) { $arguments += @('--second-npc', $SecondNpc) }
+if ($SecondNpc) { $arguments += @('--second-npc', "`"$SecondNpc`"") }
 if ($StressWork) { $arguments += @('--stress-work', "`"$StressWork`"") }
 if ($VerifyViewport) { $arguments += '--verify-viewport' }
 if ($ForgePreview) {

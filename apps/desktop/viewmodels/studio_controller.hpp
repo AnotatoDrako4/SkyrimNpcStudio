@@ -118,6 +118,8 @@ class StudioController : public QObject {
   void npcResultsChanged();
   void armorResultsChanged();
   void npcChanged();
+  // selectNpc could not load the NPC (unknown FormKey, worker error); the message says why.
+  void npcLoadFailed(const QString& message);
   void loaded();
 
  private:

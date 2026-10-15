@@ -608,6 +608,7 @@ void StudioController::selectNpc(const QString& form_key) {
     npc_loading_ = false;
     emit npcChanged();
     log("error", tr("No se pudo cargar el NPC %1: %2").arg(form_key, message));
+    emit npcLoadFailed(message);
   });
 }
 

@@ -408,6 +408,21 @@ TEST_CASE("Hair color patch changes only the HairTint color of the built FaceGen
   REQUIRE(black.hair_tints.size() == 1);
   CHECK(black.hair_tints[0].second == std::array<float, 3>{0, 0, 0});
 
+  // Leftover bytes after the footer (some mod FaceGen files are rewritten without truncation; the
+  // game ignores them): the color is still found by reading the header forward, only the tint
+  // bytes change and the leftover bytes are kept as they were.
+  {
+    auto padded = built.nif;
+    padded += std::string(31260, '\x5A');
+    const auto padded_patch = patch_hair_tint(padded, recolored);
+    REQUIRE_FALSE(padded_patch.nif.empty());
+    CHECK(padded_patch.issues.empty());
+    CHECK(padded_patch.nif.size() == padded.size());
+    CHECK(padded_patch.nif.substr(built.nif.size()) == padded.substr(built.nif.size()));
+    CHECK(padded_patch.nif.substr(0, built.nif.size()) == patch.nif);
+    CHECK(verify_hair_tint_integrity(padded, padded_patch.nif).unchanged_except_hair_tint);
+  }
+
   // Not a NIF: reported, never a crash.
   const auto broken = patch_hair_tint("not a nif", recolored);
   CHECK(broken.nif.empty());

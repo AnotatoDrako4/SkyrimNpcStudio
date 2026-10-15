@@ -279,6 +279,12 @@ int main(int argc, char* argv[]) {
       });
     }
   });
+  // An --npc that cannot be loaded ends the run now instead of at the 10-minute timeout.
+  QObject::connect(&studio, &sns::app::StudioController::npcLoadFailed, &app, [&](const QString& message) {
+    if (!automated) return;
+    std::fprintf(stderr, "npc load error: %s\n", qPrintable(message));
+    finish(9);
+  });
   QObject::connect(&studio, &sns::app::StudioController::phaseChanged, &app, [&] {
     if (automated && studio.phase() == sns::app::StudioController::Phase::Error)
       QTimer::singleShot(100, &app, [&] { std::fprintf(stderr, "load error: %s\n", qPrintable(studio.progress_text())); finish(3); });

@@ -167,6 +167,8 @@ a `Skyrim/Data`.
   (3.726.729 B). La prueba unitaria con datos tipo Lydia ya daba `HairColorSafe`.
 - Verificación dentro de Skyrim: pendiente (manual).
 - Solo NIF SSE (`BSLightingShaderProperty` tipo 6); otras disposiciones se rechazan sin cambios.
+- FaceGen con bytes sobrantes tras el pie (archivos reescritos sin truncar, p. ej. Shady Sam de Alternate Start): la
+  posición del color se calcula leyendo la cabecera hacia delante; los bytes sobrantes se conservan tal cual.
 - El FaceGen exportado deriva del FaceGen del replacer: es para uso personal salvo permiso del
   autor; el manifiesto lo registra en `derivedFrom`.
 - Un cambio de Head Parts en cabezas con morphs incompatibles se bloquea por no estar verificado.

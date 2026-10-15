@@ -150,6 +150,14 @@ struct Stress : std::enable_shared_from_this<Stress> {
     }
     return out;
   }
+  int hidden_hair_parts() const {
+    int n = 0;
+    for (const auto& p : scene()->parts()) {
+      const auto row = p.toMap();
+      if (row.value("hair").toBool() && !row.value("shownByDefault").toBool()) ++n;
+    }
+    return n;
+  }
   void check_hair(const QColor& expected) {
     check_hair_view(expected);
     check_exportable();
@@ -159,7 +167,12 @@ struct Stress : std::enable_shared_from_this<Stress> {
     check(appearance()->hair_color() == expected,
           QStringLiteral("editor hair color %1 == %2").arg(appearance()->hair_color().name(), expected.name()));
     const auto hair = hair_parts();
-    check(!hair.isEmpty(), QStringLiteral("scene has %1 visible HairTint part(s)").arg(hair.size()));
+    if (hair.isEmpty() && hidden_hair_parts() > 0) {
+      // Hair under a headgear slot is listed but not drawn, as in the game: nothing to see in the viewport.
+      log(QStringLiteral("viewport: %1 HairTint part(s) hidden under headgear, as in game").arg(hidden_hair_parts()));
+    } else {
+      check(!hair.isEmpty(), QStringLiteral("scene has %1 visible HairTint part(s)").arg(hair.size()));
+    }
     for (const auto& h : hair) {
       const auto row = h.toMap();
       // What the HairTint materials draw (CharacterViewport binds them to scene.hairTint).

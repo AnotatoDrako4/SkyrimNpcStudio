@@ -608,6 +608,51 @@ struct HairTintSlot {
   std::vector<std::string> shapes;
 };
 
+// Size of the header of a 20.2.0.7 NIF (Skyrim LE/SE): the first block starts right after it.
+// Read forward, because some FaceGen files carry leftover bytes after their footer (a longer file
+// rewritten without truncation; the game ignores them), which breaks counting back from the end.
+std::optional<std::size_t> nif_header_size(std::string_view b) {
+  const auto newline = b.find('\n');
+  if (newline == std::string_view::npos) return std::nullopt;
+  std::size_t p = newline + 1;
+  auto skip = [&](std::size_t n) {
+    if (n > b.size() || p > b.size() - n) return false;
+    p += n;
+    return true;
+  };
+  auto u32 = [&](std::uint32_t& v) {
+    if (p + 4 > b.size()) return false;
+    std::memcpy(&v, b.data() + p, 4);
+    p += 4;
+    return true;
+  };
+  std::uint32_t version = 0, user = 0, blocks = 0, bsver = 0;
+  if (!u32(version) || version != 0x14020007 || !skip(1) || !u32(user) || !u32(blocks) || !u32(bsver) || bsver >= 130) {
+    return std::nullopt;
+  }
+  for (int i = 0; i < 3; ++i) {  // author, process script, export script: byte length + text
+    if (p >= b.size() || !skip(1 + static_cast<unsigned char>(b[p]))) return std::nullopt;
+  }
+  if (p + 2 > b.size()) return std::nullopt;
+  std::uint16_t types = 0;
+  std::memcpy(&types, b.data() + p, 2);
+  p += 2;
+  for (std::uint16_t i = 0; i < types; ++i) {
+    std::uint32_t n = 0;
+    if (!u32(n) || !skip(n)) return std::nullopt;
+  }
+  if (!skip(std::size_t{2} * blocks) || !skip(std::size_t{4} * blocks)) return std::nullopt;  // type indices, sizes
+  std::uint32_t strings = 0, max_length = 0;
+  if (!u32(strings) || !u32(max_length)) return std::nullopt;
+  for (std::uint32_t i = 0; i < strings; ++i) {
+    std::uint32_t n = 0;
+    if (!u32(n) || !skip(n)) return std::nullopt;
+  }
+  std::uint32_t groups = 0;
+  if (!u32(groups) || !skip(std::size_t{4} * groups)) return std::nullopt;
+  return p;
+}
+
 std::optional<std::vector<HairTintSlot>> hair_tint_slots(nifly::NifFile& nif, std::string_view bytes, std::string& why) {
   auto& hdr = nif.GetHeader();
   const auto blocks = hdr.GetNumBlocks();
@@ -627,7 +672,9 @@ std::optional<std::vector<HairTintSlot>> hair_tint_slots(nifly::NifFile& nif, st
     why = "block sizes do not fit in the file";
     return std::nullopt;
   }
-  const auto header_end = bytes.size() - footer - total;
+  // The header read forward; counting back from the end of the file only when that is not possible.
+  const auto forward = nif_header_size(bytes);
+  const auto header_end = forward && *forward + total + footer <= bytes.size() ? *forward : bytes.size() - footer - total;
   std::vector<HairTintSlot> slots;
   for (auto* shape : nif.GetShapes()) {
     auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(nif.GetShader(shape));
