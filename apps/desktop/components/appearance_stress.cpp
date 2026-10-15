@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -319,6 +320,48 @@ struct Stress : std::enable_shared_from_this<Stress> {
       self->after(gap, *tick);
     };
     (*tick)();
+  }
+
+  // The assistant page on screen: inside the window, no text elided or spilling sideways out of the
+  // assistant, buttons wide enough for their label. Saves the page as wizard-<size>-<page>.png.
+  void check_wizard_layout(QObject* wizard, int page, const QString& size) {
+    const QString where = QStringLiteral("%1 page %2").arg(size).arg(page + 1);
+    // Grab first: a hidden window lays out (polishes) only when it renders, so measuring before the
+    // grab would read a stale layout instead of what the user sees.
+    const QImage shot = window->grabWindow();
+    const QRectF box(wizard->property("x").toReal(), wizard->property("y").toReal(), wizard->property("width").toReal(),
+                     wizard->property("height").toReal());
+    check(box.width() >= 320 && box.height() >= 320 && box.left() >= 0 && box.top() >= 0 && box.right() <= window->width() + 0.5 && box.bottom() <= window->height() + 0.5,
+          QStringLiteral("%1: assistant inside the window (%2,%3 %4x%5)")
+              .arg(where).arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height()));
+    auto* content = qvariant_cast<QQuickItem*>(wizard->property("contentItem"));
+    if (!content) { check(false, where + ": assistant content item"); return; }
+    QStringList problems;
+    int inspected = 0;
+    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+      for (auto* child : item->childItems()) {
+        if (!child->isVisible() || child->width() <= 0) continue;
+        const QByteArray cls = child->metaObject()->className();
+        const QRectF r = child->mapRectToItem(content, QRectF(0, 0, child->width(), child->height()));
+        const QString text = child->property("text").toString().left(40);
+        if (child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
+        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > content->width() + 1)
+          problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - content->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
+        // Buttons: label + paddings wider than the button means the style elides it.
+        if (child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
+          const qreal need = child->property("implicitContentWidth").toReal() + child->property("leftPadding").toReal() +
+                             child->property("rightPadding").toReal();
+          if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
+        }
+        ++inspected;
+        visit(child);
+      }
+    };
+    visit(content);
+    problems.removeDuplicates();
+    check(problems.isEmpty(), QStringLiteral("%1: %2 items in %3 px, layout %4").arg(where).arg(inspected).arg(content->width()).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+    const auto file = QDir(work_dir).filePath(QStringLiteral("wizard-%1-%2.png").arg(size).arg(page + 1));
+    check(shot.save(file), "capture " + file);
   }
 
   // ---------------------------------------------------------------- scenarios
@@ -746,6 +789,52 @@ struct Stress : std::enable_shared_from_this<Stress> {
           });
         };
         self->after(100, *wait);
+      });
+    } else if (name == "easy-mod-layout") {
+      // Easy Mod Creator at the current window size: every page (with a real plan and, on the last
+      // page, a real export result) must fit the window, wrap instead of spilling out of the
+      // assistant, and show full button labels. Each page is saved as a capture for a human review.
+      auto wizard = [self]() -> QObject* {
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (QByteArray(o->metaObject()->className()).startsWith("ExportWizardDialog_QMLTYPE")) return o;
+        }
+        return nullptr;
+      };
+      const QColor color("#3B7A57");
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, hair, color] { hair(color); self->then_idle(); });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("easy-mod-layout-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        // A real result for page 5 (paths, masters, semantic diff, files): the longest content it shows.
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_EasyLayout.esp"), dir, true, false, QStringLiteral("SNS Tester"), {});
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          self->check(self->appearance()->last_export().value("success").toBool(),
+                      "export for the result page: " + self->appearance()->last_export().value("message").toString());
+          self->step();
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self, wizard] {
+        auto* w = wizard();
+        self->check(w != nullptr, "assistant present in the window");
+        if (!w) { self->step(); return; }
+        QMetaObject::invokeMethod(w, "open");
+        const auto size = QStringLiteral("%1x%2").arg(self->window->width()).arg(self->window->height());
+        std::vector<std::function<void()>> pages;
+        for (int page = 0; page < 5; ++page) {
+          pages.push_back([self, w, page] {
+            if (page == 4) w->setProperty("modResult", self->appearance()->last_export());
+            w->setProperty("step", page);
+          });
+          pages.push_back([self, w, page, size] { self->check_wizard_layout(w, page, size); });
+        }
+        self->chain(std::move(pages), 400, [self, w] {
+          QMetaObject::invokeMethod(w, "close");
+          self->appearance()->resetFace();
+          self->then_idle();
+        });
       });
     } else if (name == "easy-mod-outfit") {
       // Easy Mod Creator, modes A and C: an outfit edit alone, then the outfit plus a hair color. The
@@ -1238,7 +1327,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,
