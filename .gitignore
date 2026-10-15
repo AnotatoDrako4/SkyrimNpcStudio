@@ -6,6 +6,11 @@ obj/
 *.user
 .vs/
 CMakeUserPresets.json
+/*.obj
+*.lib
+*.pdb
+*.exp
+!tests/fixtures/**/*.obj
 
 # Test and runtime artifacts
 TestResults/
