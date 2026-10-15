@@ -940,6 +940,11 @@ void AppearanceEditor::setHeadPart(const QString& formKey, const QString& type) 
 void AppearanceEditor::searchHeadParts(const QString& type, const QString& text) {
   if (target_.form_key.empty() || !worker_) return;
   const int serial = ++head_part_serial_;
+  // A new search replaces the list: never show (or pick from) the results of another type.
+  if (!head_part_options_.isEmpty()) {
+    head_part_options_.clear();
+    emit headPartOptionsChanged();
+  }
   Json params{{"npcFormKey", target_.form_key}, {"limit", 300}};
   if (!type.isEmpty()) params["type"] = ss(type);
   if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
@@ -1208,19 +1213,19 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   const bool outfit_edit = complete && outfit_ && draft_.is_outfit_dirty() && !outfit_->current_pieces().empty();
   if (outfit_edit && std::any_of(outfit_->current_pieces().begin(), outfit_->current_pieces().end(),
                                  [](const auto& p) { return p.material.has_value(); })) {
-    emit exportFinished(false, tr("El atuendo contiene una variante de material solo previsualizable. "
-                                  "Restáurala antes de exportar el mod completo."), {}, {});
+    finish_export(false, tr("El atuendo contiene una variante de material solo previsualizable. "
+                                  "Restáurala antes de exportar el mod completo."), {}, {}, {});
     return;
   }
   if (!face_edit && !body_edit && !outfit_edit) {
-    emit exportFinished(false, tr("No hay cambios que exportar."), {}, {});
+    finish_export(false, tr("No hay cambios que exportar."), {}, {}, {});
     return;
   }
   if (face_edit && !exportable()) {
-    emit exportFinished(false, building_ ? tr("La cabeza se está regenerando; vuelve a exportar cuando termine.")
+    finish_export(false, building_ ? tr("La cabeza se está regenerando; vuelve a exportar cuando termine.")
                         : face_kind == appearance::FaceBuildKind::WaitForAnalysis ? tr("El FaceGen original aún se está analizando.")
                                                                                   : tr("El rostro no es exportable: revisa el panel de problemas."),
-                        {}, {});
+                        {}, {}, {});
     return;
   }
   // FaceGen Geometry Integrity Guard, again on the exact bytes about to be staged.
@@ -1230,8 +1235,8 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                                : face::FaceGenIntegrity{};
     if (!integrity.unchanged_except_hair_tint || !integrity.byte_identical_outside_hair_tint) {
       diag::record("export", ("FACEGEN_GEOMETRY_CHANGED " + integrity.summary()).c_str());
-      emit exportFinished(false, tr("FACEGEN_GEOMETRY_CHANGED: el FaceGen a exportar no es el original con otro color de cabello (%1). "
-                                    "Exportación bloqueada.").arg(qs(integrity.summary())), {}, {});
+      finish_export(false, tr("FACEGEN_GEOMETRY_CHANGED: el FaceGen a exportar no es el original con otro color de cabello (%1). "
+                                    "Exportación bloqueada.").arg(qs(integrity.summary())), {}, {}, {});
       return;
     }
   }

@@ -825,12 +825,13 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->appearance()->resetFace();
         self->then_idle();
       });
-    } else if (name == "head-part") {
+    } else if (name == "head-part" || name == "head-part-eyes") {
+      const QString part_type = name == "head-part" ? QStringLiteral("Hair") : QStringLiteral("Eyes");
       // Beta item 5: change a head part to one valid for the NPC (worker query), rebuild, export, and
       // check through the worker's semantic diff that PNAM changed and nothing outside the face did.
       // A head whose diagnosis blocks head parts must refuse the edit instead.
       steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
-      steps.push_back([self] {
+      steps.push_back([self, part_type] {
         if (self->appearance()->operation_blocked(QStringLiteral("head-parts"))) {
           const auto before = self->appearance()->head_parts();
           self->appearance()->setHeadPart(QStringLiteral("000001:Skyrim.esm"), QStringLiteral("Hair"));
@@ -840,27 +841,38 @@ struct Stress : std::enable_shared_from_this<Stress> {
           return;
         }
         self->head_part_skip = false;
-        self->appearance()->searchHeadParts(QStringLiteral("Hair"));
+        self->appearance()->searchHeadParts(part_type);
         auto poll = std::make_shared<std::function<void()>>();
         auto started = self->clock.elapsed();
-        *poll = [self, poll, started] {
+        *poll = [self, poll, started, part_type] {
           if (self->appearance()->head_part_options().isEmpty() && self->clock.elapsed() - started < 15000) {
             self->after(100, *poll);
             return;
           }
           const auto options = self->appearance()->head_part_options();
-          self->check(!options.isEmpty(), QStringLiteral("hair head parts valid for this NPC: %1").arg(options.size()));
+          self->check(!options.isEmpty(), part_type + QStringLiteral(" head parts valid for this NPC: %1").arg(options.size()));
           QStringList current;
           for (const auto& h : self->appearance()->head_parts()) current << h.toMap().value("formKey").toString();
+          const bool same_type = std::all_of(options.begin(), options.end(), [&](const QVariant& o) {
+            return o.toMap().value("type").toString().compare(part_type, Qt::CaseInsensitive) == 0;
+          });
+          self->check(same_type, "every option is of type " + part_type);
+          // Prefer a vanilla part: mod parts can ship broken TRI files (the build then refuses them).
           QString pick;
-          for (const auto& o : options) {
-            const auto fk = o.toMap().value("formKey").toString();
-            if (!current.contains(fk)) { pick = fk; break; }
+          for (const bool vanilla_only : {true, false}) {
+            for (const auto& o : options) {
+              const auto m = o.toMap();
+              const auto fk = m.value("formKey").toString();
+              if (current.contains(fk) || (vanilla_only && m.value("plugin").toString().compare("Skyrim.esm", Qt::CaseInsensitive) != 0)) continue;
+              pick = fk;
+              break;
+            }
+            if (!pick.isEmpty()) break;
           }
-          self->check(!pick.isEmpty(), "a different hair to try: " + pick);
+          self->check(!pick.isEmpty(), "a different " + part_type + " to try: " + pick);
           if (!pick.isEmpty()) {
-            self->log("setHeadPart " + pick + " (Hair)");
-            self->appearance()->setHeadPart(pick, QStringLiteral("Hair"));
+            self->log("setHeadPart " + pick + " (" + part_type + ")");
+            self->appearance()->setHeadPart(pick, part_type);
           }
           self->then_idle();
         };
@@ -964,7 +976,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

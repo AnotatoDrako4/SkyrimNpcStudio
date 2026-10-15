@@ -63,7 +63,9 @@ internal static class HeadPartQueries
             });
         }
 
-        var items = matches.OrderBy(m => m.EditorId ?? m.FormKey, StringComparer.OrdinalIgnoreCase)
+        // Base game and Creation Club parts first, then mods, each by EditorID.
+        var items = matches.OrderBy(m => FaceRecipeQueries.IsOfficial(ModKey.FromFileName(m.Plugin)) ? 0 : 1)
+            .ThenBy(m => m.EditorId ?? m.FormKey, StringComparer.OrdinalIgnoreCase)
             .Take(Math.Clamp(request.Limit, 1, 1000)).ToArray();
         return new SearchHeadPartsResponse { Items = items, Total = matches.Count };
     }

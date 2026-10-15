@@ -26,19 +26,6 @@ ScrollView {
         { name: qsTr("Violeta Nocturno"), color: "#8E44AD" }
     ]
 
-    readonly property var eyePalette: [
-        { name: qsTr("Azul Celeste"), color: "#3498DB" },
-        { name: qsTr("Azul Profundo"), color: "#1F4E79" },
-        { name: qsTr("Verde Bosque"), color: "#27AE60" },
-        { name: qsTr("Verde Esmeralda"), color: "#16A085" },
-        { name: qsTr("Marrón Avellana"), color: "#6E4720" },
-        { name: qsTr("Castaño Oscuro"), color: "#3E2723" },
-        { name: qsTr("Ámbar / Miel"), color: "#D4AC0D" },
-        { name: qsTr("Gris Plateado"), color: "#95A5A6" },
-        { name: qsTr("Violeta Místico"), color: "#9B59B6" },
-        { name: qsTr("Rojo Vampírico"), color: "#922B21" }
-    ]
-
     ColorDialog {
         id: customHairColorDialog
         title: qsTr("Elegir color de cabello personalizado")
@@ -255,49 +242,8 @@ ScrollView {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
-        // --- PALETA DE OJOS ---
-        Text {
-            text: qsTr("Paleta de Color de Ojos:")
-            color: Theme.text
-            font.pixelSize: 12
-        }
-
-        GridLayout {
-            Layout.fillWidth: true
-            columns: 2
-            rowSpacing: 4
-            columnSpacing: 6
-
-            Repeater {
-                model: root.eyePalette
-                delegate: Button {
-                    Layout.fillWidth: true
-                    implicitHeight: 28
-                    // In Skyrim the eye color is the Eyes head part (its texture set), not a tint:
-                    // choosing it needs the head part catalog. Not available yet, so not clickable.
-                    enabled: false
-                    ToolTip.text: qsTr("Pendiente: el color de ojos se elige como pieza de cabeza (Eyes), aún no disponible aquí.")
-                    ToolTip.visible: hovered
-                    contentItem: RowLayout {
-                        spacing: 6
-                        Rectangle {
-                            width: 14
-                            height: 14
-                            radius: 7
-                            color: modelData.color
-                            border.color: Theme.border
-                        }
-                        Text {
-                            text: modelData.name
-                            color: Theme.text
-                            font.pixelSize: 10
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-            }
-        }
+        // Eye color: in Skyrim it is the Eyes head part (its texture set), not a tint. Choose "Eyes" in
+        // «Cambiar pieza de cabeza» above; there is no separate eye palette.
 
         // Diagnosis of the face protection, collapsed: below the controls so they keep their place.
         FaceProtectionCard {
