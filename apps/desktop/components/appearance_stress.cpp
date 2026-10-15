@@ -999,6 +999,71 @@ struct Stress : std::enable_shared_from_this<Stress> {
         };
         self->after(100, *wait);
       });
+    } else if (name == "preset-export") {
+      // A RaceMenu preset from the profile (SKSE/Plugins/CharGen/Presets): every preset's verdict is
+      // logged; the first exportable one is applied and exported, and the worker's diff may only
+      // contain face fields, with the FaceGen identical to the preview.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        self->appearance()->loadPresetsFromVfs();
+        QString pick, pick_name;
+        int count = 0;
+        for (const auto& p : self->appearance()->presets_list()) {
+          const auto m = p.toMap();
+          const auto c = self->appearance()->evaluatePresetCompatibility(m.value("diskPath").toString());
+          ++count;
+          self->log(QStringLiteral("  preset %1 (%2): %3").arg(m.value("name").toString(), m.value("sourceMod").toString(), c.value("verdict").toString()));
+          if (pick.isEmpty() && c.value("exportable").toBool()) {
+            pick = m.value("diskPath").toString();
+            pick_name = m.value("name").toString();
+          }
+        }
+        self->check(count > 0, QStringLiteral("RaceMenu presets in the profile: %1").arg(count));
+        if (pick.isEmpty()) {
+          self->log("no preset is exportable for this NPC: nothing applied");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->log("applyJslotPreset " + pick_name);
+        self->appearance()->applyJslotPreset(pick);
+        self->then_idle();
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("preset-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        if (self->head_part_skip) { self->step(); return; }
+        if (!self->appearance()->exportable()) {
+          self->check_exportable_or_explained();
+          self->appearance()->resetFace();
+          self->then_idle();
+          return;
+        }
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_Preset.esp"), dir, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "preset export: " + r.value("message").toString());
+          for (const auto& i : r.value("issues").toList()) {
+            const auto m = i.toMap();
+            self->log(QStringLiteral("  export issue %1 %2: %3").arg(m.value("severity").toString(), m.value("code").toString(), m.value("message").toString()));
+          }
+          QStringList fields;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          const QStringList face{"HairColor", "FaceMorph", "FaceParts", "HeadParts", "HeadTexture", "Weight", "Height", "TextureLighting", "TintLayers"};
+          bool only_face = !fields.isEmpty();
+          for (const auto& f : fields) only_face &= face.contains(f);
+          self->check(only_face, "preset diff only has face fields: " + fields.join(", "));
+          self->check(r.value("verificationProblems").toStringList().isEmpty(),
+                      "exported FaceGen identical to the preview (" + r.value("verifiedFiles").toStringList().join(", ") + ")");
+          self->appearance()->resetFace();
+          self->then_idle();
+        };
+        self->after(100, *wait);
+      });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
       const auto dir = QDir(work_dir).filePath(QStringLiteral("export-%1").arg(QDateTime::currentMSecsSinceEpoch()));
@@ -1068,7 +1133,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

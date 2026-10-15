@@ -1090,6 +1090,24 @@ QVariantMap AppearanceEditor::jslot_compatibility(const QString& file_path, std:
     finding("missing-dependency", "PresetPluginMissing", tr("Plugins que el preset usa y no están activos: %1").arg(missing.join(", ")));
   }
   const auto m = presets::map_preset(preset, draft_.face(), *recipe_);
+  // The head parts the preset ends up using must come from active plugins too: the plugin list a
+  // .jslot declares can omit them (Carrot names KSHairdosSMP.esp parts without listing the plugin),
+  // and the export would then fail with HeadPartUnresolved.
+  if (const auto snap = snapshot_()) {
+    QStringList unresolved;
+    for (const auto& fk : m.state.head_parts) {
+      const auto colon = fk.find(':');
+      if (colon == std::string::npos) continue;
+      const auto plugin = fk.substr(colon + 1);
+      const bool active = std::any_of(snap->load_order.active.begin(), snap->load_order.active.end(),
+                                      [&](const auto& e) { return text::iequals_ascii(e.name, plugin); });
+      if (!active && !unresolved.contains(qs(fk))) unresolved << qs(fk);
+    }
+    if (!unresolved.isEmpty()) {
+      finding("missing-dependency", "PresetHeadPartMissing",
+              tr("Piezas de cabeza del preset cuyos plugins no están activos: %1").arg(unresolved.join(", ")));
+    }
+  }
   for (const auto& n : m.notes) finding("warning", "PresetNote", qs(n));
   for (const auto& r : m.runtime_only) {
     finding("warning", "RuntimeOnly", tr("No se exporta al NPC (solo lo aplica RaceMenu en el juego): %1").arg(qs(r)));

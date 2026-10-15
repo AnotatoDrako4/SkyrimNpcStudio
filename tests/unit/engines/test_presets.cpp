@@ -120,3 +120,17 @@ TEST_CASE("A RaceMenu preset maps onto the NPC record and FaceGen inputs", "[pre
   CHECK(m.runtime_only.size() == 4);  // overrides, transforms, body morphs, face textures
   CHECK_FALSE(m.notes.empty());       // the unmatched mask and the unreadable head part
 }
+
+TEST_CASE("Head parts from light (ESL) plugins use their 12-bit record ID", "[presets]") {
+  // Carrot.jslot as RaceMenu writes it: KSHairdosSMP.esp is light, runtime FormID 0xFE016893.
+  const auto preset = parse_jslot(R"({
+    "version": {"formatVersion": 4},
+    "headParts": [
+      {"formId": 4261505171, "formIdentifier": "KSHairdosSMP.esp|016893", "type": 3},
+      {"formId": 333071, "formIdentifier": "Skyrim.esm|05150F", "type": 1}
+    ]
+  })", "Carrot");
+  REQUIRE(preset.head_parts.size() == 2);
+  CHECK(preset.head_parts[0].form_key == "000893:KSHairdosSMP.esp");
+  CHECK(preset.head_parts[1].form_key == "05150F:Skyrim.esm");
+}

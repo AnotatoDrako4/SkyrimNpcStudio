@@ -76,6 +76,14 @@ RaceMenuPreset parse_jslot(std::string_view json_text, std::string name) {
     part.form_key = form_key_from_identifier(part.form_identifier);
     part.slot = hp.value("type", 0);
     if (const auto bar = part.form_identifier.find('|'); bar != std::string::npos) part.plugin = part.form_identifier.substr(0, bar);
+    // Light (ESL-flagged) plugins: RaceMenu writes the runtime FormID 0xFE LLL XXX and its low 24 bits
+    // in formIdentifier, so the light slot LLL would be read as part of the record ID. The record ID
+    // is only the low 12 bits (KSHairdosSMP.esp|016893 with formId 0xFE016893 is record 0x893).
+    if (const auto it = hp.find("formId"); it != hp.end() && !part.plugin.empty()) {
+      if (const auto runtime = as_u32(*it); runtime && (*runtime >> 24) == 0xFEu) {
+        part.form_key = std::format("{:06X}:{}", *runtime & 0xFFFu, text::trim(part.plugin));
+      }
+    }
     if (part.form_key.empty()) p.warnings.push_back("head part without a readable formIdentifier: " + part.form_identifier);
     if (!part.plugin.empty()) plugins.push_back(part.plugin);
     p.head_parts.push_back(std::move(part));
