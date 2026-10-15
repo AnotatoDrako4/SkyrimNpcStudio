@@ -52,8 +52,13 @@ Serana `hair-single, replacer-facegen, hair-safe, early-edit, sliders, undo-redo
 terminó en `summary: PASSED` (410 comprobaciones, 0 fallos, cierre limpio sin aviso del CRT), con
 `export-reopen` construyendo `hair-safe` tras reabrir el proyecto. Esto **no demuestra** que la
 corrupción anterior viniera de los objetos obsoletos: es la causa más probable (estructuras con
-distinta disposición entre objetos) y deja de reproducirse, pero la comprobación con el preset
-`asan` sigue siendo la verificación definitiva (comando en §4). Se retiró del código de cierres la
+distinta disposición entre objetos) y deja de reproducirse. Comprobación con AddressSanitizer
+(2026-10-15, Windows, `build\asan` RelWithDebInfo reconstruido con las fuentes de esta rama, worker
+copiado de `build\debug`, `ASAN_OPTIONS=halt_on_error=1,detect_stack_use_after_return=0,windows_hook_rtl_allocators=true`):
+el mismo arnés de Serana de 7 escenarios terminó en `summary: PASSED` (410 comprobaciones, 0
+fallos) sin ningún informe de ASan y con código de salida 0; el ejecutable importa
+`clang_rt.asan_dynamic-x86_64.dll`. Límites: Qt no está instrumentado, ASan solo vigila el código
+del estudio; es una sola ejecución, no una prueba de ausencia. Se retiró del código de cierres la
 instrumentación de asignaciones (rango fijo de solicitudes) añadida para esa búsqueda; se mantiene el
 manejador de informes del CRT de Debug (sin diálogo modal, con informe y minivolcado).
 

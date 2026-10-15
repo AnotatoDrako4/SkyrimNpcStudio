@@ -152,14 +152,15 @@ a `Skyrim/Data`.
 
 ## 7. Limitaciones y problemas abiertos
 
-- **Corrupción del montón al cerrar (no reproducida, sin ASan):** una ejecución del arnés sobre
+- **Corrupción del montón al cerrar (no reproducida; ASan limpio en una ejecución):** una ejecución del arnés sobre
   Serana acabó, en un árbol Debug con 133 objetos sin dependencias de cabeceras y sin los
   indicadores por defecto de MSVC, con «HEAP CORRUPTION DETECTED … wrote to memory after end of
   heap buffer». Tras reconstruir el árbol correctamente (ver `docs/CRASH_DIAGNOSTICS.md`,
   actualización 2026-10-15) el mismo arnés terminó dos veces en `summary: PASSED` (410
   comprobaciones, 0 fallos) y cerró sin aviso. Causa más probable: objetos compilados contra otra
-  disposición de `FaceGenBuild`/`FaceState`; no está demostrada. Pendiente: una ejecución con el
-  preset `asan` como verificación definitiva.
+  disposición de `FaceGenBuild`/`FaceState`; no está demostrada. El preset `asan` ejecutó el mismo
+  arnés (7 escenarios, 410 comprobaciones) sin ningún informe de AddressSanitizer
+  (`docs/CRASH_DIAGNOSTICS.md`); es una sola ejecución y Qt no está instrumentado.
 - **Guardar y reabrir (resuelto en el árbol corregido):** el cambio de color de Serana tras reabrir el
   proyecto se construía como `full`; en el árbol reconstruido el escenario `export-reopen` da
   `build kind hair-safe`, integridad `hair-tint-only` y FaceGen exportado = ganador salvo HairTint
