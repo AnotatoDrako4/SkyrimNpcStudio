@@ -1,4 +1,4 @@
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D Quick3DAssetUtils)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
 qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(SkyrimNpcStudio WIN32
@@ -94,6 +94,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
+  Qt6::Test  # QTest::mouseClick for the --forge-preview automation (platform input path)
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face
   sns::rendering

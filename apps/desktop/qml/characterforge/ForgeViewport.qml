@@ -15,6 +15,7 @@ Rectangle {
     readonly property ForgeSceneViewModel scene: forge.scene
     readonly property bool hasGeometry: scene.hasModel
     property real yaw: 0
+    readonly property bool selectionShown: selectionBox.visible  // 3D nodes are not QObject children of the window
     color: Theme.surface
 
     // Camera on the rendered bounds (RuntimeLoader.bounds: "may not be available before the first
@@ -224,7 +225,7 @@ Rectangle {
                 }
                 Item { Layout.fillWidth: true }
                 Label {
-                    text: root.hasGeometry ? qsTr("Clic izq: seleccionar parte · Clic der: orbitar · Rueda: zoom · Clic central: desplazar") : ""
+                    text: root.hasGeometry ? qsTr("Clic izq: seleccionar parte · Arrastrar con botón der. o central: orbitar · Ctrl + arrastrar: desplazar · Rueda: zoom") : ""
                     color: Theme.textMuted
                     font.pixelSize: Theme.small
                 }
