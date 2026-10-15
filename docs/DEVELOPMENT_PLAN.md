@@ -27,7 +27,7 @@ VERIFICACIÓN, VERIFICADO EN CLOUD, VERIFICADO EN WINDOWS, VERIFICADO EN SKYRIM,
 - [x] Worker .NET 10 (`SkyrimNpcStudio.BethesdaWorker`) publicado por CMake junto al ejecutable
 - [x] IPC real: JSON-RPC 2.0 sobre named pipe, handshake versionado, cancelación, timeouts, verificación del dueño del pipe, Job Object
 - [x] Dependencias fijadas por versión y hash, licencias revisadas ([ADR 0003](ADR/0003-dependencies.md), [ADR 0004](ADR/0004-licensing.md))
-- [x] CI de Windows ([.github/workflows/windows.yml](../.github/workflows/windows.yml)) — escrito, **no ejecutado aún en GitHub**
+- [x] CI de Windows ([.github/workflows/windows.yml](../.github/workflows/windows.yml)) — escrito, **no ha llegado a ejecutarse en GitHub**: las 64 ejecuciones (desde el 2026-10-12) acaban en `startup_failure`. Diagnóstico 2026-10-15: el YAML es válido (PyYAML; sin BOM, CR ni tabuladores; acciones y contextos correctos) y un workflow mínimo de dos trabajos (`ubuntu-latest` y `windows-2022`, rama de prueba ya borrada) también da `startup_failure`, así que **no es del archivo**. La API muestra Actions habilitado (`allowed_actions: all`) en un repositorio privado de cuenta personal; la causa queda en la cuenta (facturación/límite de gasto de Actions u otra restricción), que no se puede leer sin el ámbito `user` de `gh`. Paso manual: revisar https://github.com/settings/billing (minutos de Actions, límite de gasto, pagos fallidos) y Settings → Actions → General del repositorio; después, *Re-run* de la última ejecución. Mientras tanto la verificación es local (`ctest`, `dotnet test`, arnés).
 - [x] No había proyecto C#/WPF previo en el directorio de trabajo: no se reutilizó código
 
 ## Fase 1 — MO2 y base de NPC ✅
