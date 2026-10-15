@@ -152,6 +152,8 @@ a `Skyrim/Data`.
 
 ## 7. Limitaciones y problemas abiertos
 
+La prueba dentro de Skyrim sigue PENDIENTE: paquetes, instalación en un perfil MO2 de prueba y lista de comprobaciones en [SKYRIM_ACCEPTANCE_TEST.md](SKYRIM_ACCEPTANCE_TEST.md).
+
 - **Corrupción del montón al cerrar (no reproducida; ASan limpio en una ejecución):** una ejecución del arnés sobre
   Serana acabó, en un árbol Debug con 133 objetos sin dependencias de cabeceras y sin los
   indicadores por defecto de MSVC, con «HEAP CORRUPTION DETECTED … wrote to memory after end of

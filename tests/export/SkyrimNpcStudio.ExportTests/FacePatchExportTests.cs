@@ -200,6 +200,8 @@ public sealed class FacePatchExportTests : IDisposable
         var manifestText = File.ReadAllText(response.ManifestPath);
         using var manifest = JsonDocument.Parse(manifestText);
         Assert.Equal("complete-overhaul", manifest.RootElement.GetProperty("mode").GetString());
+        // The outfit half carries the same save-game warning as an outfit-only patch.
+        Assert.Contains(response.Issues, i => i.Code == "SaveGamePersistence");
 
         using var mod = ReadBack(response.PluginPath);
         var outfit = Assert.Single(mod.Outfits);
