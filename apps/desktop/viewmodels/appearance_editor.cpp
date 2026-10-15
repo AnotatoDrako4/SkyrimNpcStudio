@@ -915,6 +915,8 @@ void AppearanceEditor::setSkinTone(const QColor& color) {
 }
 
 void AppearanceEditor::setWeight(float weight) {
+  // Weight morphs the head (SkinnyMorph): the same TRI fit as the sliders is needed.
+  if (refuse_blocked(QStringLiteral("face-morphs"))) return;
   auto next = draft_.face();
   next.values.weight = std::clamp(weight, 0.0f, 100.0f);
   edit(std::move(next), tr("Cambiar peso"), "weight");

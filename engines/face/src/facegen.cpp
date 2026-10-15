@@ -525,8 +525,13 @@ FaceGenBuild build_facegen(const FaceRecipe& recipe, FaceAssetCache& assets, con
           if (!path.empty() && slot != kFaceTintSlot) out.SetTextureSlot(clone, path, slot);
         }
       }
-      auto tint = recipe.facegen_tint_path;
-      out.SetTextureSlot(clone, tint, kFaceTintSlot);
+      // A shape kept from the existing FaceGen keeps its slot 6: a replacer head may draw its own face
+      // texture there (Serana high poly head), and repointing it at a generated FaceTint would change
+      // a material nobody asked to change. A vanilla head already has the NPC's FaceTint there.
+      if (!preserved) {
+        auto tint = recipe.facegen_tint_path;
+        out.SetTextureSlot(clone, tint, kFaceTintSlot);
+      }
     }
     if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader);
         lighting && lighting->GetShaderType() == kShaderHairTint) {

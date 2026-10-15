@@ -159,6 +159,38 @@ struct Stress : std::enable_shared_from_this<Stress> {
     }
     return n;
   }
+  // Exports the current face edit and checks the worker's report: success, only face fields in the
+  // semantic diff, `required` among them, and the exported FaceGen files identical to the preview.
+  void export_face_and_check(const QString& dir, const QString& plugin, const QString& required) {
+    auto self = shared_from_this();
+    if (!appearance()->exportable()) {
+      check_exportable_or_explained();
+      appearance()->resetFace();
+      then_idle();
+      return;
+    }
+    appearance()->exportFaceOverhaul(plugin, dir, true, false);
+    auto wait = std::make_shared<std::function<void()>>();
+    *wait = [self, wait, required] {
+      if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+      const auto r = self->appearance()->last_export();
+      self->check(r.value("success").toBool(), "export: " + r.value("message").toString());
+      QStringList fields;
+      for (const auto& d : r.value("semanticDiff").toList()) {
+        for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+      }
+      static const QStringList face{"HairColor", "FaceMorph", "FaceParts", "HeadParts", "HeadTexture", "Weight", "Height", "TextureLighting", "TintLayers"};
+      bool only_face = !fields.isEmpty();
+      for (const auto& f : fields) only_face &= face.contains(f);
+      self->check(only_face, "diff only has face fields: " + fields.join(", "));
+      if (!required.isEmpty()) self->check(fields.contains(required), "diff contains " + required);
+      self->check(r.value("verificationProblems").toStringList().isEmpty(),
+                  "exported FaceGen identical to the preview (" + r.value("verifiedFiles").toStringList().join(", ") + ")");
+      self->appearance()->resetFace();
+      self->then_idle();
+    };
+    after(100, *wait);
+  }
   void check_hair(const QColor& expected) {
     check_hair_view(expected);
     check_exportable();
@@ -1064,6 +1096,74 @@ struct Stress : std::enable_shared_from_this<Stress> {
         };
         self->after(100, *wait);
       });
+    } else if (name == "donor-export") {
+      // Character Creator "apply the look of another NPC": the face is rebuilt from the donor's record
+      // (never its FaceGen copied) and exported; only face fields may change.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        const auto donor = qEnvironmentVariable("SNS_STRESS_DONOR", QStringLiteral("013640:Skyrim.esm"));
+        if (self->appearance()->operation_blocked(QStringLiteral("face-morphs")) || self->appearance()->operation_blocked(QStringLiteral("head-parts"))) {
+          self->log("donor: face edits blocked for this head; donor not applied");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->log("applyDonor " + donor);
+        self->appearance()->applyDonor(donor, QStringLiteral("donante"));
+        self->after(500, [self] { self->then_idle(); });
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("donor-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        if (self->head_part_skip) { self->step(); return; }
+        self->export_face_and_check(dir, QStringLiteral("SNS_Donor.esp"), {});
+      });
+    } else if (name == "body-export") {
+      // Body tab: height alone is a minimal export (NAM6 only, no FaceGen); weight changes the head
+      // (SkinnyMorph), so it regenerates the FaceGen.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      auto original_height = std::make_shared<float>(1.0f);
+      steps.push_back([self, original_height] {
+        *original_height = self->appearance()->height();
+        self->appearance()->setHeight(*original_height + 0.06f);
+        self->then_idle();
+      });
+      const auto dir_h = QDir(work_dir).filePath(QStringLiteral("height-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir_h, original_height] {
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_Height.esp"), dir_h, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, original_height] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "height export: " + r.value("message").toString());
+          QStringList fields;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          self->check(fields == QStringList{"Height"}, "height export diff: " + fields.join(", ") + " (expected Height)");
+          self->check(r.value("verifiedFiles").toStringList().isEmpty(), "no FaceGen exported for a height change");
+          self->appearance()->resetFace();
+          self->appearance()->setHeight(*original_height);  // resetFace keeps the body height
+          self->then_idle();
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self] {
+        if (self->appearance()->operation_blocked(QStringLiteral("face-morphs"))) {
+          self->log("weight: face morphs blocked for this head; weight export not exercised");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->appearance()->setWeight(self->appearance()->weight() > 50 ? 10.0f : 90.0f);
+        self->then_idle();
+      });
+      const auto dir_w = QDir(work_dir).filePath(QStringLiteral("weight-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir_w] {
+        if (self->head_part_skip) { self->step(); return; }
+        self->export_face_and_check(dir_w, QStringLiteral("SNS_Weight.esp"), QStringLiteral("Weight"));
+      });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
       const auto dir = QDir(work_dir).filePath(QStringLiteral("export-%1").arg(QDateTime::currentMSecsSinceEpoch()));
@@ -1133,7 +1233,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

@@ -348,6 +348,20 @@ TEST_CASE("PreserveExisting keeps sculpting the record cannot express and applie
   // Regenerating instead would lose the sculpt (z of vertex 2).
   const auto plain = build_facegen(edited, cache);
   CHECK(compare_facegen(plain.nif, expected.nif).max_distance > 2.9f);
+
+  // A replacer head drawing its own face texture in slot 6: the preserved head keeps it (it is not
+  // repointed at the generated FaceTint).
+  const auto tint_slot = inspect_facegen(existing.nif).face_tint_slot;
+  REQUIRE_FALSE(tint_slot.empty());
+  auto custom = existing.nif;
+  const auto custom_texture = std::string(tint_slot.size() - 4, 'x') + ".dds";
+  custom.replace(custom.find(tint_slot), tint_slot.size(), custom_texture);
+  options.existing_facegen = std::make_shared<const std::string>(custom);
+  const auto kept = build_facegen(edited, cache, options);
+  REQUIRE(kept.exportable());
+  const auto kept_slot = inspect_facegen(kept.nif).face_tint_slot;
+  CHECK(kept_slot.ends_with(custom_texture));  // nifly reports it with its "textures\\" root
+  CHECK(kept_slot.find("facetint") == std::string::npos);
 }
 
 TEST_CASE("Hair color patch changes only the HairTint color of the built FaceGen", "[face][hair]") {
