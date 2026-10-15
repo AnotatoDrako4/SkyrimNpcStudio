@@ -78,6 +78,7 @@ internal static partial class FacePatchBuilder
         var faces = new List<BuiltFace>();
         var expectations = new List<(FormKey Npc, FaceAssignment Face, FormKey? HairColor)>();
         var npcsSeen = new HashSet<FormKey>();
+        var allowedByNpc = new Dictionary<FormKey, IReadOnlySet<string>>();
         var usedEditorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var item in assignments)
@@ -103,6 +104,10 @@ internal static partial class FacePatchBuilder
             }
 
             var npc = patch.Npcs.GetOrAddAsOverride(winner);
+            // What this NPC's override may differ in from the winning record; Verify proves it.
+            allowedByNpc[npcKey] = NpcSafePatch.Union(
+                item.Face is { } faceRequest ? NpcSafePatch.AllowedForFace(faceRequest) : null,
+                item.Outfit is { ArmorFormKeys.Count: > 0 } outfitRequest ? NpcSafePatch.AllowedForOutfit(outfitRequest.AlsoSetSleepingOutfit) : null);
             FormKey outfitKey = FormKey.Null;
             var outfitEditorId = "";
             var pieces = new List<ArmorSummary>();
@@ -179,7 +184,8 @@ internal static partial class FacePatchBuilder
             MasterFlagsLookup = session.MasterStyles,
         });
 
-        var masters = Verify(session, queries, stagedPluginPath, patchKey, built.Count, esl, expectations, issues);
+        var masters = Verify(session, queries, stagedPluginPath, patchKey, built.Count, esl, expectations, allowedByNpc,
+            out var semanticDiffs, issues);
         foreach (var asset in generated)
         {
             var staged = Path.Combine(stagedModDir, asset.DataPath);
@@ -189,7 +195,7 @@ internal static partial class FacePatchBuilder
             }
         }
 
-        return new BuiltPatch(stagedPluginPath, masters, esl, records, built, issues, generated, faces);
+        return new BuiltPatch(stagedPluginPath, masters, esl, records, built, issues, generated, faces, SemanticDiffs: semanticDiffs);
     }
 
     /// <summary>
@@ -456,7 +462,9 @@ internal static partial class FacePatchBuilder
 
     private static IReadOnlyList<ModKey> Verify(
         LoadOrderSession session, CatalogQueries queries, string pluginPath, ModKey patchKey, int expectedCount, bool esl,
-        IReadOnlyList<(FormKey Npc, FaceAssignment Face, FormKey? HairColor)> expectations, List<Issue> issues)
+        IReadOnlyList<(FormKey Npc, FaceAssignment Face, FormKey? HairColor)> expectations,
+        IReadOnlyDictionary<FormKey, IReadOnlySet<string>> allowedByNpc, out IReadOnlyList<NpcSemanticDiff> semanticDiffs,
+        List<Issue> issues)
     {
         using var written = SkyrimMod.CreateFromBinaryOverlay(
             new ModPath(patchKey, pluginPath), SkyrimRelease.SkyrimSE,
@@ -556,6 +564,9 @@ internal static partial class FacePatchBuilder
                 }
             }
         }
+
+        // Safe patch: every NPC_ field of every override (not only the face ones) against the winner.
+        semanticDiffs = NpcSafePatch.CheckAll(session, patchKey, npcs.Values, allowedByNpc, "this face/outfit export");
 
         foreach (var record in written.EnumerateMajorRecords())
         {

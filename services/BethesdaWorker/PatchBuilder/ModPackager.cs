@@ -122,7 +122,11 @@ internal static class ModPackager
                          && !f.Equals("meta.ini", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
-            var manifest = BuildManifest(session, pluginName, author, description, mode, pluginProviders, built, sha256, bundledAssets);
+            var files = ListFiles(stagedModDir);
+            var verification = DescribeVerification(built, files);
+            var pending = DescribePendingVerification(built, bundledAssets);
+            var manifest = BuildManifest(session, pluginName, author, description, mode, pluginProviders, built, sha256, bundledAssets,
+                files, verification, pending);
             File.WriteAllText(Path.Combine(stagedModDir, "manifest.json"), JsonSerializer.Serialize(manifest, ManifestJson), Encoding.UTF8);
             File.WriteAllText(Path.Combine(stagedModDir, "README.md"), BuildReadme(session, pluginName, description, mode, pluginProviders, built, bundledAssets), Encoding.UTF8);
             File.WriteAllText(Path.Combine(stagedModDir, "meta.ini"), BuildMetaIni(description, modName), Encoding.UTF8);
@@ -132,6 +136,8 @@ internal static class ModPackager
             {
                 stagedZip = Path.Combine(staging, modName + ".zip");
                 CreateZip(stagedModDir, stagedZip);
+                VerifyZip(stagedZip, stagedModDir);
+                verification = [.. verification, $"ZIP releído: {files.Count + 2} entrada(s) con rutas relativas seguras y contenido idéntico al de la carpeta del mod (SHA-256)."];
             }
 
             ct.ThrowIfCancellationRequested();
@@ -156,6 +162,10 @@ internal static class ModPackager
                 PluginSha256 = sha256,
                 Records = built.Records,
                 Issues = built.Issues,
+                SemanticDiff = built.SemanticDiffs ?? [],
+                Files = files,
+                Verification = verification,
+                PendingVerification = pending,
             };
         }
         catch
@@ -202,7 +212,8 @@ internal static class ModPackager
     private static object BuildManifest(
         LoadOrderSession session, string pluginName, string author, string? description,
         string mode, IReadOnlyDictionary<string, string>? pluginProviders,
-        BuiltPatch built, string sha256, IReadOnlyList<string> bundledAssets) => new
+        BuiltPatch built, string sha256, IReadOnlyList<string> bundledAssets,
+        IReadOnlyList<ExportedFile> files, IReadOnlyList<string> verification, IReadOnlyList<string> pendingVerification) => new
     {
         format = ManifestFormat,
         formatVersion = ManifestVersion,
@@ -252,6 +263,12 @@ internal static class ModPackager
             sculptTargets = f.Provenance.SculptTargets,
         }),
         personalUseOnly = (built.Faces ?? []).Any(f => f.Provenance.DerivedFrom.Count > 0),
+        // Every NPC_ field that differs from the winning record, re-read from the written plugin.
+        semanticDiff = built.SemanticDiffs ?? [],
+        files,
+        // What the worker verified before writing this manifest, and what only the game can confirm.
+        verification,
+        pendingVerification,
         issues = built.Issues,
         inGameVerified = false,
     };
@@ -297,6 +314,33 @@ internal static class ModPackager
             }
         }
 
+        if (built.SemanticDiffs is { Count: > 0 } diffs)
+        {
+            sb.AppendLine().AppendLine("## Cambios respecto al registro ganador").AppendLine();
+            sb.AppendLine("Comparación del plugin escrito, releído, con el registro del NPC que ganaba en el orden de carga. Cualquier otro campo del NPC es idéntico (si no, la exportación se habría bloqueado).").AppendLine();
+            foreach (var diff in diffs)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"### {diff.NpcEditorId ?? diff.Npc} (`{diff.Npc}`)").AppendLine();
+                if (diff.Changes.Count == 0)
+                {
+                    sb.AppendLine("- Sin cambios en el registro del NPC.");
+                }
+
+                foreach (var change in diff.Changes)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"- **{change.Field}** ({change.Subrecord}): {change.Reason}.");
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  - Antes: `{change.Original}`");
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  - Ahora: `{change.Exported}`");
+                    if (change.Dependencies.Count > 0)
+                    {
+                        sb.AppendLine(CultureInfo.InvariantCulture, $"  - Depende de: {string.Join(", ", change.Dependencies)}");
+                    }
+                }
+
+                sb.AppendLine();
+            }
+        }
+
         sb.AppendLine().AppendLine("## Requisitos (masters)").AppendLine();
         sb.AppendLine("Deben estar activos y cargarse ANTES de este plugin:").AppendLine();
         foreach (var master in built.Masters)
@@ -330,6 +374,107 @@ internal static class ModPackager
         sb.AppendLine("comments=Generado por Skyrim NPC Studio");
         sb.AppendLine(CultureInfo.InvariantCulture, $"notes=\"{(description ?? string.Empty).Replace("\"", "'", StringComparison.Ordinal)}\"");
         return sb.ToString();
+    }
+
+    /// <summary>Plugin, generated assets and every other file of the mod folder, except what the packager writes itself.</summary>
+    private static IReadOnlyList<ExportedFile> ListFiles(string modDir) =>
+        Directory.EnumerateFiles(modDir, "*", SearchOption.AllDirectories)
+            .Select(f => (Full: f, Relative: Path.GetRelativePath(modDir, f).Replace('\\', '/')))
+            .Where(f => f.Relative is not ("manifest.json" or "README.md" or "meta.ini"))
+            .OrderBy(f => f.Relative, StringComparer.OrdinalIgnoreCase)
+            .Select(f => new ExportedFile
+            {
+                Path = f.Relative,
+                Sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f.Full))),
+                Bytes = new FileInfo(f.Full).Length,
+            })
+            .ToArray();
+
+    private static IReadOnlyList<string> DescribeVerification(BuiltPatch built, IReadOnlyList<ExportedFile> files)
+    {
+        var checks = new List<string>
+        {
+            "Plugin releído con Mutagen tras escribirlo: masters presentes y en orden de carga, flag ESL coherente, rango ESL, referencias resueltas.",
+        };
+        if (built.SemanticDiffs is { Count: > 0 } diffs)
+        {
+            checks.Add($"Cada NPC_ releído se comparó campo a campo con su registro ganador: solo cambian los campos pedidos ({diffs.Sum(d => d.Changes.Count)} cambio(s) en {diffs.Count} NPC).");
+        }
+
+        if (built.Generated is { Count: > 0 } generated)
+        {
+            checks.Add($"FaceGen: {generated.Count} archivo(s) con SHA-256 comprobado contra el que envió el estudio y copiados a la ruta propia del NPC.");
+        }
+
+        checks.Add($"{files.Count} archivo(s) del mod con SHA-256 y tamaño registrados en el manifiesto.");
+        return checks;
+    }
+
+    private static IReadOnlyList<string> DescribePendingVerification(BuiltPatch built, IReadOnlyList<string> bundledAssets)
+    {
+        var pending = new List<string>
+        {
+            "Probar el mod dentro de Skyrim, en un perfil de MO2 de prueba: que el NPC se ve y se equipa como en la vista previa.",
+        };
+        if (bundledAssets.Count > 0)
+        {
+            pending.Add("Comprobar en MO2 que ningún otro mod con FaceGen de estos NPC queda con mayor prioridad que este.");
+        }
+
+        if (built.Faces is { Count: > 0 })
+        {
+            pending.Add("Revisar la cabeza y el color de cabello en el juego (la vista previa y el FaceGen exportado coinciden, pero no se ha ejecutado Skyrim).");
+        }
+
+        return pending;
+    }
+
+    /// <summary>
+    /// Re-opens the ZIP that will be delivered: no absolute or parent-relative entry names, nothing the
+    /// mod folder does not contain, nothing missing, and every entry byte-identical to its file.
+    /// </summary>
+    internal static void VerifyZip(string zipPath, string modDir)
+    {
+        var expected = Directory.EnumerateFiles(modDir, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(modDir, f).Replace('\\', '/'))
+            .Where(f => !string.Equals(f, "meta.ini", StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var zip = ZipFile.OpenRead(zipPath);
+        foreach (var entry in zip.Entries)
+        {
+            var name = entry.FullName;
+            var segments = name.Split('/');
+            if (name.Length == 0 || name.StartsWith('/') || name.Contains('\\') || name.Contains(':')
+                || segments.Any(s => s is ".." or "." || s.Length == 0 && !name.EndsWith('/')))
+            {
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: unsafe entry name '{name}'.");
+            }
+
+            if (name.EndsWith('/'))
+            {
+                continue;
+            }
+
+            if (!expected.Contains(name) || !seen.Add(name))
+            {
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: unexpected or duplicate entry '{name}'.");
+            }
+
+            using var stream = entry.Open();
+            var zipped = Convert.ToHexString(SHA256.HashData(stream));
+            var onDisk = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(modDir, name.Replace('/', Path.DirectorySeparatorChar)))));
+            if (!string.Equals(zipped, onDisk, StringComparison.Ordinal))
+            {
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: '{name}' differs from the staged file.");
+            }
+        }
+
+        var missing = expected.Except(seen, StringComparer.OrdinalIgnoreCase).ToList();
+        if (missing.Count > 0)
+        {
+            throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: missing {string.Join(", ", missing)}.");
+        }
     }
 
     private static void CreateZip(string modDir, string zipPath)

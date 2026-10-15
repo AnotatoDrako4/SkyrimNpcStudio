@@ -92,6 +92,15 @@ public sealed record ExportedRecord
     public required string Kind { get; init; }
 }
 
+/// <summary>A file of the exported mod (everything except the manifest, README and meta.ini).</summary>
+public sealed record ExportedFile
+{
+    /// <summary>Path relative to the mod folder, with forward slashes (as inside the ZIP).</summary>
+    public required string Path { get; init; }
+    public required string Sha256 { get; init; }
+    public required long Bytes { get; init; }
+}
+
 public sealed record ExportResponse
 {
     public required string ModDirectory { get; init; }
@@ -103,6 +112,22 @@ public sealed record ExportResponse
     public required string PluginSha256 { get; init; }
     public required IReadOnlyList<ExportedRecord> Records { get; init; }
     public required IReadOnlyList<Issue> Issues { get; init; }
+
+    /// <summary>
+    /// Per NPC override, every field that differs from the winning record (re-read from the written
+    /// plugin) with its original and exported value and why. Fields outside the requested operation
+    /// make the export fail instead of appearing here.
+    /// </summary>
+    public IReadOnlyList<NpcSemanticDiff> SemanticDiff { get; init; } = [];
+
+    /// <summary>Files created, with hash and size (what to expect in the mod folder and the ZIP).</summary>
+    public IReadOnlyList<ExportedFile> Files { get; init; } = [];
+
+    /// <summary>Checks the worker ran on this export, in plain words (including the ZIP, which the manifest cannot mention).</summary>
+    public IReadOnlyList<string> Verification { get; init; } = [];
+
+    /// <summary>What the worker cannot check: still to do by hand inside the game.</summary>
+    public IReadOnlyList<string> PendingVerification { get; init; } = [];
 }
 
 /// <summary>The complete face of an NPC as the export writes it (NAM9, NAMA, NAM7, QNAM, HCLF, tints).</summary>

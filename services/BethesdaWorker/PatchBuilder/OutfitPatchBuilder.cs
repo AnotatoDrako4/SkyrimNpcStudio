@@ -26,7 +26,7 @@ internal sealed record BuiltPatch(
     string PluginPath, IReadOnlyList<ModKey> Masters, bool EslFlagged,
     IReadOnlyList<ExportedRecord> Records, IReadOnlyList<BuiltAssignment> Assignments, IReadOnlyList<Issue> Issues,
     IReadOnlyList<BuiltGeneratedAsset>? Generated = null, IReadOnlyList<BuiltFace>? Faces = null,
-    IReadOnlyList<BuiltStandaloneOutfit>? StandaloneOutfits = null);
+    IReadOnlyList<BuiltStandaloneOutfit>? StandaloneOutfits = null, IReadOnlyList<NpcSemanticDiff>? SemanticDiffs = null);
 
 /// <summary>
 /// Mode A (Outfit Patch): one new OTFT per NPC plus a minimal NPC override that only changes the
@@ -208,8 +208,11 @@ internal static partial class OutfitPatchBuilder
             MasterFlagsLookup = session.MasterStyles,
         });
 
-        var masters = Verify(session, pluginPath, patchKey, built, standaloneBuilt, request.EslFlag, issues);
-        return new BuiltPatch(pluginPath, masters, request.EslFlag, records, built, issues, StandaloneOutfits: standaloneBuilt);
+        var allowedByNpc = resolved.ToDictionary(
+            r => r.Npc.FormKey, r => NpcSafePatch.AllowedForOutfit(r.Assignment.AlsoSetSleepingOutfit));
+        var masters = Verify(session, pluginPath, patchKey, built, standaloneBuilt, request.EslFlag, allowedByNpc, out var semanticDiffs, issues);
+        return new BuiltPatch(pluginPath, masters, request.EslFlag, records, built, issues, StandaloneOutfits: standaloneBuilt,
+            SemanticDiffs: semanticDiffs);
     }
 
     /// <summary>
@@ -219,7 +222,9 @@ internal static partial class OutfitPatchBuilder
     /// </summary>
     private static IReadOnlyList<ModKey> Verify(
         LoadOrderSession session, string pluginPath, ModKey patchKey, IReadOnlyList<BuiltAssignment> built,
-        IReadOnlyList<BuiltStandaloneOutfit> standalone, bool esl, List<Issue> issues)
+        IReadOnlyList<BuiltStandaloneOutfit> standalone, bool esl,
+        IReadOnlyDictionary<FormKey, IReadOnlySet<string>> allowedByNpc, out IReadOnlyList<NpcSemanticDiff> semanticDiffs,
+        List<Issue> issues)
     {
         using var written = SkyrimMod.CreateFromBinaryOverlay(
             new ModPath(patchKey, pluginPath), SkyrimRelease.SkyrimSE,
@@ -281,6 +286,9 @@ internal static partial class OutfitPatchBuilder
             if (esl && item.Outfit.ID is < LightRangeMin or > LightRangeMax)
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: {item.Outfit} is outside the ESL range.");
         }
+
+        // Safe patch: re-read each override and compare EVERY NPC_ field with the winning record.
+        semanticDiffs = NpcSafePatch.CheckAll(session, patchKey, npcs.Values, allowedByNpc, "an outfit patch");
 
         foreach (var record in written.EnumerateMajorRecords())
         {

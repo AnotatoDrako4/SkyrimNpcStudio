@@ -139,8 +139,75 @@ Dialog {
                 wrapMode: Text.Wrap
                 color: Theme.warn
                 font.pixelSize: Theme.small
-                text: qsTr("Pendiente: instalar el mod en MO2 y comprobarlo dentro del juego. "
-                           + "El estudio no marca el cambio como verificado en el juego.")
+                text: ((root.exportResult?.pendingVerification ?? []).length > 0
+                       ? qsTr("Pendiente dentro del juego:\n• ") + root.exportResult.pendingVerification.join("\n• ")
+                       : qsTr("Pendiente: instalar el mod en MO2 y comprobarlo dentro del juego."))
+                      + "\n" + qsTr("El estudio no marca el cambio como verificado en el juego.")
+            }
+            // What the export did, for whoever wants to check it: collapsed so the result stays short.
+            Button {
+                text: exportDetails.visible ? qsTr("Ocultar detalles") : qsTr("Qué contiene este mod")
+                flat: true
+                onClicked: exportDetails.visible = !exportDetails.visible
+            }
+            ColumnLayout {
+                id: exportDetails
+                visible: false
+                Layout.fillWidth: true
+                spacing: 3
+                Text { text: qsTr("Cambios respecto al registro ganador"); color: Theme.accent; font.bold: true; font.pixelSize: Theme.small }
+                Repeater {
+                    model: root.exportResult?.semanticDiff ?? []
+                    delegate: ColumnLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 1
+                        Text { text: (modelData.npcEditorId || modelData.npc) + " — " + modelData.npc; color: Theme.text; font.pixelSize: Theme.small; font.bold: true }
+                        Repeater {
+                            model: modelData.changes
+                            delegate: Text {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                wrapMode: Text.WrapAnywhere
+                                color: Theme.textDim
+                                font.pixelSize: Theme.small
+                                text: "• " + modelData.field + " (" + modelData.subrecord + "): " + modelData.reason + "\n    "
+                                      + modelData.original + "  →  " + modelData.exported
+                                      + (modelData.dependencies.length > 0 ? "\n    " + qsTr("Depende de: ") + modelData.dependencies.join(", ") : "")
+                            }
+                        }
+                        Text {
+                            visible: modelData.changes.length === 0
+                            text: qsTr("• Sin cambios en el registro del NPC.")
+                            color: Theme.textDim
+                            font.pixelSize: Theme.small
+                        }
+                    }
+                }
+                Text { text: qsTr("Archivos creados"); color: Theme.accent; font.bold: true; font.pixelSize: Theme.small }
+                Repeater {
+                    model: root.exportResult?.files ?? []
+                    delegate: Text {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        wrapMode: Text.WrapAnywhere
+                        color: Theme.textDim
+                        font.pixelSize: Theme.small
+                        text: "• " + modelData.path + " (" + modelData.bytes + " B, SHA-256 " + modelData.sha256.substring(0, 12) + "…)"
+                    }
+                }
+                Text { text: qsTr("Comprobaciones realizadas"); color: Theme.accent; font.bold: true; font.pixelSize: Theme.small }
+                Repeater {
+                    model: root.exportResult?.verification ?? []
+                    delegate: Text {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        color: Theme.textDim
+                        font.pixelSize: Theme.small
+                        text: "✓ " + modelData
+                    }
+                }
             }
             RowLayout {
                 spacing: 8
