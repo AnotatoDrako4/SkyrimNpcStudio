@@ -165,6 +165,13 @@ internal static partial class FacePatchBuilder
             throw new WorkerException(ErrorCodes.ValidationFailed, "Validation failed; nothing was written.", issues);
         }
 
+        // Same note as an outfit-only patch: a new DefaultOutfit does not re-equip NPCs a save already holds.
+        if (built.Any(b => !b.Outfit.IsNull))
+        {
+            issues.Add(Issue.Info("SaveGamePersistence",
+                "NPCs already loaded in an existing save can keep their current equipment until the game re-initializes them; immediate application in every save is not guaranteed."));
+        }
+
         if (esl)
         {
             foreach (var record in patch.EnumerateMajorRecords().Where(r => r.FormKey.ModKey == patchKey))

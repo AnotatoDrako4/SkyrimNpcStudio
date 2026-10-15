@@ -624,7 +624,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
       const auto dir = QDir(work_dir).filePath(QStringLiteral("hair-safe-%1").arg(QDateTime::currentMSecsSinceEpoch()));
       steps.push_back([self, dir] {
         self->log("exportFaceOverhaul to " + dir);
-        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_HairSafe.esp"), dir, true, false);
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_HairSafe.esp"), dir, true, true);  // ZIP: the in-game test pack
         auto wait = std::make_shared<std::function<void()>>();
         *wait = [self, wait] {
           if (self->appearance()->exporting()) { self->after(100, *wait); return; }
@@ -844,7 +844,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
           return;
         }
         self->log("Easy Mod Creator mode C export to " + dir_c);
-        self->appearance()->exportCompleteOverhaul(QStringLiteral("SNS_EasyComplete.esp"), dir_c, true, false, QStringLiteral("SNS Tester"), {});
+        self->appearance()->exportCompleteOverhaul(QStringLiteral("SNS_EasyComplete.esp"), dir_c, true, true, QStringLiteral("SNS Tester"), {});
         auto wait = std::make_shared<std::function<void()>>();
         *wait = [self, wait, fields_of] {
           if (self->appearance()->exporting()) { self->after(100, *wait); return; }
