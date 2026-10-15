@@ -24,17 +24,39 @@ Dialog {
 
     readonly property var stepNames: [qsTr("Personaje"), qsTr("Modificación"), qsTr("Vista previa"), qsTr("Comprobación"), qsTr("Crear mod")]
     readonly property bool busy: studio.appearance.exporting || studio.outfit.exporting
+    // Plugins the mod will need at least: the NPC's winning plugin (its override copies that record)
+    // and, for an outfit change, the plugins of the pieces. The worker lists the exact masters.
+    readonly property var dependencies: {
+        var out = []
+        var add = function (plugin, provider) {
+            if (!plugin || plugin.toLowerCase() === "skyrim.esm") return
+            for (var i = 0; i < out.length; ++i) if (out[i].plugin.toLowerCase() === plugin.toLowerCase()) return
+            out.push({ plugin: plugin, provider: provider || "" })
+        }
+        var prov = compat.provenance || {}
+        add(prov.winningPlugin || summary.winningPlugin, prov.pluginProvider)
+        var outfitChange = (plan.changes || []).some(function (c) { return c.key === "outfit" })
+        if (outfitChange) {
+            var pieces = studio.outfit.pieces || []
+            for (var j = 0; j < pieces.length; ++j) add(pieces[j].plugin, "")
+        }
+        return out
+    }
 
     // Not modal and not dimmed: the viewport stays visible next to the assistant (step 3).
     modal: false
     dim: false
     parent: Overlay.overlay
-    x: Math.max(16, parent.width - width - 24)
+    // Sized from the window, not the overlay: the overlay can still be 0×0 when the window changes
+    // size before it is first exposed, which collapsed the assistant to a negative height.
+    readonly property real windowWidth: ApplicationWindow.window ? ApplicationWindow.window.width : parent.width
+    readonly property real windowHeight: ApplicationWindow.window ? ApplicationWindow.window.height : parent.height
+    x: Math.max(16, windowWidth - width - 24)
     y: 64
-    width: 600
-    height: Math.min(parent.height - 96, 680)
+    // About a third of the window (420–600 px): on 1280 px the viewport still shows the NPC for step 3.
+    width: Math.min(600, Math.max(420, windowWidth * 0.36), windowWidth - 32)
+    height: Math.max(320, Math.min(windowHeight - 96, 680))
     title: qsTr("Crear un mod — asistente")
-    standardButtons: Dialog.Close
 
     Settings {
         id: prefs
@@ -117,7 +139,11 @@ Dialog {
         spacing: 10
 
         // ---- steps
+        // Narrow assistant (small windows): only the current step keeps its name, the others show
+        // their number (with the name as tooltip), so the bar never pushes the page out of the panel.
         RowLayout {
+            id: stepBar
+            readonly property bool compact: root.availableWidth < 560
             Layout.fillWidth: true
             spacing: 4
             Repeater {
@@ -125,10 +151,14 @@ Dialog {
                 delegate: Button {
                     required property int index
                     required property string modelData
-                    Layout.fillWidth: true
+                    Layout.fillWidth: !stepBar.compact || index === root.step
+                    Layout.preferredWidth: stepBar.compact && index !== root.step ? 40 : -1
+                    Layout.minimumWidth: index === root.step ? implicitContentWidth + leftPadding + rightPadding : 0
                     flat: index !== root.step
                     highlighted: index === root.step
-                    text: (index + 1) + ". " + modelData
+                    text: stepBar.compact && index !== root.step ? String(index + 1) : (index + 1) + ". " + modelData
+                    ToolTip.visible: stepBar.compact && hovered && index !== root.step
+                    ToolTip.text: modelData
                     font.pixelSize: Theme.small
                     onClicked: root.step = index
                 }
@@ -267,6 +297,17 @@ Dialog {
                         id: checksColumn
                         width: parent.width
                         spacing: 4
+                        Text {
+                            visible: root.dependencies.length > 0
+                            width: checksColumn.width
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.small
+                            color: Theme.warn
+                            text: qsTr("⚠ El mod necesitará, como mínimo, estos plugins activos (si faltan, Skyrim no lo carga):")
+                                  + root.dependencies.map(function (d) {
+                                        return "\n     " + d.plugin + (d.provider.length > 0 ? qsTr("  (mod de MO2: %1)").arg(d.provider) : "")
+                                    }).join("")
+                        }
                         Repeater {
                             model: root.plan.checks || []
                             delegate: Text {
@@ -408,6 +449,7 @@ Dialog {
             Button { text: qsTr("Atrás"); enabled: root.step > 0; onClicked: root.step-- }
             Item { Layout.fillWidth: true }
             Button { text: qsTr("Siguiente"); visible: root.step < 4; highlighted: true; onClicked: root.step++ }
+            Button { text: qsTr("Cerrar"); flat: true; onClicked: root.close() }
         }
     }
 }

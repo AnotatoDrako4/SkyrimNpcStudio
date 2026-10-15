@@ -38,7 +38,7 @@ ni espera.
 | 1. Personaje | Nombre, FormKey, plugin de origen y ganador (overrides), raza, sexo, diagnóstico facial, conflicto MO2 | `StudioController.npc.summary`, `faceCompatibility` |
 | 2. Modificación | Resumen del modo y cada cambio; operaciones no disponibles para ese NPC con su motivo | `easyModPlan.changes`, `faceCompatibility.blocked` |
 | 3. Vista previa | «Comparar con el original» (el diálogo no es modal: el visor queda visible) y el resultado de Hair Color Safe Mode | `SceneViewModel.original`, `faceGen` |
-| 4. Comprobación | Lista de comprobaciones | `easyModPlan.checks` |
+| 4. Comprobación | Plugins que el mod necesitará como mínimo (plugin ganador del NPC con su mod de MO2 y, si cambia el atuendo, los plugins de las piezas) y la lista de comprobaciones | `faceCompatibility.provenance`, `outfit.pieces`, `easyModPlan.checks` |
 | 5. Crear mod | Nombre del plugin, autor, descripción, carpeta, ESL, ZIP; resultado: plugin, ZIP, masters, pendientes en el juego, diff semántico, archivos y comprobaciones del worker | exportadores + respuesta del worker (`semanticDiff`, `files`, `verification`, `pendingVerification`) |
 
 No instala en MO2 ni escribe en `Skyrim/Data`; la carpeta de salida se valida en el worker.
@@ -54,8 +54,28 @@ No instala en MO2 ni escribe en `Skyrim/Data`; la carpeta de salida se valida en
     diff semántico = `HairColor`; ZIP verificado; pendientes listados.
   - Serana, `easy-mod-outfit`: quitar una pieza → modo A, diff = `DefaultOutfit`; más color → modo C,
     diff = `DefaultOutfit, HairColor`.
-  - Lydia, `easy-mod-outfit`: su atuendo modificado no pasa la validación → el plan bloquea A y C
-    (comportamiento correcto; no se exportó).
+  - Lydia y Shady Sam, `easy-mod-outfit`: modos A y C exportados con el diff exacto (en Lydia los
+    conflictos de ranura que ya trae su atuendo son avisos `SlotConflictInherited`, no errores).
+  - `easy-mod-layout` (Serana y Lydia): cada página con un plan real y, en la última, un resultado
+    real; comprueba que el asistente cabe en la ventana, que ningún texto se corta ni se sale por el
+    lado y que los botones muestran su etiqueta completa. Guarda `wizard-<tamaño>-<página>.png`.
+
+## Tamaños de ventana
+
+2026-10-15, `-Size` con `easy-mod-layout` sobre Serana, 0 fallos en las 5 páginas: 1100×700 (mínimo
+de la ventana), 1280×720, 1600×900 y 1920×1080 (Windows la deja en 1920×1061). 2560×1440 no se
+pudo probar: el monitor es de 1080p y Windows recorta la ventana. Correcciones:
+
+- A 1600×900 el asistente quedaba con altura negativa (aplastado sobre la lista de NPC): se
+  dimensionaba con el overlay, que aún medía 0 tras el cambio de tamaño. Ahora usa el tamaño de la
+  ventana y nunca baja de 320 px.
+- Ancho entre 420 y 600 px (36 % de la ventana): a 1280 px deja visible parte del visor para el paso 3.
+- En un asistente estrecho solo el paso actual lleva nombre; los demás muestran su número (nombre
+  en la ayuda emergente). Antes «5. Crear mod», «Siguiente» y «Cerrar» se salían del panel.
+- «Cerrar» va en la fila de Atrás/Siguiente (antes ocupaba una fila más).
+
+Las capturas son de ventana oculta: el visor 3D solo aparece en la primera página capturada, así
+que la vista previa del paso 3 sigue necesitando una revisión con la ventana visible.
 
 ## Problema encontrado y evitado
 
@@ -65,7 +85,7 @@ bisección). La lista de comprobaciones usa un `Column` (posicionador).
 
 ## Pendiente
 
-- Revisión visual por una persona (los pasos se probaron con el arnés, ventana oculta).
+- Revisión visual por una persona con la ventana visible (el arnés mide el layout y guarda capturas con la ventana oculta).
 - NPC nuevos de Character Forge: fuera del asistente hasta que exista FaceGen nativo verificado
   (`readyForGame: false`).
 - Comprobar en Skyrim los mods creados.
