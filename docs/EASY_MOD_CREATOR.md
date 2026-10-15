@@ -1,29 +1,71 @@
-# Creador de mods — Modo fácil
+# Creador de mods — Modo fácil (Easy Mod Creator)
 
-Estado: **PENDIENTE** (diseño). Este documento describe lo que se va a construir; ninguna pantalla
-del asistente existe todavía en la aplicación. Lo que sí existe y el asistente reutilizará se
-indica en cada paso.
+Estado (2026-10-15): **IMPLEMENTADO, VERIFICADO EN WINDOWS** con el arnés automático; **sin revisión
+visual por una persona** y **nada verificado dentro de Skyrim**.
 
-El asistente no es un cuarto editor: orquesta Character Creator (`AppearanceEditor`), Outfit Studio
-(`OutfitEditor`) y Character Forge, y sus exportadores existentes.
+El asistente no es un cuarto editor: es el diálogo «🚀 Exportar Mod…» (barra superior y Character
+Creator), que ahora guía la exportación en cinco pasos sobre lo que ya editaste en Character Creator
+y Outfit Studio, y escribe el mod con sus exportadores existentes.
+
+## Cómo decide
+
+`sns::appearance::plan_easy_mod()` (`engines/appearance/src/easy_mod.cpp`, función pura) recibe el
+estado de los editores y devuelve el **modo**, los **cambios** que contendrá el mod y las
+**comprobaciones**. `AppearanceEditor.easyModPlan` lo expone a QML y se recalcula con cada cambio del
+rostro, del informe FaceGen, de la validación del atuendo o del estado de exportación.
+
+| Lo editado | Modo | Exportador |
+|---|---|---|
+| Solo color de cabello | B, cambio mínimo (`onlyFields = [HCLF]`, Hair Color Safe Mode) | `AppearanceEditor::exportFaceOverhaul` |
+| Rostro (sliders, presets, piezas, tintes) y/o altura | B | `AppearanceEditor::exportFaceOverhaul` |
+| Solo atuendo (piezas distintas de las del NPC) | A | `OutfitEditor::exportPatch` (solo este NPC) |
+| Rostro/cabello + atuendo | C | `AppearanceEditor::exportCompleteOverhaul` |
+
+Un atuendo sin cambios **no** se exporta (antes el modo C reasignaba el atuendo actual del NPC como
+un OTFT nuevo; corregido con `AppearanceDraft::is_outfit_dirty()`).
+
+Comprobaciones (✓ correcto · ⚠ aviso · ◷ esperando · ✕ bloquea): NPC seleccionado; análisis del
+FaceGen terminado; FaceGen generado y exportable; para el color, guard de integridad
+(`hair-tint-only`); operación no bloqueada por el diagnóstico facial; atuendo validado (slots, raza,
+sexo, plantilla; sin variantes de material solo previsualizables); conflicto de procedencia en MO2
+(aviso); y siempre «Pendiente de verificación en Skyrim». «Crear mod» solo se activa si nada bloquea
+ni espera.
 
 ## Pasos
 
-| Paso | Qué hace | Backend existente | Estado |
-|---|---|---|---|
-| 1. Personaje | NPC del perfil, NPC de un mod o NPC nuevo de Character Forge; resumen: nombre, mod de origen, plugin ganador, raza, sexo, compatibilidad facial | catálogo del worker, `StudioController::selectNpc`, `faceCompatibility` | PENDIENTE (UI) |
-| 2. Modificación | Color de cabello · Vestuario · Rostro · NPC nuevo · Overhaul | Hair Color Safe Mode; Outfit Studio (Modo A); `face_build_kind` + diagnóstico; Character Forge | PENDIENTE (UI) |
-| 3. Vista previa | Original frente a modificado con los assets reales | visor de Character Creator (overlay = bytes a exportar) | PENDIENTE (UI) |
-| 4. Comprobación | Plugin, FaceGen, FaceTint, dependencias, Head Parts, raza, vestuario, integridad, conflictos MO2, rutas | guard de integridad, validación del worker, `OutfitValidator`, diagnóstico facial | PENDIENTE (UI) |
-| 5. Crear mod | Nombre, autor, descripción, ESP/ESL, carpeta, ZIP para MO2; staging atómico | `ModPackager` (no sobrescribe, no escribe en `Skyrim/Data`, no instala) | PENDIENTE (UI) |
+| Paso | Qué muestra | Fuente |
+|---|---|---|
+| 1. Personaje | Nombre, FormKey, plugin de origen y ganador (overrides), raza, sexo, diagnóstico facial, conflicto MO2 | `StudioController.npc.summary`, `faceCompatibility` |
+| 2. Modificación | Resumen del modo y cada cambio; operaciones no disponibles para ese NPC con su motivo | `easyModPlan.changes`, `faceCompatibility.blocked` |
+| 3. Vista previa | «Comparar con el original» (el diálogo no es modal: el visor queda visible) y el resultado de Hair Color Safe Mode | `SceneViewModel.original`, `faceGen` |
+| 4. Comprobación | Lista de comprobaciones | `easyModPlan.checks` |
+| 5. Crear mod | Nombre del plugin, autor, descripción, carpeta, ESL, ZIP; resultado: plugin, ZIP, masters, pendientes en el juego, diff semántico, archivos y comprobaciones del worker | exportadores + respuesta del worker (`semanticDiff`, `files`, `verification`, `pendingVerification`) |
 
-Reglas que el asistente heredará del backend:
+No instala en MO2 ni escribe en `Skyrim/Data`; la carpeta de salida se valida en el worker.
 
-- Solo se ofrecen operaciones que el diagnóstico facial permite; las bloqueadas se muestran con
-  su motivo, no como botones activos.
-- Cambio mínimo: color → `HCLF` + FaceGen recoloreado; vestuario → OTFT, sin FaceGen; rostro →
-  campos del rostro + FaceGen regenerado o como diferencia, solo si es exportable.
-- Un NPC nuevo de Character Forge sigue con `readyForGame: false` e `inGameVerified: false` hasta
-  que exista un FaceGen nativo verificable.
-- Estados mostrados: operación segura · con limitaciones · bloqueada · pendiente de verificación en
-  Skyrim (siempre, hasta una prueba manual en el juego).
+## Pruebas
+
+- Unitarias: `tests/unit/engines/test_easy_mod.cpp` (8 casos, 54 aserciones: sin NPC, sin cambios,
+  color con y sin guard, generando, operación bloqueada, atuendo válido/ inválido/ vacío/ con
+  material, atuendo sin cambios, modo C, análisis en curso).
+- Arnés en la app real (`-StressAppearance easy-mod,easy-mod-outfit`, perfil MO2 `Default`):
+  - Lydia y Serana, `easy-mod`: sin cambios no se puede exportar; el asistente se abre, recorre sus
+    cinco páginas y muestra el resultado; color → modo B; exportación con autor, descripción y ZIP;
+    diff semántico = `HairColor`; ZIP verificado; pendientes listados.
+  - Serana, `easy-mod-outfit`: quitar una pieza → modo A, diff = `DefaultOutfit`; más color → modo C,
+    diff = `DefaultOutfit, HairColor`.
+  - Lydia, `easy-mod-outfit`: su atuendo modificado no pasa la validación → el plan bloquea A y C
+    (comportamiento correcto; no se exportó).
+
+## Problema encontrado y evitado
+
+Una página del `StackLayout` cuyo `ColumnLayout` contenía solo un `Repeater` con elementos provocaba
+un acceso inválido dentro de Qt Quick Layouts 6.11 al mostrarse (reproducido en el arnés, aislado por
+bisección). La lista de comprobaciones usa un `Column` (posicionador).
+
+## Pendiente
+
+- Revisión visual por una persona (los pasos se probaron con el arnés, ventana oculta).
+- NPC nuevos de Character Forge: fuera del asistente hasta que exista FaceGen nativo verificado
+  (`readyForGame: false`).
+- Comprobar en Skyrim los mods creados.

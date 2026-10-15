@@ -316,7 +316,7 @@ void OutfitEditor::validate() {
 
 void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output_dir_or_url, bool esl, bool zip,
                                const QString& description, bool also_set_sleeping,
-                               bool export_all_project_npcs, bool standalone, const QString& standalone_name) {
+                               bool export_all_project_npcs, bool standalone, const QString& standalone_name, const QString& author) {
   if (exporting_ || target_.form_key.empty()) return;
   auto has_material = [](const auto& pieces) {
     return std::any_of(pieces.begin(), pieces.end(), [](const auto& p) { return p.material.has_value(); });
@@ -417,16 +417,17 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
     }
     standalone_outfits.push_back(Json{{"name", ss(standalone_name.trimmed())}, {"armorFormKeys", armors}, {"materialOverrides", materials}});
   }
+  Json request{{"pluginName", ss(plugin_name)},
+               {"outputDirectory", ss(output)},
+               {"eslFlag", esl},
+               {"createZip", zip},
+               {"description", ss(description)},
+               {"pluginProviders", providers},
+               {"assignments", assignments},
+               {"standaloneOutfits", standalone_outfits}};
+  if (!author.trimmed().isEmpty()) request["author"] = ss(author.trimmed());
   worker_->call(
-      method::kExportOutfitPatch,
-      Json{{"pluginName", ss(plugin_name)},
-           {"outputDirectory", ss(output)},
-           {"eslFlag", esl},
-           {"createZip", zip},
-           {"description", ss(description)},
-           {"pluginProviders", providers},
-           {"assignments", assignments},
-           {"standaloneOutfits", standalone_outfits}},
+      method::kExportOutfitPatch, request,
       5min, this,
       [this](const Json& r) {
         exporting_ = false;

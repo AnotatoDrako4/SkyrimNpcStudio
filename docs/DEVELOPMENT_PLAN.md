@@ -19,7 +19,7 @@ VERIFICACIÓN, VERIFICADO EN CLOUD, VERIFICADO EN WINDOWS, VERIFICADO EN SKYRIM,
 | P1 NPC Safe Patch Engine (diff semántico de todos los campos `NPC_`, bloqueo `UnauthorizedNpcChange`) | VERIFICADO EN WINDOWS | 2026-10-15: `NpcSafePatchTests` (14 cambios ajenos bloqueados, diff exacto de color y atuendo); exportación real de Serana: `semanticDiff` = solo `HairColor` (HCLF), CLFM nuevo; ver [MOD_EXPORT_FORMAT.md](MOD_EXPORT_FORMAT.md) |
 | P2 Exportación verificable (inventario de archivos con SHA-256, comprobaciones y pendientes en manifiesto/respuesta, ZIP reabierto y comparado) | IMPLEMENTADO SIN VERIFICACIÓN visual | `ModPackagerTests` (10 casos: rutas inseguras, archivos extra/faltantes/alterados, sin sobrescritura); `dotnet test` 96/96; sección «Qué contiene este mod» del diálogo de exportación compilada, no revisada por una persona |
 | Comportamiento dentro de Skyrim | PENDIENTE | prueba manual |
-| P5–P6 Creador de mods — Modo fácil | PENDIENTE | diseño en [EASY_MOD_CREATOR.md](EASY_MOD_CREATOR.md) |
+| P3 Easy Mod Creator (asistente de 5 pasos sobre los exportadores existentes) | VERIFICADO EN WINDOWS (arnés; sin revisión visual) | 2026-10-15: `test_easy_mod` 8 casos; arnés `easy-mod` (Lydia, Serana) y `easy-mod-outfit` (Serana: modos A y C con diff real); ver [EASY_MOD_CREATOR.md](EASY_MOD_CREATOR.md) |
 
 ## Fase 0 — Preparación ✅
 

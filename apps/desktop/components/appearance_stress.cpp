@@ -616,6 +616,201 @@ struct Stress : std::enable_shared_from_this<Stress> {
         };
         self->after(100, *wait);
       });
+    } else if (name == "easy-mod") {
+      // Easy Mod Creator: the plan the assistant shows, the assistant on the real window, and a mod
+      // created from that plan with author, description and ZIP, checked through the worker's report.
+      auto wizard = [self]() -> QObject* {
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (QByteArray(o->metaObject()->className()).startsWith("ExportWizardDialog_QMLTYPE")) return o;
+        }
+        return nullptr;
+      };
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, wizard] {
+        const auto plan = self->appearance()->easy_mod_plan();
+        self->check(plan.value("mode").toString().isEmpty() && !plan.value("canExport").toBool(),
+                    "no edits: nothing to export (" + plan.value("summary").toString() + ")");
+        auto* w = wizard();
+        self->check(w != nullptr, "assistant present in the window");
+        if (w) QMetaObject::invokeMethod(w, "open");
+        self->after(300, [self, w] {
+          if (!w) { self->step(); return; }
+          self->check(w->property("visible").toBool(), "assistant opens");
+          // Every page of the assistant renders, one after another, ending on "Comprobación".
+          std::vector<std::function<void()>> pages;
+          for (const int page : {1, 2, 4, 3}) {
+            pages.push_back([self, w, page] {
+              self->log(QStringLiteral("assistant page %1").arg(page + 1));
+              w->setProperty("step", page);
+            });
+          }
+          self->chain(std::move(pages), 150, [self, w] {
+            self->check(w->property("step").toInt() == 3, "assistant pages render");
+            self->step();
+          });
+        });
+      });
+      const QColor color("#3B7A57");
+      steps.push_back([self, hair, color] { hair(color); self->then_idle(); });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("easy-mod-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, wizard, dir] {
+        const auto plan = self->appearance()->easy_mod_plan();
+        const auto changes = plan.value("changes").toList();
+        self->check(plan.value("mode").toString() == "face-overhaul", "hair color edit plans " + plan.value("mode").toString() + " (expected face-overhaul)");
+        self->check(plan.value("canExport").toBool(), "plan can export: " + plan.value("summary").toString());
+        self->check(changes.size() == 1 && changes.front().toMap().value("key").toString() == "hair", "the only change is the hair color");
+        if (auto* w = wizard()) {
+          self->check(w->property("plan").toMap().value("mode").toString() == "face-overhaul", "the assistant shows the same plan");
+        }
+        for (const auto& c : plan.value("checks").toList()) {
+          const auto m = c.toMap();
+          self->log(QStringLiteral("  check %1 %2: %3").arg(m.value("state").toString(), m.value("key").toString(), m.value("label").toString()));
+        }
+        self->log("Easy Mod Creator export to " + dir);
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_EasyMod.esp"), dir, true, true, QStringLiteral("SNS Tester"),
+                                               QStringLiteral("Easy Mod Creator stress"));
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, wizard] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "export: " + r.value("message").toString());
+          const auto diff = r.value("semanticDiff").toList();
+          QStringList fields;
+          for (const auto& d : diff) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          self->check(fields == QStringList{"HairColor"}, "semantic diff: " + fields.join(", ") + " (expected HairColor)");
+          self->check(!r.value("files").toList().isEmpty(), QStringLiteral("files listed: %1").arg(r.value("files").toList().size()));
+          bool zip_verified = false;
+          for (const auto& v : r.value("verification").toList()) zip_verified |= v.toString().startsWith(QStringLiteral("ZIP releído"));
+          self->check(zip_verified, "ZIP verified by the worker");
+          self->check(!r.value("pendingVerification").toList().isEmpty(), "in-game checks listed as pending");
+          self->check(QFile::exists(r.value("zipPath").toString()), "ZIP written: " + r.value("zipPath").toString());
+          auto* w = wizard();
+          if (!w) { self->appearance()->resetFace(); self->then_idle(); return; }
+          // The assistant shows the result on its last page (the export ran through the plan's exporter,
+          // which the assistant listens to only when it started it, so hand it the result like it would).
+          w->setProperty("modResult", r);
+          w->setProperty("step", 4);
+          self->after(300, [self, w] {
+            self->check(w->property("step").toInt() == 4 && w->property("visible").toBool(), "assistant shows the created mod");
+            QMetaObject::invokeMethod(w, "close");
+            self->appearance()->resetFace();
+            self->then_idle();
+          });
+        };
+        self->after(100, *wait);
+      });
+    } else if (name == "easy-mod-outfit") {
+      // Easy Mod Creator, modes A and C: an outfit edit alone, then the outfit plus a hair color. The
+      // export runs through the exporter the plan names; the worker's semantic diff must list exactly
+      // the fields of those edits. An outfit the validator rejects must block the plan instead.
+      auto fields_of = [](const QVariantMap& r) {
+        QStringList fields;
+        for (const auto& d : r.value("semanticDiff").toList()) {
+          for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+        }
+        fields.sort();
+        return fields;
+      };
+      auto wait_outfit = [](const std::shared_ptr<Stress>& self, std::function<void()> next) {
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, poll, next] {
+          if (self->studio->outfit()->validating() || self->busy()) { self->after(100, *poll); return; }
+          next();
+        };
+        self->after(200, *poll);
+      };
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, wait_outfit] {
+        const auto pieces = self->studio->outfit()->pieces();
+        if (pieces.size() < 2) {
+          self->log("NPC outfit has fewer than 2 pieces: mode A/C export not exercised");
+          self->step();
+          return;
+        }
+        const auto key = pieces.first().toMap().value("formKey").toString();
+        self->log("removePiece " + key);
+        self->studio->outfit()->removePiece(key);
+        wait_outfit(self, [self] { self->step(); });
+      });
+      const auto dir_a = QDir(work_dir).filePath(QStringLiteral("easy-mod-a-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir_a, fields_of] {
+        auto* outfit = self->studio->outfit();
+        if (outfit->pieces().isEmpty() || !outfit->can_undo()) {
+          self->step();  // no outfit edit was made (fewer than 2 pieces)
+          return;
+        }
+        const auto plan = self->appearance()->easy_mod_plan();
+        self->check(plan.value("mode").toString() == "outfit-patch", "outfit edit plans " + plan.value("mode").toString() + " (expected outfit-patch)");
+        if (!outfit->exportable()) {
+          self->check(!plan.value("canExport").toBool(), "an outfit the validator rejects blocks the plan");
+          self->log("outfit not exportable for this NPC: mode A export skipped");
+          self->step();
+          return;
+        }
+        self->check(plan.value("canExport").toBool(), "plan can export: " + plan.value("summary").toString());
+        auto done = std::make_shared<bool>(false);
+        auto result = std::make_shared<QVariantMap>();
+        auto c1 = std::make_shared<QMetaObject::Connection>();
+        auto c2 = std::make_shared<QMetaObject::Connection>();
+        *c1 = QObject::connect(outfit, &OutfitEditor::exported, self->studio, [done, result](const QVariantMap& r) { *result = r; *done = true; });
+        *c2 = QObject::connect(outfit, &OutfitEditor::exportFailed, self->studio, [done, result](const QString& m, const QVariantList&) {
+          (*result)["failure"] = m;
+          *done = true;
+        });
+        self->log("Easy Mod Creator mode A export to " + dir_a);
+        outfit->exportPatch(QStringLiteral("SNS_EasyOutfit.esp"), dir_a, true, true, QStringLiteral("Easy outfit"), false, false, false, {},
+                            QStringLiteral("SNS Tester"));
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, done, result, c1, c2, fields_of] {
+          if (!*done) { self->after(100, *wait); return; }
+          QObject::disconnect(*c1);
+          QObject::disconnect(*c2);
+          self->check(!result->contains("failure"), "mode A export: " + result->value("failure").toString());
+          self->check(fields_of(*result) == QStringList{"DefaultOutfit"}, "mode A semantic diff: " + fields_of(*result).join(", ") + " (expected DefaultOutfit)");
+          self->step();
+        };
+        self->after(100, *wait);
+      });
+      const QColor color("#6C3483");
+      steps.push_back([self, hair, color] { hair(color); self->then_idle(); });
+      const auto dir_c = QDir(work_dir).filePath(QStringLiteral("easy-mod-c-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir_c, fields_of] {
+        const auto plan = self->appearance()->easy_mod_plan();
+        const auto changes = plan.value("changes").toList();
+        const bool outfit_edit = std::any_of(changes.begin(), changes.end(),
+                                             [](const QVariant& c) { return c.toMap().value("key").toString() == "outfit"; });
+        if (!outfit_edit) {
+          self->check(plan.value("mode").toString() == "face-overhaul", "hair edit without outfit edit plans face-overhaul");
+          self->step();
+          return;
+        }
+        self->check(plan.value("mode").toString() == "complete-overhaul", "hair + outfit plans " + plan.value("mode").toString() + " (expected complete-overhaul)");
+        if (!plan.value("canExport").toBool()) {
+          self->check(!self->studio->outfit()->exportable(), "mode C is blocked only because the outfit is not exportable");
+          self->step();
+          return;
+        }
+        self->log("Easy Mod Creator mode C export to " + dir_c);
+        self->appearance()->exportCompleteOverhaul(QStringLiteral("SNS_EasyComplete.esp"), dir_c, true, false, QStringLiteral("SNS Tester"), {});
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, fields_of] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "mode C export: " + r.value("message").toString());
+          self->check(fields_of(r) == QStringList({"DefaultOutfit", "HairColor"}),
+                      "mode C semantic diff: " + fields_of(r).join(", ") + " (expected DefaultOutfit, HairColor)");
+          self->step();
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self] {
+        self->studio->outfit()->undo();  // the hair color, then the removed piece (shared history)
+        self->studio->outfit()->undo();
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
       const auto dir = QDir(work_dir).filePath(QStringLiteral("export-%1").arg(QDateTime::currentMSecsSinceEpoch()));
@@ -685,7 +880,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

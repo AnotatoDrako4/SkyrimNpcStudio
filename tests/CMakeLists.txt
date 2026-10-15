@@ -16,7 +16,8 @@ add_executable(sns_engine_tests
   unit/engines/test_face_engine.cpp
   unit/engines/test_facegen.cpp
   unit/engines/test_outfit_presets.cpp
-  unit/engines/test_compatibility_guardian.cpp)
+  unit/engines/test_compatibility_guardian.cpp
+  unit/engines/test_easy_mod.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
 target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)

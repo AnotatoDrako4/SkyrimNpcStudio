@@ -1,6 +1,7 @@
 add_library(sns_appearance STATIC
   src/appearance_draft.cpp
-  src/compatibility_guardian.cpp)
+  src/compatibility_guardian.cpp
+  src/easy_mod.cpp)
 add_library(sns::appearance ALIAS sns_appearance)
 target_include_directories(sns_appearance PUBLIC include)
 target_link_libraries(sns_appearance

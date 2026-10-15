@@ -15,6 +15,7 @@
 #include "json_bridge.hpp"
 #include "outfit_editor.hpp"
 #include "resource_context.hpp"
+#include "sns/appearance/easy_mod.hpp"
 #include "sns/core/file_io.hpp"
 #include "sns/core/text.hpp"
 #include "sns/face/face_tint.hpp"
@@ -166,6 +167,15 @@ AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, 
       schedule_build();
     }
   });
+  // Easy Mod Creator: the plan follows the face, the FaceGen report and the outfit validation.
+  for (auto signal : {&AppearanceEditor::faceGenChanged, &AppearanceEditor::appearanceChanged, &AppearanceEditor::recipeChanged,
+                      &AppearanceEditor::targetChanged, &AppearanceEditor::exportingChanged}) {
+    connect(this, signal, this, &AppearanceEditor::easyModChanged);
+  }
+  if (outfit_) {
+    connect(outfit_, &OutfitEditor::changed, this, &AppearanceEditor::easyModChanged);
+    connect(outfit_, &OutfitEditor::validationChanged, this, &AppearanceEditor::easyModChanged);
+  }
 }
 
 AppearanceEditor::~AppearanceEditor() {
@@ -775,6 +785,48 @@ bool AppearanceEditor::operation_blocked(const QString& op) const {
   return false;
 }
 
+QVariantMap AppearanceEditor::easy_mod_plan() const {
+  appearance::EasyModInputs in;
+  in.npc_loaded = !target_.form_key.empty();
+  in.npc_label = ss(npc_label());
+  if (in.npc_loaded && target_.form_key != ss(npc_label())) in.npc_label += " (" + target_.form_key + ")";
+  in.face_kind = draft_.face_loaded() ? appearance::face_build_kind(draft_.face_baseline(), draft_.face())
+                                      : appearance::FaceBuildKind::Unchanged;
+  in.face_exportable = exportable();
+  in.face_building = building_;
+  in.face_integrity = ss(facegen_report_.value("integrity").toString());
+  in.height_changed = draft_.is_height_dirty();
+  const auto& pieces = draft_.outfit().pieces();
+  in.outfit_changed = draft_.is_outfit_dirty();
+  in.outfit_pieces = pieces.size();
+  in.outfit_preview_material = std::any_of(pieces.begin(), pieces.end(), [](const auto& p) { return p.material.has_value(); });
+  if (outfit_) {
+    in.outfit_validating = outfit_->validating();
+    in.outfit_exportable = outfit_->exportable();
+  }
+  for (const auto& b : compatibility_.value("blocked").toList()) in.blocked_operations.push_back(ss(b.toMap().value("op").toString()));
+  in.provenance_conflict = ss(compatibility_.value("provenance").toMap().value("conflict").toString());
+
+  const auto plan = appearance::plan_easy_mod(in);
+  auto items = [](const std::vector<appearance::EasyModItem>& list) {
+    QVariantList out;
+    for (const auto& i : list) {
+      const auto state = appearance::to_string(i.state);
+      out << QVariantMap{{"key", qs(i.key)},
+                         {"state", QString::fromUtf8(state.data(), static_cast<qsizetype>(state.size()))},
+                         {"label", qs(i.label)},
+                         {"detail", qs(i.detail)}};
+    }
+    return out;
+  };
+  const auto mode = appearance::to_string(plan.mode);
+  return {{"mode", QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size()))},
+          {"summary", qs(plan.summary)},
+          {"canExport", plan.can_export && !exporting_},
+          {"changes", items(plan.changes)},
+          {"checks", items(plan.checks)}};
+}
+
 bool AppearanceEditor::exportable() const {
   if (!draft_.face_loaded() || building_) return false;
   switch (appearance::face_build_kind(draft_.face_baseline(), draft_.face())) {
@@ -1094,12 +1146,14 @@ void AppearanceEditor::loadPresetsFromVfs() {
 
 // ------------------------------------------------------------------------------------- export
 
-void AppearanceEditor::exportFaceOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip) {
-  export_overhaul(false, pluginName, outputDir, eslFlag, createZip);
+void AppearanceEditor::exportFaceOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip,
+                                          const QString& author, const QString& description) {
+  export_overhaul(false, pluginName, outputDir, eslFlag, createZip, author, description);
 }
 
-void AppearanceEditor::exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip) {
-  export_overhaul(true, pluginName, outputDir, eslFlag, createZip);
+void AppearanceEditor::exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip,
+                                              const QString& author, const QString& description) {
+  export_overhaul(true, pluginName, outputDir, eslFlag, createZip, author, description);
 }
 
 void AppearanceEditor::finish_export(bool ok, const QString& message, const QString& mod_dir, const QString& zip, const QVariantMap& extra) {
@@ -1115,7 +1169,8 @@ void AppearanceEditor::finish_export(bool ok, const QString& message, const QStr
   console_->append(ok ? "info" : "error", "export", message);
 }
 
-void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip) {
+void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip,
+                                       const QString& author, const QString& description) {
   if (exporting_ || target_.form_key.empty() || !worker_) return;
   const auto face_kind = draft_.face_loaded() ? appearance::face_build_kind(draft_.face_baseline(), draft_.face())
                                               : appearance::FaceBuildKind::Unchanged;
@@ -1123,7 +1178,9 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   // Minimal change: a hair color edit exports HCLF and the recolored winning FaceGen, nothing else.
   const bool hair_only = face_kind == appearance::FaceBuildKind::HairColorSafe;
   const bool body_edit = draft_.is_height_dirty();
-  const bool outfit_edit = complete && outfit_ && !outfit_->current_pieces().empty();
+  // The draft starts with the NPC's current outfit: only a changed outfit is an edit (an unchanged
+  // one would add a new OTFT identical to the current one).
+  const bool outfit_edit = complete && outfit_ && draft_.is_outfit_dirty() && !outfit_->current_pieces().empty();
   if (outfit_edit && std::any_of(outfit_->current_pieces().begin(), outfit_->current_pieces().end(),
                                  [](const auto& p) { return p.material.has_value(); })) {
     emit exportFinished(false, tr("El atuendo contiene una variante de material solo previsualizable. "
@@ -1246,6 +1303,8 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                {"eslFlag", esl},
                {"createZip", zip},
                {"pluginProviders", providers}};
+  if (!author.trimmed().isEmpty()) request["author"] = ss(author.trimmed());
+  if (!description.trimmed().isEmpty()) request["description"] = ss(description.trimmed());
   const char* rpc = method::kExportFacePatch;
   if (complete) {
     Json assignment{{"npcFormKey", target_.form_key}};
@@ -1290,6 +1349,11 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                                     {"issues", to_variant(r.value("issues", Json::array()))},
                                     {"verifiedFiles", verification.keys()},
                                     {"verificationProblems", problems},
+                                    {"records", to_variant(r.value("records", Json::array()))},
+                                    {"semanticDiff", to_variant(r.value("semanticDiff", Json::array()))},
+                                    {"files", to_variant(r.value("files", Json::array()))},
+                                    {"verification", to_variant(r.value("verification", Json::array()))},
+                                    {"pendingVerification", to_variant(r.value("pendingVerification", Json::array()))},
                                     {"inGameVerified", false}};
                   if (!problems.isEmpty()) {
                     finish_export(false, tr("Mod escrito pero la verificación posterior falló: %1").arg(problems.join("; ")), mod_dir, zip_path, extra);

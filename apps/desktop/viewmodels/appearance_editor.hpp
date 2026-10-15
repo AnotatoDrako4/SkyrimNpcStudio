@@ -93,6 +93,9 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QVariantList presetsList READ presets_list NOTIFY presetsChanged)
   Q_PROPERTY(bool exporting READ exporting NOTIFY exportingChanged)
   Q_PROPERTY(QVariantMap lastExport READ last_export NOTIFY exportingChanged)
+  // Easy Mod Creator: what a guided export would write now, its mode and every check
+  // (sns::appearance::plan_easy_mod over the face and outfit state of the shared draft).
+  Q_PROPERTY(QVariantMap easyModPlan READ easy_mod_plan NOTIFY easyModChanged)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
@@ -150,6 +153,7 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantList presets_list() const { return presets_list_; }
   [[nodiscard]] bool exporting() const { return exporting_; }
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
+  [[nodiscard]] QVariantMap easy_mod_plan() const;
   [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
   // The FaceGen the profile loads for the NPC (MO2 winner), as read for the analysis; null if none.
   [[nodiscard]] std::shared_ptr<const std::string> winning_facegen() const { return existing_facegen_; }
@@ -171,8 +175,10 @@ class AppearanceEditor : public QObject {
   Q_INVOKABLE void applyJslotPreset(const QString& filePath);
   Q_INVOKABLE QVariantMap evaluatePresetCompatibility(const QString& filePath);
   Q_INVOKABLE void loadPresetsFromVfs();
-  Q_INVOKABLE void exportFaceOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true);
-  Q_INVOKABLE void exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true);
+  Q_INVOKABLE void exportFaceOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true,
+                                      const QString& author = {}, const QString& description = {});
+  Q_INVOKABLE void exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true,
+                                          const QString& author = {}, const QString& description = {});
 
  signals:
   void targetChanged();
@@ -182,6 +188,7 @@ class AppearanceEditor : public QObject {
   void presetsChanged();
   void exportingChanged();
   void exportFinished(bool success, const QString& message, const QString& modDirectory, const QString& zipPath);
+  void easyModChanged();
 
  private:
   struct Build;
@@ -202,7 +209,8 @@ class AppearanceEditor : public QObject {
   void start_build();
   void finish_build(const std::shared_ptr<Build>& build);
   void cancel_jobs();
-  void export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip);
+  void export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip,
+                       const QString& author, const QString& description);
   void finish_export(bool ok, const QString& message, const QString& mod_dir, const QString& zip, const QVariantMap& extra = {});
   std::shared_ptr<ResourceContext> context() const;
   std::vector<face::MorphExtension> morph_extensions(const ResourceContext& context) const;

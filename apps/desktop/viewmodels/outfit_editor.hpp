@@ -97,7 +97,7 @@ class OutfitEditor : public QObject {
   Q_INVOKABLE void exportPatch(const QString& plugin_name, const QString& output_dir_or_url, bool esl, bool zip,
                                const QString& description, bool also_set_sleeping = false,
                                bool export_all_project_npcs = true, bool standalone = false,
-                               const QString& standalone_name = {});
+                               const QString& standalone_name = {}, const QString& author = {});
   Q_INVOKABLE void exportStandaloneOutfit(const QString& name, const QString& plugin_name, const QString& output_dir_or_url,
                                           bool esl, bool zip, const QString& description);
   Q_INVOKABLE void addCurrentToProject();
