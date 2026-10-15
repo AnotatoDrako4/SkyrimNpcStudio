@@ -7,6 +7,9 @@ import SkyrimNpcStudio
 
 ScrollView {
     id: root
+    // Skin tone and tints export a generated FaceTint; a head with its own face texture blocks them.
+    readonly property bool skinToneAllowed: !root.studio.appearance.analysing
+        && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "skin-tone")
     required property StudioController studio
     contentWidth: availableWidth
     clip: true
@@ -210,6 +213,7 @@ ScrollView {
             Item { Layout.fillWidth: true }
             Button {
                 text: qsTr("Selector libre…")
+                enabled: root.skinToneAllowed
                 onClicked: skinToneDialog.open()
             }
         }
@@ -225,6 +229,7 @@ ScrollView {
                 delegate: Button {
                     Layout.fillWidth: true
                     implicitHeight: 32
+                    enabled: root.skinToneAllowed
                     ToolTip.text: modelData.name
                     ToolTip.visible: hovered
 

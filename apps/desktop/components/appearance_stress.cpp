@@ -907,6 +907,98 @@ struct Stress : std::enable_shared_from_this<Stress> {
         };
         self->after(100, *wait);
       });
+    } else if (name == "sliders-export") {
+      // Face sliders exported: the record's NAM9 (FaceMorph) changes, the FaceGen is regenerated and
+      // identical to the preview, nothing outside the face changes. Heads whose diagnosis blocks
+      // sliders must refuse the edit instead.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        if (self->appearance()->operation_blocked(QStringLiteral("face-morphs"))) {
+          const auto before = self->appearance()->morphs();
+          self->appearance()->setSlider(QStringLiteral("NoseLongVsShort"), 0.8f);
+          self->check(self->appearance()->morphs() == before, "sliders blocked for this head: the edit is refused");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->appearance()->setSlider(QStringLiteral("NoseLongVsShort"), 0.8f);
+        self->appearance()->setSlider(QStringLiteral("JawNarrowVsWide"), -0.5f);
+        self->then_idle();
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("sliders-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        if (self->head_part_skip) { self->step(); return; }
+        self->check(self->appearance()->easy_mod_plan().value("mode").toString() == "face-overhaul", "slider edit plans face-overhaul");
+        self->check_exportable();
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_Sliders.esp"), dir, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "sliders export: " + r.value("message").toString());
+          QStringList fields;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          self->check(fields.contains("FaceMorph"), "semantic diff contains FaceMorph: " + fields.join(", "));
+          const QStringList face{"HairColor", "FaceMorph", "FaceParts", "HeadParts", "HeadTexture", "Weight", "Height", "TextureLighting", "TintLayers"};
+          bool only_face = true;
+          for (const auto& f : fields) only_face &= face.contains(f);
+          self->check(only_face, "only face fields changed");
+          self->check(r.value("verificationProblems").toStringList().isEmpty(),
+                      "exported FaceGen identical to the preview (" + r.value("verifiedFiles").toStringList().join(", ") + ")");
+          self->appearance()->resetFace();
+          self->then_idle();
+        };
+        self->after(100, *wait);
+      });
+    } else if (name == "skin-export") {
+      // Skin tone exported: QNAM changes and the mod carries the regenerated FaceTint DDS, identical
+      // to the previewed bytes, next to the FaceGen NIF.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        if (self->appearance()->operation_blocked(QStringLiteral("skin-tone"))) {
+          const auto before = self->appearance()->skin_tone();
+          self->appearance()->setSkinTone(QColor("#C68E6B"));
+          self->check(self->appearance()->skin_tone() == before, "skin tone blocked for this head (own face texture): the edit is refused");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->appearance()->setSkinTone(QColor("#C68E6B"));
+        self->then_idle();
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("skin-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        if (self->head_part_skip) { self->step(); return; }
+        if (!self->appearance()->exportable()) {
+          self->check_exportable_or_explained();
+          self->appearance()->resetFace();
+          self->then_idle();
+          return;
+        }
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_Skin.esp"), dir, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "skin export: " + r.value("message").toString());
+          QStringList fields;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          self->check(fields.contains("TextureLighting"), "semantic diff contains TextureLighting (QNAM): " + fields.join(", "));
+          const auto verified = r.value("verifiedFiles").toStringList();
+          const bool tint = std::any_of(verified.begin(), verified.end(), [](const QString& f) { return f.endsWith(".dds", Qt::CaseInsensitive); });
+          self->check(tint, "FaceTint DDS exported and identical to the preview (" + verified.join(", ") + ")");
+          self->check(r.value("verificationProblems").toStringList().isEmpty(), "no verification problems");
+          self->appearance()->resetFace();
+          self->then_idle();
+        };
+        self->after(100, *wait);
+      });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
       const auto dir = QDir(work_dir).filePath(QStringLiteral("export-%1").arg(QDateTime::currentMSecsSinceEpoch()));
@@ -976,7 +1068,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

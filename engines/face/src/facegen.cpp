@@ -1138,7 +1138,7 @@ FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, Fa
   if (!winning_facegen) {
     set(FaceCompatibility::FaceGenMissing, "facegen-missing");
     r.evidence.push_back("no FaceGen at " + recipe.facegen_mesh_path + " in the profile: the game builds the head at run time");
-    allow({"outfit"});
+    allow({"outfit", "skin-tone"});
     block("hair-color", "there is no FaceGen of the profile to recolor");
     if (regenerated.exportable()) {
       allow({"face-morphs", "head-parts", "regenerate"});
@@ -1151,16 +1151,28 @@ FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, Fa
     set(FaceCompatibility::FaceGenInconsistent, "facegen-inconsistent");
     r.evidence.push_back("the winning FaceGen is not a readable NIF");
     allow({"outfit"});
-    for (const char* op : {"hair-color", "face-morphs", "head-parts", "regenerate"}) block(op, "the winning FaceGen cannot be read");
+    for (const char* op : {"hair-color", "skin-tone", "face-morphs", "head-parts", "regenerate"}) block(op, "the winning FaceGen cannot be read");
     return r;
   }
   r.hair_tint = !info.hair_tints.empty();
   r.evidence.push_back(std::format("winning FaceGen: {} shapes, {} with HairTint", info.shapes.size(), info.hair_tints.size()));
+  // A replacer head may draw its own face texture in slot 6 instead of the NPC's FaceTint. A skin
+  // tone or tint edit exports a generated FaceTint and points slot 6 at it: the replacer's texture
+  // would be replaced by a vanilla-mask tint (Serana high poly head: 01_priscilla.dds).
+  const bool custom_face_texture = !info.face_tint_slot.empty() &&
+                                   text::data_path_key(info.face_tint_slot) != text::data_path_key(recipe.facegen_tint_path);
+  if (custom_face_texture) r.evidence.push_back("head face texture (slot 6): " + info.face_tint_slot + ", not the NPC's FaceTint");
   const auto hair_color = [&] {
     if (r.hair_tint) {
       allow({"hair-color"});
     } else {
       block("hair-color", "no shape of the winning FaceGen uses HairTint: a CLFM color does not reach the hair");
+    }
+    if (custom_face_texture) {
+      block("skin-tone", "the head draws its own face texture (" + info.face_tint_slot +
+                             ") instead of the FaceTint: a skin tone or tint edit would replace it with a generated FaceTint");
+    } else {
+      allow({"skin-tone"});
     }
   };
 

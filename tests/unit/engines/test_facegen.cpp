@@ -586,7 +586,21 @@ TEST_CASE("Face compatibility is diagnosed from the FaceGen, meshes and TRI file
   const auto vanilla = diagnose_face_compatibility(recipe, cache, &regenerated.nif, regenerated);
   CHECK(vanilla.kind == FaceCompatibility::VanillaCompatible);
   CHECK(vanilla.code == "vanilla-compatible");
-  for (const char* op : {"hair-color", "outfit", "face-morphs", "head-parts", "regenerate"}) CHECK(allowed(vanilla, op));
+  for (const char* op : {"hair-color", "outfit", "skin-tone", "face-morphs", "head-parts", "regenerate"}) CHECK(allowed(vanilla, op));
+
+  // A head that draws its own face texture in slot 6 (a replacer) instead of the NPC's FaceTint:
+  // skin tone and tint edits would replace that texture, so they are blocked.
+  {
+    const auto tint_slot = inspect_facegen(regenerated.nif).face_tint_slot;
+    REQUIRE_FALSE(tint_slot.empty());
+    auto custom = regenerated.nif;
+    const auto at = custom.find(tint_slot);
+    REQUIRE(at != std::string::npos);
+    custom.replace(at, tint_slot.size(), std::string(tint_slot.size() - 4, 'x') + ".dds");
+    const auto replacer = diagnose_face_compatibility(recipe, cache, &custom, regenerated);
+    CHECK(blocked(replacer, "skin-tone"));
+    CHECK(allowed(replacer, "hair-color"));
+  }
 
   // Sculpted FaceGen, TRI files fit: edits as differences, never a regeneration.
   auto sculpt = recipe;

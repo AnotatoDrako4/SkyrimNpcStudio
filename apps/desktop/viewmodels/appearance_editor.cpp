@@ -902,7 +902,7 @@ void AppearanceEditor::setHairColor(const QColor& color) {
 }
 
 void AppearanceEditor::setSkinTone(const QColor& color) {
-  if (!color.isValid()) return;
+  if (!color.isValid() || refuse_blocked(QStringLiteral("skin-tone"))) return;
   auto next = draft_.face();
   next.values.skin_tone = rgb8(color);
   // The skin tone tint layer follows QNAM, as RaceMenu and the Creation Kit keep them equal.
@@ -974,6 +974,7 @@ void AppearanceEditor::removeHeadPart(const QString& type) {
 }
 
 void AppearanceEditor::setTint(int index, const QColor& color, float value) {
+  if (refuse_blocked(QStringLiteral("skin-tone"))) return;
   auto next = draft_.face();
   auto it = std::find_if(next.values.tints.begin(), next.values.tints.end(), [&](const auto& t) { return t.index == index; });
   if (it == next.values.tints.end()) {

@@ -108,7 +108,7 @@ a cada TRI, mallas o TRI ausentes, auditoría FaceGen/registro y desviación de 
 |---|---|---|
 | Geometría compatible con el registro | color, vestuario, sliders, Head Parts, regenerar | — |
 | Geometría personalizada: edición limitada | color, vestuario, sliders (como diferencia), Head Parts | regenerar |
-| Geometría personalizada con morphs incompatibles (Serana) | color, vestuario | sliders/presets, Head Parts, regenerar |
+| Geometría personalizada con morphs incompatibles (Serana) | color, vestuario | sliders/presets, Head Parts, regenerar; tono de piel/tintes si la cabeza usa su propia textura de cara |
 | FaceGen ausente | vestuario; sliders/Head Parts/regenerar si la cabeza se construye | color |
 | FaceGen inconsistente | vestuario; color si es legible y tiene HairTint | sliders, Head Parts, regenerar |
 | Dependencias faltantes | color, vestuario | sliders, Head Parts, regenerar |
@@ -172,6 +172,8 @@ a `Skyrim/Data`.
 - El FaceGen exportado deriva del FaceGen del replacer: es para uso personal salvo permiso del
   autor; el manifiesto lo registra en `derivedFrom`.
 - Un cambio de Head Parts en cabezas con morphs incompatibles se bloquea por no estar verificado.
+- Tono de piel y tintes (`skin-tone`) se bloquean si la cabeza del FaceGen ganador dibuja su propia textura en la
+  ranura 6 en lugar del FaceTint del NPC: exportarlos la sustituiría por un FaceTint generado con máscaras vanilla.
 
 ## 8. Recuperación
 
