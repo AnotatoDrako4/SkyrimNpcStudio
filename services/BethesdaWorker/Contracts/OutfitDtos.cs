@@ -165,6 +165,13 @@ public sealed record FaceAssignment
     public float? Height { get; init; }
     public IReadOnlyList<GeneratedAsset>? GeneratedAssets { get; init; }
     public FaceGenProvenance? FaceGen { get; init; }
+
+    /// <summary>
+    /// Minimal change: when set, only these NPC_ fields are written on the winning record ("HCLF",
+    /// "NAM6"); every other face field must stay exactly as the winner has it, or the export fails
+    /// with MinimalChangeViolated. Null applies the complete face (Values, HeadParts, HeadTexture, Height).
+    /// </summary>
+    public IReadOnlyList<string>? OnlyFields { get; init; }
 }
 
 public sealed record ExportFaceOverhaulRequest

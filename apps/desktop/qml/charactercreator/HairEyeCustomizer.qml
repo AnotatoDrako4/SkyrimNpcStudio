@@ -46,9 +46,18 @@ ScrollView {
         onAccepted: root.studio.appearance.setHairColor(selectedColor)
     }
 
+    // Hair color edits need the analysed FaceGen and a HairTint shader (Hair Color Safe Mode).
+    readonly property bool hairColorAllowed: !root.studio.appearance.analysing
+        && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "hair-color")
+
     ColumnLayout {
         width: root.availableWidth
         spacing: 14
+
+        FaceProtectionCard {
+            Layout.fillWidth: true
+            studio: root.studio
+        }
 
         // --- SECCIÓN: CABELLO ---
         Text {
@@ -77,6 +86,7 @@ ScrollView {
             Item { Layout.fillWidth: true }
             Button {
                 text: qsTr("Selector libre…")
+                enabled: root.hairColorAllowed
                 onClicked: customHairColorDialog.open()
             }
         }
@@ -92,6 +102,7 @@ ScrollView {
                 delegate: Button {
                     Layout.fillWidth: true
                     implicitHeight: 34
+                    enabled: root.hairColorAllowed
                     ToolTip.text: modelData.name
                     ToolTip.visible: hovered
 

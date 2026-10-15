@@ -5,8 +5,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <sstream>
 
@@ -371,7 +373,33 @@ TEST_CASE("Hair color patch changes only the HairTint color of the built FaceGen
   const auto same = compare_facegen(patch.nif, built.nif);
   CHECK(same.same_topology);
   CHECK(same.max_distance == 0.0f);
+  const auto integrity = verify_hair_tint_integrity(built.nif, patch.nif);
+  CHECK(integrity.readable);
+  CHECK(integrity.unchanged_except_hair_tint);
+  CHECK(integrity.differences.empty());
   CHECK(patch.nif == build_facegen(recolored, cache).nif);
+
+  // Every selection starts from the original winner. Twenty consecutive choices therefore keep
+  // the exact same topology and complete NIF graph without accumulating serialization changes.
+  for (int i = 0; i < 20; ++i) {
+    auto choice = recipe;
+    choice.values.hair_color = Rgb8{static_cast<std::uint8_t>(i * 11), static_cast<std::uint8_t>(255 - i * 7),
+                                    static_cast<std::uint8_t>(i * 5)};
+    const auto selected = patch_hair_tint(built.nif, choice);
+    INFO("hair color selection " << i);
+    REQUIRE_FALSE(selected.nif.empty());
+    CHECK(verify_hair_tint_integrity(built.nif, selected.nif).unchanged_except_hair_tint);
+    CHECK(compare_facegen(built.nif, selected.nif).max_distance == 0.0f);
+  }
+
+  // A semantically different head can never pass as a legal color-only patch.
+  auto reshaped = recipe;
+  reshaped.values.sliders[0] = -0.5f;
+  const auto changed = build_facegen(reshaped, cache);
+  const auto rejected = verify_hair_tint_integrity(built.nif, changed.nif);
+  CHECK(rejected.readable);
+  CHECK_FALSE(rejected.unchanged_except_hair_tint);
+  CHECK_FALSE(rejected.differences.empty());
 
   // No hair color: black, as the Creation Kit writes it.
   auto none = recipe;
@@ -394,14 +422,206 @@ TEST_CASE("Hair parts without a HairTint shader are reported instead of colored"
   auto recipe = synthetic_recipe();
   recipe.values.hair_color = Rgb8{10, 20, 30};
   const auto build = build_facegen(recipe, cache);
-  auto unsupported = [](const std::vector<FaceIssue>& issues) {
-    return std::count_if(issues.begin(), issues.end(), [](const auto& i) { return i.code == "HairTintUnsupported"; });
+  auto count = [](const std::vector<FaceIssue>& issues, const char* code) {
+    return std::count_if(issues.begin(), issues.end(), [&](const auto& i) { return i.code == code; });
   };
-  CHECK(unsupported(build.issues) == 1);
+  CHECK(count(build.issues, "HairTintUnsupported") == 1);
   CHECK(build.exportable());  // a warning: the record still gets the color, the piece just ignores it
+  // Hair Color Safe Mode on that FaceGen: nothing could take the color, so nothing is produced and
+  // nothing is claimed; the shader is not converted.
   const auto patch = patch_hair_tint(build.nif, recipe);
   CHECK(patch.patched.empty());
-  CHECK(unsupported(patch.issues) == 1);
+  CHECK(patch.nif.empty());
+  CHECK(count(patch.issues, "HairTintUnsupported") == 1);
+  CHECK(count(patch.issues, "HAIR_TINT_NOT_APPLIED") == 1);
+}
+
+TEST_CASE("Hair Color Safe Mode recolors a sculpted FaceGen byte for byte", "[face][hair]") {
+  auto assets = synthetic_assets();
+  FaceAssetCache cache(assets.reader());
+  // The profile's FaceGen was sculpted: it is not what the record's values produce.
+  auto sculpted = synthetic_recipe();
+  sculpted.values.sliders[0] = 0.8f;
+  sculpted.values.sliders[2] = -0.6f;
+  sculpted.values.hair_color = Rgb8{40, 30, 20};
+  const auto original = build_facegen(sculpted, cache).nif;
+  REQUIRE_FALSE(original.empty());
+  auto record = synthetic_recipe();  // record values: no slider set
+  record.values.hair_color = Rgb8{40, 30, 20};
+  REQUIRE(compare_facegen(build_facegen(record, cache).nif, original).max_distance > 0.0f);  // regenerating would lose it
+
+  auto edited = record;
+  edited.values.hair_color = Rgb8{200, 10, 90};
+  const auto patch = patch_hair_tint(original, edited);
+  REQUIRE_FALSE(patch.nif.empty());
+  CHECK(patch.patched == std::vector<std::string>{"HairFemaleNord02"});
+  REQUIRE(patch.nif.size() == original.size());
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < original.size(); ++i) differing += original[i] != patch.nif[i];
+  CHECK(differing > 0);
+  CHECK(differing <= 12);  // one HairTint shape: at most its three floats
+  const auto integrity = verify_hair_tint_integrity(original, patch.nif);
+  CHECK(integrity.byte_identical_outside_hair_tint);
+  CHECK(integrity.unchanged_except_hair_tint);
+  CHECK(compare_facegen(original, patch.nif).max_distance == 0.0f);  // the sculpt is kept
+  const auto info = inspect_facegen(patch.nif);
+  REQUIRE(info.hair_tints.size() == 1);
+  CHECK_THAT(info.hair_tints[0].second[0], WithinAbs(2.0 * 200 / 255.0, 1e-6));
+}
+
+TEST_CASE("FaceGen Geometry Integrity Guard names the piece, property and values that changed", "[face][hair]") {
+  auto assets = synthetic_assets();
+  FaceAssetCache cache(assets.reader());
+  const auto recipe = synthetic_recipe();
+  const auto original = build_facegen(recipe, cache).nif;
+  REQUIRE_FALSE(original.empty());
+  auto edit = [&](const std::function<void(nifly::NifFile&)>& change) {
+    std::istringstream in(original, std::ios::binary);
+    nifly::NifFile nif;
+    REQUIRE(nif.Load(in) == 0);
+    change(nif);
+    std::ostringstream out(std::ios::binary);
+    REQUIRE(nif.Save(out) == 0);
+    return out.str();
+  };
+  auto shape = [](nifly::NifFile& nif, const char* name) {
+    nifly::NiShape* found = nullptr;
+    for (auto* s : nif.GetShapes()) {
+      if (s->name.get() == name) found = s;
+    }
+    INFO("shape " << name);
+    REQUIRE(found);
+    return found;
+  };
+  auto find = [](const FaceGenIntegrity& r, const std::string& shape_name, const std::string& property) {
+    INFO(r.summary());
+    const auto it = std::find_if(r.differences.begin(), r.differences.end(),
+                                 [&](const FaceGenDifference& d) { return d.shape == shape_name && d.property == property; });
+    REQUIRE(it != r.differences.end());
+    return *it;
+  };
+
+  // Re-serialized without any change: semantically identical, allowed.
+  const auto same = verify_hair_tint_integrity(original, edit([](nifly::NifFile&) {}));
+  CHECK(same.unchanged_except_hair_tint);
+
+  // Moved vertices (a regeneration with another slider).
+  auto reshaped = recipe;
+  reshaped.values.sliders[0] = 0.5f;
+  const auto moved = verify_hair_tint_integrity(original, build_facegen(reshaped, cache).nif);
+  CHECK_FALSE(moved.unchanged_except_hair_tint);
+  CHECK(find(moved, "FemaleHeadNord", "positions").after.find("vertices moved") != std::string::npos);
+
+  // Another texture on the hair.
+  const auto retextured = verify_hair_tint_integrity(original, edit([&](nifly::NifFile& nif) {
+    std::string path = "textures\\other.dds";
+    nif.SetTextureSlot(shape(nif, "HairFemaleNord02"), path, 0);
+  }));
+  const auto texture = find(retextured, "HairFemaleNord02", "texture slot 0");
+  CHECK(texture.before == "textures\\hair.dds");
+  CHECK(texture.after == "textures\\other.dds");
+
+  // Same vertices, other triangles (a different topology on the same points).
+  const auto rewired = verify_hair_tint_integrity(original, edit([&](nifly::NifFile& nif) {
+    auto* s = shape(nif, "FemaleHeadNord");
+    std::vector<nifly::Triangle> tris;
+    s->GetTriangles(tris);
+    REQUIRE_FALSE(tris.empty());
+    std::swap(tris[0].p2, tris[0].p3);
+    s->SetTriangles(tris);
+  }));
+  CHECK(find(rewired, "FemaleHeadNord", "indices").after == "1 triangles with other vertex indices");
+
+  // Other UV coordinates.
+  const auto remapped = verify_hair_tint_integrity(original, edit([&](nifly::NifFile& nif) {
+    auto* s = shape(nif, "FemaleHeadNord");
+    std::vector<nifly::Vector2> uv;
+    nif.GetUvsForShape(s, uv);
+    REQUIRE_FALSE(uv.empty());
+    uv[0].u += 0.25f;
+    nif.SetUvsForShape(s, uv);
+  }));
+  find(remapped, "FemaleHeadNord", "uv");
+
+  // A head part removed.
+  const auto removed = verify_hair_tint_integrity(original, edit([&](nifly::NifFile& nif) { nif.DeleteShape(shape(nif, "HairFemaleNord02")); }));
+  CHECK(find(removed, "", "shape count").before == "2");
+  CHECK(find(removed, "HairFemaleNord02", "shape").after == "missing");
+
+  // Not a NIF.
+  const auto unreadable = verify_hair_tint_integrity(original, "garbage");
+  CHECK_FALSE(unreadable.readable);
+  CHECK_FALSE(unreadable.unchanged_except_hair_tint);
+}
+
+TEST_CASE("Face compatibility is diagnosed from the FaceGen, meshes and TRI files, not from names", "[face][compat]") {
+  auto assets = synthetic_assets();
+  FaceAssetCache cache(assets.reader());
+  const auto recipe = synthetic_recipe();
+  const auto regenerated = build_facegen(recipe, cache);
+  REQUIRE(regenerated.exportable());
+  auto allowed = [](const FaceCompatibilityReport& r, const std::string& op) {
+    return std::find(r.allowed.begin(), r.allowed.end(), op) != r.allowed.end();
+  };
+  auto blocked = [](const FaceCompatibilityReport& r, const std::string& op) {
+    return std::any_of(r.blocked.begin(), r.blocked.end(), [&](const auto& b) { return b.first == op && !b.second.empty(); });
+  };
+
+  // The profile's FaceGen is what the record produces.
+  const auto vanilla = diagnose_face_compatibility(recipe, cache, &regenerated.nif, regenerated);
+  CHECK(vanilla.kind == FaceCompatibility::VanillaCompatible);
+  CHECK(vanilla.code == "vanilla-compatible");
+  for (const char* op : {"hair-color", "outfit", "face-morphs", "head-parts", "regenerate"}) CHECK(allowed(vanilla, op));
+
+  // Sculpted FaceGen, TRI files fit: edits as differences, never a regeneration.
+  auto sculpt = recipe;
+  sculpt.values.sliders[0] = 0.9f;
+  const auto sculpted = build_facegen(sculpt, cache).nif;
+  const auto limited = diagnose_face_compatibility(recipe, cache, &sculpted, regenerated);
+  CHECK(limited.kind == FaceCompatibility::CustomLimited);
+  CHECK(limited.regeneration_deviation > 0.0f);
+  CHECK(allowed(limited, "hair-color"));
+  CHECK(allowed(limited, "face-morphs"));
+  CHECK(blocked(limited, "regenerate"));
+
+  // A replacer head whose TRI files do not fit its mesh (the Serana case: 3832-vertex head, 996-vertex TRIs).
+  auto broken = synthetic_assets();
+  for (const char* tri : {"femaleheadraces.tri", "femaleheadchargen.tri"}) {
+    broken.put(std::string("meshes\\actors\\character\\character assets\\") + tri,
+               tri_bytes({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}}, {{"NoseLong", {Vec{0, 0, 1}, Vec{}, Vec{}}}}));
+  }
+  FaceAssetCache broken_cache(broken.reader());
+  const auto failed_regeneration = build_facegen(recipe, broken_cache);
+  const auto incompatible = diagnose_face_compatibility(recipe, broken_cache, &sculpted, failed_regeneration);
+  CHECK(incompatible.kind == FaceCompatibility::CustomIncompatibleMorphs);
+  REQUIRE(incompatible.tri_mismatches.size() == 2);
+  CHECK(incompatible.tri_mismatches[0].part == "FemaleHeadNord");
+  CHECK(incompatible.tri_mismatches[0].tri_vertices == 3);
+  CHECK(incompatible.tri_mismatches[0].mesh_vertices == 4);
+  CHECK(allowed(incompatible, "hair-color"));
+  CHECK(blocked(incompatible, "face-morphs"));
+  CHECK(blocked(incompatible, "regenerate"));
+
+  // No FaceGen in the profile: nothing to recolor.
+  const auto missing = diagnose_face_compatibility(recipe, cache, nullptr, regenerated);
+  CHECK(missing.kind == FaceCompatibility::FaceGenMissing);
+  CHECK(blocked(missing, "hair-color"));
+  CHECK(allowed(missing, "regenerate"));
+
+  // Unreadable FaceGen.
+  const std::string garbage = "not a nif";
+  const auto unreadable = diagnose_face_compatibility(recipe, cache, &garbage, regenerated);
+  CHECK(unreadable.kind == FaceCompatibility::FaceGenInconsistent);
+  CHECK(blocked(unreadable, "hair-color"));
+
+  // Hair without HairTint: the color cannot reach it.
+  auto plain = synthetic_assets();
+  plain.put("meshes\\actors\\character\\character assets\\hair\\hair02.nif", quad_nif("Hair02", 0, "textures\\hair.dds"));
+  FaceAssetCache plain_cache(plain.reader());
+  const auto plain_facegen = build_facegen(recipe, plain_cache);
+  const auto untinted = diagnose_face_compatibility(recipe, plain_cache, &plain_facegen.nif, plain_facegen);
+  CHECK_FALSE(untinted.hair_tint);
+  CHECK(blocked(untinted, "hair-color"));
 }
 
 TEST_CASE("A head whose TRI files do not match blocks only edits that need those morphs", "[face]") {

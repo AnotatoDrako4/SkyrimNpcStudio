@@ -1,5 +1,23 @@
 # Estabilidad del Character Creator y diagnóstico de cierres
 
+## Actualización 2026-10-14 — Serana y geometría personalizada (no es un cierre)
+
+Defecto distinto de los cierres de este documento: cambiar solo el color de cabello de un NPC con
+cabeza personalizada (Serana con `Priscilla.Serana.Replacer.esp`) podía reconstruir su FaceGen. Con
+el replacer real se confirmó: (1) el modo de geometría era `"regenerate"` hasta que terminaba el
+análisis asíncrono del FaceGen, y un cambio hecho antes —o restaurado por deshacer/rehacer o al
+reabrir un proyecto— regeneraba la cabeza sin esculpido (hasta 2,8 u en la vista previa); (2) el
+primer cambio pasaba por `build_facegen()` y, aunque conservaba posiciones, recreaba el NIF y
+cambiaba la textura FaceTint de la cabeza del replacer. Corrección: modo `pending` sin ediciones
+hasta el análisis, Hair Color Safe Mode (parche de 12 bytes por shape HairTint sobre el FaceGen
+ganador, sin *fallback*), guard `FACEGEN_GEOMETRY_CHANGED` y exportación `onlyFields = [HCLF]`.
+La deformación vista en el juego no se reprodujo con estos datos y queda pendiente de verificar en
+Skyrim. Detalle, pruebas y recuperación en
+[HIGH_POLY_HEAD_COMPATIBILITY.md](HIGH_POLY_HEAD_COMPATIBILITY.md).
+
+Nota de pruebas: `sns_integration_tests` necesita el entorno de `scripts/dev-env.ps1`; sin él el
+worker (framework .NET 10) no arranca con el .NET 8 del sistema y la prueba espera sin progreso.
+
 Este documento recoge la investigación del cierre reportado al cambiar el color de cabello de
 Lydia (`0A2C8E:Skyrim.esm`), lo que se corrigió, cómo se diagnostica un cierre a partir de ahora y
 cómo se ejecutan las pruebas de regresión.

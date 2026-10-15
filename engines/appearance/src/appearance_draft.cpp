@@ -114,6 +114,24 @@ FaceState face_state_from_recipe(const face::FaceRecipe& recipe) {
   return state;
 }
 
+bool same_face_record(const FaceState& a, const FaceState& b) {
+  return a.values == b.values && a.head_parts == b.head_parts && a.head_texture == b.head_texture;
+}
+
+bool only_hair_color_differs(const FaceState& baseline, const FaceState& state) {
+  if (baseline.values.hair_color == state.values.hair_color || baseline.geometry_mode != state.geometry_mode) return false;
+  auto recolored = baseline;
+  recolored.values.hair_color = state.values.hair_color;
+  return same_face_record(recolored, state);
+}
+
+FaceBuildKind face_build_kind(const FaceState& baseline, const FaceState& state) {
+  if (baseline.geometry_mode == kGeometryPending || state.geometry_mode == kGeometryPending) return FaceBuildKind::WaitForAnalysis;
+  if (same_face_record(baseline, state) && baseline.geometry_mode == state.geometry_mode) return FaceBuildKind::Unchanged;
+  if (only_hair_color_differs(baseline, state)) return FaceBuildKind::HairColorSafe;
+  return FaceBuildKind::Full;
+}
+
 projects::FaceConfig to_face_config(const FaceState& state, const face::FaceRecipe& recipe) {
   projects::FaceConfig c;
   c.complete = true;

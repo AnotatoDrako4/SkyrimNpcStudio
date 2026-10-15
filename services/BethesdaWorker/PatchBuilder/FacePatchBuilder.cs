@@ -136,8 +136,16 @@ internal static partial class FacePatchBuilder
 
             if (item.Face is { } face)
             {
-                var hair = ApplyFace(session, queries, face, winner, npc, patch, usedEditorIds, records, issues);
+                var hair = face.OnlyFields is { } only
+                    ? ApplyOnlyFields(session, face, only, winner, npc, patch, usedEditorIds, records, issues)
+                    : ApplyFace(session, queries, face, winner, npc, patch, usedEditorIds, records, issues);
                 var changed = ChangedFields(winner, npc);
+                if (face.OnlyFields is { } allowed && changed.Except(allowed, StringComparer.Ordinal).ToList() is { Count: > 0 } extra)
+                {
+                    issues.Add(Issue.Error("MinimalChangeViolated",
+                        $"The export may only change {string.Join(", ", allowed)} but {string.Join(", ", extra)} also differ from the winning record.",
+                        npcKey.ToString()));
+                }
                 StageGeneratedAssets(npcKey, face, changed, stagedModDir, generated, issues);
                 expectations.Add((npcKey, face, hair));
                 faces.Add(new BuiltFace(npcKey.ToString(), winner.EditorID, face.FaceGen ?? new FaceGenProvenance(), changed));
@@ -182,6 +190,47 @@ internal static partial class FacePatchBuilder
         }
 
         return new BuiltPatch(stagedPluginPath, masters, esl, records, built, issues, generated, faces);
+    }
+
+    /// <summary>
+    /// Minimal change: the override keeps the winning record as copied and only the listed fields are
+    /// written (HCLF from Values.HairColor, NAM6 from Height). Returns the HCLF it points to.
+    /// </summary>
+    private static FormKey? ApplyOnlyFields(
+        LoadOrderSession session, FaceAssignment face, IReadOnlyList<string> only, INpcGetter winner, Npc npc,
+        SkyrimMod patch, HashSet<string> usedEditorIds, List<ExportedRecord> records, List<Issue> issues)
+    {
+        var subject = winner.FormKey.ToString();
+        var unknown = only.Where(f => f is not ("HCLF" or "NAM6")).ToList();
+        if (unknown.Count > 0)
+        {
+            issues.Add(Issue.Error("OnlyFieldsUnsupported", $"Minimal export cannot write {string.Join(", ", unknown)}.", subject));
+        }
+
+        if (only.Contains("NAM6"))
+        {
+            if (face.Height is { } height)
+            {
+                npc.Height = Math.Clamp(height, 0.5f, 2.0f);
+            }
+            else
+            {
+                issues.Add(Issue.Error("FaceValuesInvalid", "NAM6 was requested without a height.", subject));
+            }
+        }
+
+        if (!only.Contains("HCLF"))
+        {
+            return npc.HairColor.FormKeyNullable;
+        }
+
+        if (face.Values is null)
+        {
+            issues.Add(Issue.Error("FaceValuesInvalid", "HCLF was requested without face values.", subject));
+            return npc.HairColor.FormKeyNullable;
+        }
+
+        return SetHairColor(session, face.Values.HairColor, winner, npc, patch, usedEditorIds, records);
     }
 
     /// <summary>Writes the complete face values into the override. Returns the HCLF it points to.</summary>
@@ -286,43 +335,45 @@ internal static partial class FacePatchBuilder
             npc.Height = Math.Clamp(height, 0.5f, 2.0f);
         }
 
-        // Hair color: keep the record's CLFM when the color is unchanged, reuse an existing CLFM
-        // with exactly that color, otherwise add a new color record to the patch.
+        return face.Values is { } values
+            ? SetHairColor(session, values.HairColor, winner, npc, patch, usedEditorIds, records)
+            : npc.HairColor.FormKeyNullable;
+    }
+
+    /// <summary>
+    /// HCLF: keep the record's CLFM when the color is unchanged, reuse an existing CLFM with exactly
+    /// that color, otherwise add a new color record to the patch. Null clears it.
+    /// </summary>
+    private static FormKey? SetHairColor(
+        LoadOrderSession session, AppearanceColor? wanted, INpcGetter winner, Npc npc, SkyrimMod patch,
+        HashSet<string> usedEditorIds, List<ExportedRecord> records)
+    {
         FormKey? hair = npc.HairColor.FormKeyNullable;
-        if (face.Values is { } values)
+        if (wanted is null)
         {
-            if (values.HairColor is null)
-            {
-                npc.HairColor.Clear();
-                hair = null;
-            }
-            else
-            {
-                var wanted = values.HairColor;
-                bool Same(IColorRecordGetter c) => c.Color.R == wanted.R && c.Color.G == wanted.G && c.Color.B == wanted.B;
-                if (hair is { } current && session.LinkCache.TryResolve<IColorRecordGetter>(current, out var currentColor) && Same(currentColor))
-                {
-                    // unchanged
-                }
-                else if (session.LinkCache.PriorityOrder.WinningOverrides<IColorRecordGetter>().FirstOrDefault(Same) is { } existing)
-                {
-                    npc.HairColor.SetTo(existing.FormKey);
-                    hair = existing.FormKey;
-                }
-                else
-                {
-                    var editorId = UniqueEditorId($"SNS_HairColor_{winner.EditorID ?? winner.FormKey.ID.ToString("X6")}", usedEditorIds);
-                    var color = patch.Colors.AddNew(editorId);
-                    color.Color = System.Drawing.Color.FromArgb(255, wanted.R, wanted.G, wanted.B);
-                    color.Playable = true;
-                    npc.HairColor.SetTo(color.FormKey);
-                    hair = color.FormKey;
-                    records.Add(new ExportedRecord { FormKey = color.FormKey.ToString(), RecordType = "CLFM", EditorId = editorId, Kind = "new" });
-                }
-            }
+            npc.HairColor.Clear();
+            return null;
         }
 
-        return hair;
+        bool Same(IColorRecordGetter c) => c.Color.R == wanted.R && c.Color.G == wanted.G && c.Color.B == wanted.B;
+        if (hair is { } current && session.LinkCache.TryResolve<IColorRecordGetter>(current, out var currentColor) && Same(currentColor))
+        {
+            return hair;
+        }
+
+        if (session.LinkCache.PriorityOrder.WinningOverrides<IColorRecordGetter>().FirstOrDefault(Same) is { } existing)
+        {
+            npc.HairColor.SetTo(existing.FormKey);
+            return existing.FormKey;
+        }
+
+        var editorId = UniqueEditorId($"SNS_HairColor_{winner.EditorID ?? winner.FormKey.ID.ToString("X6")}", usedEditorIds);
+        var color = patch.Colors.AddNew(editorId);
+        color.Color = System.Drawing.Color.FromArgb(255, wanted.R, wanted.G, wanted.B);
+        color.Playable = true;
+        npc.HairColor.SetTo(color.FormKey);
+        records.Add(new ExportedRecord { FormKey = color.FormKey.ToString(), RecordType = "CLFM", EditorId = editorId, Kind = "new" });
+        return color.FormKey;
     }
 
     /// <summary>Face fields of the override that differ from the winning record.</summary>
@@ -443,6 +494,29 @@ internal static partial class FacePatchBuilder
             if (!npcs.TryGetValue(key, out var npc))
             {
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: {key} missing from the plugin.");
+            }
+
+            if (face.OnlyFields is { } only)
+            {
+                // Minimal change, re-read from the file: the face is the winner's except the allowed fields.
+                if (!session.LinkCache.TryResolve<INpcGetter>(key, out var original))
+                {
+                    throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: winning record of {key} not found.");
+                }
+
+                var extra = ChangedFields(original, npc).Except(only, StringComparer.Ordinal).ToList();
+                if (extra.Count > 0)
+                {
+                    throw new WorkerException(ErrorCodes.ValidationFailed,
+                        $"Verification failed: {key} changes {string.Join(", ", extra)} beyond {string.Join(", ", only)} after writing.");
+                }
+
+                if (npc.HairColor.FormKeyNullable != hair)
+                {
+                    throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: hair color of {key} differs after writing.");
+                }
+
+                continue;
             }
 
             if (face.Values is { } v)

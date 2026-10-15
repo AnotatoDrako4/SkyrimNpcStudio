@@ -78,6 +78,11 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QVariantMap faceGen READ facegen_report NOTIFY faceGenChanged)
   Q_PROPERTY(QVariantList issues READ issues NOTIFY faceGenChanged)
   Q_PROPERTY(bool building READ building NOTIFY faceGenChanged)
+  // The profile's FaceGen is still being analysed: no edit is accepted and nothing is built yet.
+  Q_PROPERTY(bool analysing READ analysing NOTIFY faceGenChanged)
+  // Facial compatibility diagnosis (sns::face::diagnose_face_compatibility) with MO2 provenance:
+  // code, label, allowed [{op, label}], blocked [{op, label, reason}], triMismatches, evidence, provenance.
+  Q_PROPERTY(QVariantMap faceCompatibility READ face_compatibility NOTIFY faceGenChanged)
   Q_PROPERTY(bool exportable READ exportable NOTIFY faceGenChanged)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY appearanceChanged)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY appearanceChanged)
@@ -129,7 +134,13 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantMap facegen_report() const { return facegen_report_; }
   [[nodiscard]] QVariantList issues() const;
   [[nodiscard]] bool building() const { return building_; }
+  [[nodiscard]] bool analysing() const {
+    return draft_.face_loaded() && draft_.face_baseline().geometry_mode == appearance::kGeometryPending;
+  }
   [[nodiscard]] bool exportable() const;
+  [[nodiscard]] QVariantMap face_compatibility() const { return compatibility_; }
+  // An operation ("hair-color", "face-morphs", ...) the diagnosis blocks; false while unknown.
+  [[nodiscard]] bool operation_blocked(const QString& op) const;
   [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
   [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
   [[nodiscard]] QString undo_text() const { return history_->undo_text(); }
@@ -140,6 +151,8 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] bool exporting() const { return exporting_; }
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
   [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
+  // The FaceGen the profile loads for the NPC (MO2 winner), as read for the analysis; null if none.
+  [[nodiscard]] std::shared_ptr<const std::string> winning_facegen() const { return existing_facegen_; }
 
   Q_INVOKABLE void setSlider(const QString& key, float value);
   Q_INVOKABLE void setFacePreset(int slot, int value);
@@ -180,6 +193,8 @@ class AppearanceEditor : public QObject {
     std::shared_ptr<std::atomic<bool>> cancel;
   };
   void edit(appearance::FaceState next, const QString& description, const QString& merge_key = {});
+  // True (and the reason written to the console) when the compatibility diagnosis blocks `op`.
+  bool refuse_blocked(const QString& op);
   void request_recipe(bool initial);
   void on_recipe(const Json& json, bool initial, int serial);
   void analyse_existing_facegen();
@@ -214,6 +229,7 @@ class AppearanceEditor : public QObject {
   std::shared_ptr<const std::string> existing_facegen_;
   QString geometry_reason_;
   QVariantList existing_issues_;
+  QVariantMap compatibility_;
   bool has_existing_tint_ = false;
 
   // Latest regenerated FaceGen (preview == export bytes).

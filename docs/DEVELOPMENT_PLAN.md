@@ -1,6 +1,22 @@
 # Plan de desarrollo
 
-Estado a 2026-10-13 (Character Forge actualizado; resto del plan a 2026-10-12). Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
+Estado a 2026-10-14. Una fase solo se marca completa con implementación, compilación sin errores, pruebas, manejo de errores, documentación y limitaciones conocidas.
+
+## Protección facial (Serana / High Poly Head) — P0–P4
+
+Rama `fix/serana-hair-color-safe-mode`. Estados: PENDIENTE, EN DESARROLLO, IMPLEMENTADO SIN
+VERIFICACIÓN, VERIFICADO EN CLOUD, VERIFICADO EN WINDOWS, VERIFICADO EN SKYRIM, BLOQUEADO.
+
+| Etapa | Estado | Evidencia |
+|---|---|---|
+| P0 Diagnóstico con el replacer real | VERIFICADO EN WINDOWS | `[serana]` local: análisis, ruta antigua (`PreserveExisting` y `Regenerate`) frente al FaceGen ganador; causas confirmadas y pendientes en [HIGH_POLY_HEAD_COMPATIBILITY.md](HIGH_POLY_HEAD_COMPATIBILITY.md) |
+| P1 Hair Color Safe Mode (parche byte a byte del FaceGen ganador, sin fallback) | VERIFICADO EN WINDOWS | unitarias `[face]`; app real sobre Serana (`-StressAppearance hair-safe`) |
+| P2 FaceGen Geometry Integrity Guard (pieza, propiedad, antes, después) | VERIFICADO EN WINDOWS | unitarias: posiciones, textura, índices, UV, shape eliminada, archivo ilegible |
+| P3 Exportación mínima (`OnlyFields`, releída con Mutagen) | VERIFICADO EN WINDOWS | .NET `FacePatchExportTests`; manifiesto de la exportación real de Serana: `changedFields = [HCLF]` |
+| Diagnóstico de compatibilidad facial y tarjeta «Protección facial» | IMPLEMENTADO SIN VERIFICACIÓN visual por una persona | unitarias `[face][compat]`; ejecución en la app con Serana |
+| P4 Regresiones (Lydia, suites completas, `local-review`) | EN DESARROLLO | ver registro de la entrega |
+| Comportamiento dentro de Skyrim | PENDIENTE | prueba manual |
+| P5–P6 Creador de mods — Modo fácil | PENDIENTE | diseño en [EASY_MOD_CREATOR.md](EASY_MOD_CREATOR.md) |
 
 ## Fase 0 — Preparación ✅
 

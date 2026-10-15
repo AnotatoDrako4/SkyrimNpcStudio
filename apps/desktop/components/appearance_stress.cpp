@@ -5,6 +5,10 @@
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 #include <QMouseEvent>
 #include <QQuickItem>
@@ -58,7 +62,33 @@ struct Stress : std::enable_shared_from_this<Stress> {
     }
   }
   bool busy() const {
-    return appearance()->building() || appearance()->loading() || scene()->loading() || studio->npc_loading();
+    return appearance()->building() || appearance()->loading() || appearance()->analysing() || scene()->loading() ||
+           studio->npc_loading();
+  }
+  // Hair Color Safe Mode: the previewed FaceGen is the profile's winning FaceGen with only the
+  // HairTint colors rewritten (byte for byte), and the report says so.
+  void check_hair_safe(const QColor& expected) {
+    const auto report = appearance()->facegen_report();
+    check(report.value("kind").toString() == "hair-safe", "build kind " + report.value("kind").toString() + " (expected hair-safe)");
+    check(report.value("integrity").toString() == "hair-tint-only",
+          "integrity '" + report.value("integrity").toString() + "', recolored: " + report.value("recoloredShapes").toStringList().join(", "));
+    const auto original = appearance()->winning_facegen();
+    const auto preview = appearance()->preview();
+    const auto* recipe = appearance()->recipe();
+    if (!original || !preview.overlay || !recipe) {
+      check(false, "winning FaceGen and previewed FaceGen available");
+      return;
+    }
+    const auto it = preview.overlay->find(text::data_path_key(recipe->facegen_mesh_path));
+    if (it == preview.overlay->end() || !it->second) {
+      check(false, "previewed FaceGen in the overlay");
+      return;
+    }
+    const auto integrity = face::verify_hair_tint_integrity(*original, *it->second);
+    check(integrity.byte_identical_outside_hair_tint && integrity.unchanged_except_hair_tint,
+          QStringLiteral("preview == winning FaceGen except HairTint (%1 bytes): %2").arg(original->size()).arg(qs(integrity.summary())));
+    check_hair_view(expected);
+    check_exportable();
   }
 
   void watch() {
@@ -518,19 +548,71 @@ struct Stress : std::enable_shared_from_this<Stress> {
       });
       steps.push_back([self] { self->check_hair(QColor("#16A085")); self->step(); });
     } else if (name == "replacer-facegen") {
-      // Lydia's FaceGen comes from a replacer: edits must keep it (preserve) and stay exportable.
+      // A replacer's FaceGen: a hair color edit keeps it as it is (Hair Color Safe Mode) and stays exportable.
       steps.push_back([self, hair] { hair(QColor("#7B241C")); self->then_idle(); });
       steps.push_back([self] {
-        const auto mode = self->appearance()->geometry_mode();
-        self->log("geometry mode " + mode + ": " + self->appearance()->geometry_mode_reason());
-        const auto parts = self->appearance()->facegen_report().value("parts").toList();
-        int preserved = 0;
-        for (const auto& p : parts) preserved += p.toMap().value("source").toString() == "preserved" ? 1 : 0;
-        if (mode == "preserve") {
-          self->check(preserved > 0, QStringLiteral("%1 head part(s) kept from the replacer FaceGen").arg(preserved));
-        }
-        self->check_hair(QColor("#7B241C"));
+        self->log("geometry mode " + self->appearance()->geometry_mode() + ": " + self->appearance()->geometry_mode_reason());
+        self->check_hair_safe(QColor("#7B241C"));
         self->step();
+      });
+    } else if (name == "hair-safe") {
+      // Hair Color Safe Mode on the NPC's real winning FaceGen: first edit, twenty colors, undo/redo,
+      // export, and the exported NIF and plugin read back.
+      steps.push_back([self, hair] { hair(QColor("#A53A1E")); self->then_idle(); });
+      steps.push_back([self] { self->check_hair_safe(QColor("#A53A1E")); self->step(); });
+      for (int i = 0; i < 20; ++i) {
+        // 8-bit RGB like the editor's color: QColor::operator== compares spec and 16-bit components.
+        const auto hsv = QColor::fromHsv((i * 37) % 360, 160 + (i * 5) % 90, 60 + (i * 9) % 180);
+        const QColor c(hsv.red(), hsv.green(), hsv.blue());
+        steps.push_back([self, hair, c] { hair(c); self->then_idle(); });
+        steps.push_back([self, c] { self->check_hair_safe(c); self->step(); });
+      }
+      steps.push_back([self] {
+        self->appearance()->undo();
+        self->appearance()->redo();
+        self->then_idle();
+      });
+      steps.push_back([self] { self->check_hair_safe(self->appearance()->hair_color()); self->step(); });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("hair-safe-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        self->log("exportFaceOverhaul to " + dir);
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_HairSafe.esp"), dir, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "export: " + r.value("message").toString());
+          const auto mod_dir = r.value("modDirectory").toString();
+          const auto* recipe = self->appearance()->recipe();
+          const auto original = self->appearance()->winning_facegen();
+          if (!recipe || !original || mod_dir.isEmpty()) {
+            self->check(false, "exported mod directory and original FaceGen available");
+            self->step();
+            return;
+          }
+          QFile nif(QDir(mod_dir).filePath(qs(text::data_path_key(recipe->facegen_mesh_path)).replace('\\', '/')));
+          const bool opened = nif.open(QIODevice::ReadOnly);
+          self->check(opened, "exported FaceGen present: " + nif.fileName());
+          if (opened) {
+            const auto bytes = nif.readAll().toStdString();
+            const auto integrity = face::verify_hair_tint_integrity(*original, bytes);
+            self->check(integrity.byte_identical_outside_hair_tint && integrity.unchanged_except_hair_tint,
+                        "exported FaceGen == winning FaceGen except HairTint: " + qs(integrity.summary()));
+          }
+          QFile tint(QDir(mod_dir).filePath(qs(text::data_path_key(recipe->facegen_tint_path)).replace('\\', '/')));
+          self->check(!tint.exists(), "no FaceTint exported for a hair color edit");
+          QFile manifest(QDir(mod_dir).filePath("manifest.json"));
+          QStringList changed;
+          if (manifest.open(QIODevice::ReadOnly)) {
+            const auto faces = QJsonDocument::fromJson(manifest.readAll()).object().value("faces").toArray();
+            for (const auto& f : faces) {
+              for (const auto& field : f.toObject().value("changedFields").toArray()) changed << field.toString();
+            }
+          }
+          self->check(changed == QStringList{"HCLF"}, "record fields changed by the plugin: " + changed.join(", ") + " (expected HCLF)");
+          self->step();
+        };
+        self->after(100, *wait);
       });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
@@ -600,7 +682,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

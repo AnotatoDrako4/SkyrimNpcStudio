@@ -99,16 +99,41 @@ struct FaceGenBuild {
 
 FaceGenBuild build_facegen(const FaceRecipe& recipe, FaceAssetCache& assets, const FaceGenBuildOptions& options = {});
 
-// Hair color only: the same FaceGen with the HairTint shader color of every HairTint shape set as
-// build_facegen sets it (twice the CLFM color; black without one). Geometry, textures and every
-// other block are kept, so a color change needs no regeneration. Hair, eyebrow and beard parts
-// whose shader is not HairTint are reported (HairTintUnsupported): the color does not reach them.
+// Hair Color Safe Mode: a byte copy of `facegen_nif` in which only the HairTint color of each
+// HairTint shader is rewritten, as build_facegen sets it (twice the CLFM color; black without one).
+// The file is not re-serialized: geometry, indices, UV, normals, skinning, partitions, textures,
+// head parts and every other block keep their original bytes, which verify_hair_tint_integrity
+// then confirms. Errors (nif empty): FaceGenUnreadable, HAIR_TINT_LAYOUT_UNVERIFIED (the color is
+// not where the SSE layout puts it), HAIR_TINT_NOT_APPLIED (no HairTint shape: a CLFM color cannot
+// change this FaceGen), FACEGEN_GEOMETRY_CHANGED. Hair, eyebrow and beard parts whose shader is
+// not HairTint are reported (HairTintUnsupported warning): the color does not reach them.
 struct HairTintPatch {
-  std::string nif;                   // "" when the input could not be read or written
+  std::string nif;                   // "" when nothing could be applied (see issues)
   std::vector<std::string> patched;  // shapes whose tint was set
   std::vector<FaceIssue> issues;
 };
 HairTintPatch patch_hair_tint(std::string_view facegen_nif, const FaceRecipe& recipe);
+
+// FaceGen Geometry Integrity Guard: `candidate` may differ from `original` only in HairTint colors.
+// Checked three ways: bytes (equal size, every differing byte inside an original HairTint color),
+// semantics per shape matched by name (vertex and triangle counts, positions, indices, normals, UV,
+// tangents, vertex colors, transforms, skin bones and weights, skin transforms, partitions, shader
+// type, texture slots, alpha) and node transforms, and, when the bytes differ elsewhere without a
+// listed difference, a canonical re-serialization of both files with the tints equalized.
+struct FaceGenDifference {
+  std::string shape;     // "" for the whole file
+  std::string property;  // "positions", "indices", "uv", "skin bones", "texture slot 0"...
+  std::string before;
+  std::string after;
+};
+struct FaceGenIntegrity {
+  bool readable = false;
+  bool unchanged_except_hair_tint = false;
+  bool byte_identical_outside_hair_tint = false;
+  std::vector<FaceGenDifference> differences;
+  [[nodiscard]] std::string summary() const;  // first difference, for messages
+};
+FaceGenIntegrity verify_hair_tint_integrity(std::string_view original, std::string_view candidate);
 
 // Shape-by-shape comparison of two FaceGen NIFs (vertex positions, shape space).
 struct ShapeDifference {
@@ -139,6 +164,40 @@ FaceGenInfo inspect_facegen(std::string_view nif_bytes);
 
 // Dark-face and mismatch checks between a FaceGen file and the record it must match.
 std::vector<FaceIssue> audit_facegen(const FaceGenInfo& facegen, const FaceRecipe& recipe);
+
+// How far an NPC's face can be edited without damaging what the profile loads, decided from
+// evidence only: the winning FaceGen, the head parts' meshes and TRI files (vertex counts) and a
+// regeneration from the record. A custom or high-resolution head is never recognised by a name.
+enum class FaceCompatibility {
+  VanillaCompatible,         // the winning FaceGen is what the record produces
+  CustomLimited,             // custom geometry or sculpt; its TRI files fit the meshes
+  CustomIncompatibleMorphs,  // custom geometry whose TRI files do not fit its meshes
+  FaceGenMissing,
+  FaceGenInconsistent,       // unreadable, or not made from the record's head parts
+  MissingDependencies,       // head part meshes or TRI files missing or unreadable
+  Undetermined,
+};
+struct TriMismatch {
+  std::string part;
+  std::string tri;
+  std::size_t tri_vertices = 0;
+  std::size_t mesh_vertices = 0;
+};
+// Operations: "hair-color" (Hair Color Safe Mode), "outfit", "face-morphs" (sliders and presets),
+// "head-parts", "regenerate" (rebuild the head from the record).
+struct FaceCompatibilityReport {
+  FaceCompatibility kind = FaceCompatibility::Undetermined;
+  std::string code;                   // "vanilla-compatible", "custom-limited", ...
+  std::vector<std::string> evidence;  // what was compared and found (technical, English)
+  std::vector<TriMismatch> tri_mismatches;
+  std::vector<std::string> missing;   // head part meshes / TRI files that could not be used
+  std::vector<std::string> allowed;
+  std::vector<std::pair<std::string, std::string>> blocked;  // operation, reason
+  float regeneration_deviation = -1.0f;  // max distance regeneration vs winning FaceGen (-1: not compared)
+  bool hair_tint = false;                // the winning FaceGen has HairTint shapes
+};
+FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, FaceAssetCache& assets,
+                                                    const std::string* winning_facegen, const FaceGenBuild& regenerated);
 
 // RaceMenu "facegenmorphs": meshes\actors\character\facegenmorphs\<plugin>\morphs.ini lines
 //   extension = <host chargen TRI>, <extension TRI relative to ...\facegenmorphs\morphs\>

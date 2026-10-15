@@ -108,6 +108,71 @@ TEST_CASE("Face and outfit edits share one undo history; a slider drag is one st
   CHECK_FALSE(stack.is_clean());
 }
 
+TEST_CASE("Only a hair color change takes Hair Color Safe Mode, from the first edit and through undo/redo", "[appearance][facegen]") {
+  const auto recipe = lydia_recipe();
+  AppearanceDraft draft;
+  auto baseline = face_state_from_recipe(recipe);
+  baseline.geometry_mode = kGeometryPending;  // AppearanceEditor, until the FaceGen is analysed
+  draft.set_face_baseline(baseline);
+  auto recolor = [](FaceState s, face::Rgb8 c) {
+    s.values.hair_color = c;
+    return s;
+  };
+
+  // Analysis not finished: nothing may be built, whatever the state.
+  CHECK(face_build_kind(draft.face_baseline(), recolor(draft.face(), {200, 10, 10})) == FaceBuildKind::WaitForAnalysis);
+
+  // The analysis found a custom FaceGen: baseline and draft both follow it.
+  draft.set_baseline_geometry_mode("preserve");
+  CHECK(draft.face().geometry_mode == "preserve");
+  CHECK(face_build_kind(draft.face_baseline(), draft.face()) == FaceBuildKind::Unchanged);
+
+  // First edit: hair color only.
+  CommandStack stack;
+  stack.push(make_set_face(draft, recolor(draft.face(), {200, 10, 10}), "Color", "hair-color"));
+  CHECK(face_build_kind(draft.face_baseline(), draft.face()) == FaceBuildKind::HairColorSafe);
+
+  // Twenty colors in a row stay in the safe path.
+  for (int i = 0; i < 20; ++i) {
+    stack.push(make_set_face(draft, recolor(draft.face(), {static_cast<std::uint8_t>(i * 12), 40, 90}), "Color", "hair-color"));
+    INFO("color " << i);
+    CHECK(face_build_kind(draft.face_baseline(), draft.face()) == FaceBuildKind::HairColorSafe);
+  }
+
+  // Undo returns to the record; redo comes back to a hair-only state.
+  REQUIRE(stack.undo());
+  CHECK(face_build_kind(draft.face_baseline(), draft.face()) == FaceBuildKind::Unchanged);
+  REQUIRE(stack.redo());
+  CHECK(face_build_kind(draft.face_baseline(), draft.face()) == FaceBuildKind::HairColorSafe);
+
+  // Provenance is not record data.
+  auto labelled = draft.face();
+  labelled.source = "RaceMenu: Carrot.jslot";
+  CHECK(face_build_kind(draft.face_baseline(), labelled) == FaceBuildKind::HairColorSafe);
+  auto only_label = draft.face_baseline();
+  only_label.source = "Donante: Lydia";
+  CHECK(face_build_kind(draft.face_baseline(), only_label) == FaceBuildKind::Unchanged);
+
+  // Anything else in the record, or another geometry mode, is a full build.
+  auto slider = draft.face();
+  slider.values.sliders[0] = 0.5f;
+  CHECK(face_build_kind(draft.face_baseline(), slider) == FaceBuildKind::Full);
+  auto parts = draft.face();
+  parts.head_parts[1] = "051176:Skyrim.esm";
+  CHECK(face_build_kind(draft.face_baseline(), parts) == FaceBuildKind::Full);
+  auto tint = draft.face();
+  tint.values.tints[0].value = 0.5f;
+  CHECK(face_build_kind(draft.face_baseline(), tint) == FaceBuildKind::Full);
+  auto regenerate = draft.face();
+  regenerate.geometry_mode = "regenerate";
+  CHECK(face_build_kind(draft.face_baseline(), regenerate) == FaceBuildKind::Full);
+
+  // Saved to a project and opened again: still a hair-only change of the record.
+  const auto config = to_face_config(draft.face(), recipe);
+  auto reopened = from_face_config(config, draft.face_baseline(), recipe);
+  CHECK(face_build_kind(draft.face_baseline(), reopened) == FaceBuildKind::HairColorSafe);
+}
+
 TEST_CASE("Format 3 projects store and restore the complete face", "[appearance][projects]") {
   const auto recipe = lydia_recipe();
   auto draft = loaded_draft(recipe);

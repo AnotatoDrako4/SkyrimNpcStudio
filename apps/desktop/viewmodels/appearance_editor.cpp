@@ -49,17 +49,75 @@ std::filesystem::path fs_path(const QString& p) { return std::filesystem::path(p
 
 QString sha256_hex(const QByteArray& bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()).toUpper(); }
 
-// The two states differ in nothing but the hair color (HCLF): a FaceGen for one becomes the
-// FaceGen for the other by rewriting the HairTint shader color.
-bool only_hair_color_differs(const appearance::FaceState& a, const appearance::FaceState& b) {
-  if (a.values.hair_color == b.values.hair_color) return false;
-  auto x = a;
-  x.values.hair_color = b.values.hair_color;
-  return x == b;
-}
-
 QString color_text(const std::optional<face::Rgb8>& c) {
   return c ? QColor(c->r, c->g, c->b).name() : QStringLiteral("(sin color)");
+}
+
+// ------------------------------------------------------------------------- face compatibility (UI)
+
+QString operation_label(const std::string& op) {
+  if (op == "hair-color") return QObject::tr("Color de cabello (Hair Color Safe Mode)");
+  if (op == "outfit") return QObject::tr("Vestuario");
+  if (op == "face-morphs") return QObject::tr("Sliders y presets del rostro");
+  if (op == "head-parts") return QObject::tr("Cambiar piezas de cabeza (Head Parts)");
+  if (op == "regenerate") return QObject::tr("Regenerar la cabeza desde el registro");
+  return qs(op);
+}
+
+QString compatibility_label(const std::string& code) {
+  if (code == "vanilla-compatible") return QObject::tr("Geometría compatible con el registro");
+  if (code == "custom-limited") return QObject::tr("Geometría personalizada: edición limitada");
+  if (code == "custom-incompatible-morphs") return QObject::tr("Geometría personalizada con morphs incompatibles");
+  if (code == "facegen-missing") return QObject::tr("FaceGen ausente");
+  if (code == "facegen-inconsistent") return QObject::tr("FaceGen inconsistente");
+  if (code == "missing-dependencies") return QObject::tr("Dependencias faltantes");
+  return QObject::tr("Estado indeterminado");
+}
+
+QString blocked_reason(const face::FaceCompatibilityReport& r, const std::string& op) {
+  using face::FaceCompatibility;
+  if (op == "hair-color") {
+    if (r.kind == FaceCompatibility::FaceGenMissing) return QObject::tr("No hay FaceGen del perfil que recolorear.");
+    if (!r.hair_tint && r.kind != FaceCompatibility::FaceGenInconsistent) {
+      return QObject::tr("Ninguna pieza del FaceGen usa el shader HairTint: un color CLFM no cambia este cabello. Hace falta "
+                         "editar su textura o material por separado (no se modifica el shader de terceros).");
+    }
+    return QObject::tr("El FaceGen ganador no se puede leer.");
+  }
+  if (op == "regenerate" && (r.kind == FaceCompatibility::CustomLimited || r.kind == FaceCompatibility::CustomIncompatibleMorphs)) {
+    return QObject::tr("Regenerar desde el registro perdería la geometría personalizada y el esculpido.");
+  }
+  switch (r.kind) {
+    case FaceCompatibility::CustomIncompatibleMorphs:
+      return op == "face-morphs" ? QObject::tr("Los TRI de la cabeza no coinciden con su malla: los sliders y presets no se pueden aplicar.")
+                                 : QObject::tr("Sin verificar en una cabeza cuyos morphs no coinciden con la malla.");
+    case FaceCompatibility::MissingDependencies:
+      return QObject::tr("Faltan mallas o TRI de los Head Parts en el perfil.");
+    case FaceCompatibility::FaceGenInconsistent:
+      return QObject::tr("El FaceGen ganador no se hizo con los Head Parts del registro (o no se puede leer).");
+    case FaceCompatibility::FaceGenMissing:
+      return QObject::tr("La cabeza no se puede construir con los Head Parts del registro.");
+    default:
+      return QObject::tr("No se pudo regenerar la cabeza para comprobarlo.");
+  }
+}
+
+QVariantMap compatibility_map(const face::FaceCompatibilityReport& r) {
+  QVariantList allowed, blocked, mismatches;
+  for (const auto& op : r.allowed) allowed << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}};
+  for (const auto& [op, english] : r.blocked) {
+    blocked << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}, {"reason", blocked_reason(r, op)}, {"detail", qs(english)}};
+  }
+  for (const auto& m : r.tri_mismatches) {
+    mismatches << QVariantMap{{"part", qs(m.part)}, {"tri", qs(m.tri)}, {"triVertices", static_cast<qulonglong>(m.tri_vertices)},
+                              {"meshVertices", static_cast<qulonglong>(m.mesh_vertices)}};
+  }
+  QStringList evidence, missing;
+  for (const auto& e : r.evidence) evidence << qs(e);
+  for (const auto& m : r.missing) missing << qs(m);
+  return {{"code", qs(r.code)},           {"label", compatibility_label(r.code)},  {"allowed", allowed},
+          {"blocked", blocked},           {"triMismatches", mismatches},          {"missing", missing},
+          {"evidence", evidence},         {"hairTint", r.hair_tint},              {"deviation", r.regeneration_deviation}};
 }
 
 }  // namespace
@@ -68,7 +126,7 @@ QString color_text(const std::optional<face::Rgb8>& c) {
 struct AppearanceEditor::Build {
   std::uint64_t task = 0;
   std::string npc;
-  std::string kind;  // "full" or "hair-patch"
+  std::string kind;  // "full" or "hair-safe" (Hair Color Safe Mode on the winning FaceGen)
   appearance::FaceState state;
   face::FaceGenBuild facegen;
   std::shared_ptr<const std::string> nif;
@@ -76,6 +134,7 @@ struct AppearanceEditor::Build {
   std::shared_ptr<const std::string> tint_preview_dds;     // uncompressed copy for the preview
   std::vector<std::string> tint_layers;
   std::vector<face::FaceIssue> tint_issues;
+  std::vector<std::string> recolored;  // hair-safe: shapes whose HairTint color was rewritten
   qint64 elapsed_ms = 0;
 };
 
@@ -143,6 +202,7 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   recipe_.reset();
   existing_facegen_.reset();
   has_existing_tint_ = false;
+  compatibility_.clear();
   geometry_reason_.clear();
   existing_issues_.clear();
   recipe_issues_.clear();
@@ -239,11 +299,28 @@ void AppearanceEditor::on_recipe(const Json& json, bool initial, int serial) {
   if (initial) {
     base_recipe_ = recipe;
     recipe_ = recipe;
-    draft_.set_face_baseline(appearance::face_state_from_recipe(recipe));
+    // The geometry mode stays "pending" until analyse_existing_facegen() has compared the profile's
+    // FaceGen with the record: no edit and no build may start with a provisional mode (a custom
+    // head built with "regenerate" loses its sculpt).
+    auto baseline = appearance::face_state_from_recipe(recipe);
+    baseline.geometry_mode = appearance::kGeometryPending;
+    draft_.set_face_baseline(baseline);
     draft_.set_height_baseline(recipe.height);
     if (const auto it = saved_faces_.find(target_.form_key); it != saved_faces_.end()) {
       std::vector<std::string> notes;
-      draft_.set_face(appearance::from_face_config(it->second, draft_.face_baseline(), recipe, &notes));
+      auto saved = appearance::from_face_config(it->second, draft_.face_baseline(), recipe, &notes);
+      // A saved mode may be a provisional one written before the analysis had finished (older
+      // versions): the analysis of the current profile decides again. "preserve" and
+      // "regenerate" only differ when the FaceGen does not come from the record, which is exactly
+      // when regenerating would lose a sculpt, so an explicit "regenerate" must be chosen again.
+      if (saved.geometry_mode == "regenerate") {
+        notes.push_back(tr("El proyecto pedía regenerar la cabeza de %1; el modo se decide de nuevo al analizar su "
+                           "FaceGen para no perder un esculpido. Elige «Regenerar» otra vez si era intencionado.")
+                            .arg(npc_label())
+                            .toStdString());
+      }
+      saved.geometry_mode = appearance::kGeometryPending;
+      draft_.set_face(std::move(saved));
       if (it->second.height > 0.0f && it->second.height < 10.0f) draft_.set_height(it->second.height);
       for (const auto& n : notes) console_->append("warning", "project", qs(n));
       console_->append("info", "project", tr("Rostro del proyecto aplicado a %1.").arg(npc_label()));
@@ -278,13 +355,14 @@ void AppearanceEditor::analyse_existing_facegen() {
   if (analysis_cancel_) analysis_cancel_->store(true);
   analysis_cancel_ = std::make_shared<std::atomic<bool>>(false);
   const auto task = diag::next_task_id();
-  pool_.start([self, ctx, recipe, recipe_serial, task, cancel = analysis_cancel_] {
+  pool_.start([self, ctx, recipe, recipe_serial, task, winning_plugin = target_.winning_plugin, cancel = analysis_cancel_] {
     struct Result {
       std::shared_ptr<const std::string> existing;
       bool tint = false;
       QString mode = QStringLiteral("regenerate");
       QString reason;
       QVariantList issues;
+      QVariantMap compatibility;
     };
     auto result = std::make_shared<Result>();
     diag::Operation op("facegen.analyse", task, "npc " + recipe.npc_form_key);
@@ -293,18 +371,46 @@ void AppearanceEditor::analyse_existing_facegen() {
       op.stage("read existing FaceGen");
       if (auto bytes = ctx->resolver->read(recipe.facegen_mesh_path)) result->existing = std::make_shared<const std::string>(std::move(*bytes));
       result->tint = ctx->resolver->locate(recipe.facegen_tint_path).has_value();
+      op.stage("regenerate for comparison");
+      face::FaceGenBuildOptions options;
+      options.cancelled = [cancel] { return cancel->load(); };
+      const auto regen = face::build_facegen(recipe, *ctx->face_assets, options);
+      if (regen.cancelled) return;
+      op.stage("compatibility");
+      const auto report = face::diagnose_face_compatibility(recipe, *ctx->face_assets, result->existing.get(), regen);
+      result->compatibility = compatibility_map(report);
+      // Where each piece comes from (MO2), and whether the record and its FaceGen come from the same mod.
+      QVariantMap provenance{{"winningPlugin", qs(winning_plugin)}};
+      for (const auto& p : ctx->snapshot->load_order.active) {
+        if (text::iequals_ascii(p.name, winning_plugin)) provenance["pluginProvider"] = qs(p.provider);
+      }
+      const auto where = [](const std::optional<assets::AssetLocation>& loc) {
+        if (!loc) return QVariantMap{};
+        return QVariantMap{{"provider", qs(loc->provider)},
+                           {"kind", loc->kind == assets::AssetLocation::Kind::Loose ? QStringLiteral("suelto") : QStringLiteral("BSA")},
+                           {"archiveProvider", qs(loc->archive_provider)}};
+      };
+      const auto mesh_at = where(ctx->resolver->locate(recipe.facegen_mesh_path));
+      provenance["faceGen"] = mesh_at;
+      provenance["faceTint"] = where(ctx->resolver->locate(recipe.facegen_tint_path));
+      provenance["faceGenPath"] = qs(recipe.facegen_mesh_path);
+      const auto facegen_mod = mesh_at.value("kind").toString() == "suelto" ? mesh_at.value("provider").toString()
+                                                                             : mesh_at.value("archiveProvider").toString();
+      const auto plugin_mod = provenance.value("pluginProvider").toString();
+      if (!facegen_mod.isEmpty() && !plugin_mod.isEmpty() && facegen_mod.compare(plugin_mod, Qt::CaseInsensitive) != 0) {
+        provenance["conflict"] = QObject::tr("El registro ganador (%1) viene de «%2» y su FaceGen de «%3»: posible incompatibilidad "
+                                             "entre replacers. No se cambia el orden de carga automáticamente.")
+                                     .arg(qs(winning_plugin), plugin_mod, facegen_mod);
+      }
+      result->compatibility["provenance"] = provenance;
       if (!result->existing) {
         result->reason = QObject::tr("El NPC no tiene FaceGen en el perfil: el juego construye la cabeza en tiempo real y suele "
                                      "mostrar la cara oscura. Exportar genera un FaceGen coherente con el registro.");
         result->issues << QVariantMap{{"severity", "warning"}, {"code", "NoFaceGen"}, {"message", result->reason},
                                       {"subject", qs(recipe.facegen_mesh_path)}};
       } else {
-        op.stage("audit + regenerate for comparison");
+        op.stage("audit");
         for (const auto& i : face::audit_facegen(face::inspect_facegen(*result->existing), recipe)) result->issues << issue_map(i);
-        face::FaceGenBuildOptions options;
-        options.cancelled = [cancel] { return cancel->load(); };
-        const auto regen = face::build_facegen(recipe, *ctx->face_assets, options);
-        if (regen.cancelled) return;
         const auto cmp = face::compare_facegen(regen.nif, *result->existing);
         if (regen.exportable() && cmp.same_topology && cmp.max_distance < 0.05f) {
           result->reason = QObject::tr("El FaceGen actual coincide con el que el registro produce (desviación máxima %1 unidades): "
@@ -322,6 +428,8 @@ void AppearanceEditor::analyse_existing_facegen() {
     } catch (const std::exception& e) {
       op.fail(e.what());
       result->issues << QVariantMap{{"severity", "warning"}, {"code", "FaceGenAnalysisFailed"}, {"message", qs(e.what())}};
+      // Not known to come from the record: never regenerate over it.
+      if (result->existing) result->mode = QStringLiteral("preserve");
     }
     op.succeed();
     QMetaObject::invokeMethod(self, [self, result, recipe_serial] {
@@ -330,6 +438,8 @@ void AppearanceEditor::analyse_existing_facegen() {
       self->has_existing_tint_ = result->tint;
       self->geometry_reason_ = result->reason;
       self->existing_issues_ = result->issues;
+      self->compatibility_ = result->compatibility;
+      diag::record("facegen", ("compatibility " + ss(result->compatibility.value("code").toString())).c_str());
       self->draft_.set_baseline_geometry_mode(ss(result->mode));
       emit self->appearanceChanged();
       emit self->faceGenChanged();
@@ -369,30 +479,32 @@ void AppearanceEditor::start_build() {
     return;
   }
   rebuild_pending_ = false;
-  if (!draft_.is_face_dirty()) {
+  const auto state = draft_.face();
+  const auto& baseline = draft_.face_baseline();
+  const auto decision = appearance::face_build_kind(baseline, state);
+  if (decision == appearance::FaceBuildKind::Unchanged || decision == appearance::FaceBuildKind::WaitForAnalysis) {
     build_.reset();
     if (overlay_) ++geometry_revision_;
     overlay_.reset();
     building_ = false;
-    facegen_report_ = {{"status", "unchanged"}, {"mode", geometry_mode()}};
+    facegen_report_ = {{"status", decision == appearance::FaceBuildKind::Unchanged ? "unchanged" : "analysing"}, {"mode", geometry_mode()}};
     emit faceGenChanged();
     return;
   }
   auto ctx = context();
   if (!ctx) return;
-  const auto state = draft_.face();
-  const auto& baseline = draft_.face_baseline();
   auto recipe = *recipe_;
   recipe.values = state.values;
   recipe.morph_extensions = morph_extensions(*ctx);
 
-  // Hair color only, compared with the FaceGen already built: rewrite its HairTint color instead
-  // of rebuilding every head part (tens of milliseconds instead of a full regeneration).
-  std::shared_ptr<const Build> base;
-  if (build_ && build_->nif && build_->npc == target_.form_key && only_hair_color_differs(build_->state, state)) base = build_;
+  // Hair Color Safe Mode: only HCLF differs from the record, so the FaceGen the profile really
+  // loads (MO2 winner, loose or BSA) is recolored in place - from the first edit on, whatever was
+  // built before, and never by rebuilding the head from its parts.
+  const bool hair_safe = decision == appearance::FaceBuildKind::HairColorSafe;
+  const auto hair_safe_base = hair_safe ? existing_facegen_ : nullptr;
 
   face::FaceGenBuildOptions options;
-  if (!base && state.geometry_mode == "preserve" && existing_facegen_) {
+  if (!hair_safe && state.geometry_mode == "preserve" && existing_facegen_) {
     options.mode = face::GeometryMode::PreserveExisting;
     options.existing_facegen = existing_facegen_;
     options.baseline = baseline.values;
@@ -403,13 +515,13 @@ void AppearanceEditor::start_build() {
   options.cancelled = [cancel = job.cancel] { return cancel->load(); };
   running_ = job;
   building_ = true;
-  const auto kind = base ? std::string("hair-patch") : std::string("full");
+  const auto kind = hair_safe ? std::string("hair-safe") : std::string("full");
   diag::record("facegen", QStringLiteral("start #%1 %2 npc=%3 mode=%4 hair=%5")
                               .arg(job.task).arg(qs(kind), qs(job.npc), qs(state.geometry_mode), color_text(state.values.hair_color))
                               .toStdString());
   emit faceGenChanged();
   QPointer<AppearanceEditor> self(this);
-  pool_.start([self, ctx, recipe, options, state, tint_changed, job, base, kind] {
+  pool_.start([self, ctx, recipe, options, state, tint_changed, job, hair_safe, hair_safe_base, kind] {
     auto b = std::make_shared<Build>();
     b->task = job.task;
     b->npc = job.npc;
@@ -421,21 +533,24 @@ void AppearanceEditor::start_build() {
     try {
       if (job.cancel->load()) {
         b->facegen.cancelled = true;
-      } else if (base) {
-        op.stage("nif: patch HairTint color");
-        auto patch = face::patch_hair_tint(*base->nif, recipe);
-        b->facegen.parts = base->facegen.parts;
-        for (const auto& i : base->facegen.issues) {
-          if (i.code != "HairTintUnsupported") b->facegen.issues.push_back(i);  // re-checked by the patch
+      } else if (hair_safe) {
+        if (!hair_safe_base) {
+          // No silent fallback to build_facegen(): rebuilding a head the profile does not have
+          // would replace it with geometry derived from the head parts.
+          b->facegen.issues.push_back(
+              {"error", "FACEGEN_ORIGINAL_REQUIRED",
+               QObject::tr("Hair Color Safe Mode necesita el FaceGen que el perfil carga para este NPC y no existe en "
+                           "el perfil: no se cambia el color ni se exporta. Comprueba que el mod del NPC incluya su FaceGen.")
+                   .toStdString(),
+               recipe.facegen_mesh_path});
+        } else {
+          op.stage("nif: Hair Color Safe Mode");
+          auto patch = face::patch_hair_tint(*hair_safe_base, recipe);
+          b->recolored = patch.patched;
+          b->facegen.issues = std::move(patch.issues);
+          b->facegen.nif = std::move(patch.nif);
+          if (!b->facegen.nif.empty()) b->nif = std::make_shared<const std::string>(b->facegen.nif);
         }
-        b->facegen.issues.insert(b->facegen.issues.end(), patch.issues.begin(), patch.issues.end());
-        b->facegen.nif = std::move(patch.nif);
-        if (!b->facegen.nif.empty()) b->nif = std::make_shared<const std::string>(b->facegen.nif);
-        // The FaceTint does not depend on the hair color: the base build's files are reused as is.
-        b->tint_rgba = base->tint_rgba;
-        b->tint_preview_dds = base->tint_preview_dds;
-        b->tint_layers = base->tint_layers;
-        b->tint_issues = base->tint_issues;
       } else {
         op.stage("nif: build_facegen");
         b->facegen = face::build_facegen(recipe, *ctx->face_assets, options);
@@ -471,7 +586,7 @@ void AppearanceEditor::finish_build(const std::shared_ptr<Build>& b) {
   const bool same_npc = b->npc == target_.form_key;
   const bool current = same_npc && recipe_ && !b->facegen.cancelled && draft_.face_loaded() && b->state == draft_.face();
   if (current) {
-    const bool geometry_changed = !build_ || b->kind != "hair-patch";
+    const bool geometry_changed = !build_ || b->kind != "hair-safe";
     build_ = b;
     auto overlay = std::make_shared<rendering::AssetOverlay>();
     if (b->nif) (*overlay)[text::data_path_key(recipe_->facegen_mesh_path)] = b->nif;
@@ -489,10 +604,16 @@ void AppearanceEditor::finish_build(const std::shared_ptr<Build>& b) {
     }
     QStringList layers;
     for (const auto& l : b->tint_layers) layers << qs(l);
+    QStringList recolored;
+    for (const auto& r : b->recolored) recolored << qs(r);
     facegen_report_ = {{"status", b->facegen.exportable() ? "built" : "failed"},
                        {"kind", qs(b->kind)},
                        {"mode", qs(b->state.geometry_mode)},
                        {"parts", parts},
+                       {"recoloredShapes", recolored},
+                       // Hair Color Safe Mode output passed the guard: same bytes as the winning
+                       // FaceGen except the HairTint colors.
+                       {"integrity", b->kind == "hair-safe" && b->facegen.exportable() ? "hair-tint-only" : ""},
                        {"elapsedMs", b->elapsed_ms},
                        {"nifBytes", b->nif ? static_cast<qlonglong>(b->nif->size()) : 0},
                        {"tintRegenerated", b->tint_rgba != nullptr},
@@ -647,10 +768,23 @@ QVariantList AppearanceEditor::issues() const {
   return out;
 }
 
+bool AppearanceEditor::operation_blocked(const QString& op) const {
+  for (const auto& b : compatibility_.value("blocked").toList()) {
+    if (b.toMap().value("op").toString() == op) return true;
+  }
+  return false;
+}
+
 bool AppearanceEditor::exportable() const {
   if (!draft_.face_loaded() || building_) return false;
-  if (!draft_.is_face_dirty()) return true;
-  return !running_ && build_ && build_->npc == target_.form_key && build_->state == draft_.face() && build_->facegen.exportable();
+  switch (appearance::face_build_kind(draft_.face_baseline(), draft_.face())) {
+    case appearance::FaceBuildKind::Unchanged:
+      return true;
+    case appearance::FaceBuildKind::WaitForAnalysis:
+      return false;
+    default:
+      return !running_ && build_ && build_->npc == target_.form_key && build_->state == draft_.face() && build_->facegen.exportable();
+  }
 }
 
 // ------------------------------------------------------------------------------------- edits
@@ -660,21 +794,38 @@ void AppearanceEditor::edit(appearance::FaceState next, const QString& descripti
     console_->append("warning", "appearance", tr("El rostro del NPC aún no se ha leído."));
     return;
   }
+  if (analysing()) {
+    // Until the profile's FaceGen is analysed the geometry mode is unknown; an edit made now would
+    // be recorded (and undone/redone) with a provisional mode.
+    console_->append("warning", "appearance", tr("Analizando el FaceGen original de %1; espera a que termine para editar.").arg(npc_label()));
+    return;
+  }
   if (next == draft_.face()) return;
   diag::record("appearance", QStringLiteral("edit '%1' npc=%2").arg(description, qs(target_.form_key)).toStdString());
   history_->push(appearance::make_set_face(draft_, std::move(next), ss(description), ss(merge_key)));
 }
 
+bool AppearanceEditor::refuse_blocked(const QString& op) {
+  for (const auto& b : compatibility_.value("blocked").toList()) {
+    const auto m = b.toMap();
+    if (m.value("op").toString() != op) continue;
+    console_->append("warning", "appearance",
+                     tr("%1 bloqueado para %2: %3").arg(m.value("label").toString(), npc_label(), m.value("reason").toString()));
+    return true;
+  }
+  return false;
+}
+
 void AppearanceEditor::setSlider(const QString& key, float value) {
   const auto* def = face::find_morph_def(ss(key));
-  if (!def) return;
+  if (!def || refuse_blocked(QStringLiteral("face-morphs"))) return;
   auto next = draft_.face();
   next.values.sliders[def->index] = def->clamp(value);
   edit(std::move(next), tr("Ajustar %1").arg(qs(def->display_name_es)), "slider:" + key);
 }
 
 void AppearanceEditor::setFacePreset(int slot, int value) {
-  if (slot < 0 || slot >= static_cast<int>(face::kPresetSlotCount)) return;
+  if (slot < 0 || slot >= static_cast<int>(face::kPresetSlotCount) || refuse_blocked(QStringLiteral("face-morphs"))) return;
   auto next = draft_.face();
   next.values.presets[static_cast<std::size_t>(slot)] = std::clamp(value, -1, 99);
   edit(std::move(next), tr("Cambiar %1").arg(qs(face::face_preset_slots()[static_cast<std::size_t>(slot)].display_name_es)),
@@ -682,6 +833,7 @@ void AppearanceEditor::setFacePreset(int slot, int value) {
 }
 
 void AppearanceEditor::setHairColor(const QColor& color) {
+  if (refuse_blocked(QStringLiteral("hair-color"))) return;
   auto next = draft_.face();
   if (color.isValid()) next.values.hair_color = rgb8(color);
   else next.values.hair_color.reset();
@@ -717,7 +869,7 @@ void AppearanceEditor::setHeight(float height) {
 }
 
 void AppearanceEditor::setHeadPart(const QString& formKey, const QString& type) {
-  if (formKey.isEmpty() || !recipe_) return;
+  if (formKey.isEmpty() || !recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
   const auto wanted = face::string_to_head_part_type(ss(type));
   auto next = draft_.face();
   std::erase_if(next.head_parts, [&](const std::string& fk) {
@@ -729,7 +881,7 @@ void AppearanceEditor::setHeadPart(const QString& formKey, const QString& type) 
 }
 
 void AppearanceEditor::removeHeadPart(const QString& type) {
-  if (!recipe_) return;
+  if (!recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
   const auto wanted = face::string_to_head_part_type(ss(type));
   auto next = draft_.face();
   std::erase_if(next.head_parts, [&](const std::string& fk) {
@@ -754,6 +906,7 @@ void AppearanceEditor::setTint(int index, const QColor& color, float value) {
 
 void AppearanceEditor::setGeometryMode(const QString& mode) {
   if (mode != "regenerate" && mode != "preserve") return;
+  if (mode == "regenerate" && refuse_blocked(QStringLiteral("regenerate"))) return;
   if (mode == "preserve" && !existing_facegen_) {
     console_->append("warning", "appearance", tr("No hay FaceGen existente que conservar: se regenera desde el registro."));
     return;
@@ -964,7 +1117,11 @@ void AppearanceEditor::finish_export(bool ok, const QString& message, const QStr
 
 void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name, const QString& output_dir, bool esl, bool zip) {
   if (exporting_ || target_.form_key.empty() || !worker_) return;
-  const bool face_edit = draft_.is_face_dirty();
+  const auto face_kind = draft_.face_loaded() ? appearance::face_build_kind(draft_.face_baseline(), draft_.face())
+                                              : appearance::FaceBuildKind::Unchanged;
+  const bool face_edit = face_kind != appearance::FaceBuildKind::Unchanged;
+  // Minimal change: a hair color edit exports HCLF and the recolored winning FaceGen, nothing else.
+  const bool hair_only = face_kind == appearance::FaceBuildKind::HairColorSafe;
   const bool body_edit = draft_.is_height_dirty();
   const bool outfit_edit = complete && outfit_ && !outfit_->current_pieces().empty();
   if (outfit_edit && std::any_of(outfit_->current_pieces().begin(), outfit_->current_pieces().end(),
@@ -979,8 +1136,22 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   }
   if (face_edit && !exportable()) {
     emit exportFinished(false, building_ ? tr("La cabeza se está regenerando; vuelve a exportar cuando termine.")
-                                         : tr("El rostro no es exportable: revisa el panel de problemas."), {}, {});
+                        : face_kind == appearance::FaceBuildKind::WaitForAnalysis ? tr("El FaceGen original aún se está analizando.")
+                                                                                  : tr("El rostro no es exportable: revisa el panel de problemas."),
+                        {}, {});
     return;
+  }
+  // FaceGen Geometry Integrity Guard, again on the exact bytes about to be staged.
+  if (hair_only) {
+    const auto integrity = build_ && build_->nif && existing_facegen_
+                               ? face::verify_hair_tint_integrity(*existing_facegen_, *build_->nif)
+                               : face::FaceGenIntegrity{};
+    if (!integrity.unchanged_except_hair_tint || !integrity.byte_identical_outside_hair_tint) {
+      diag::record("export", ("FACEGEN_GEOMETRY_CHANGED " + integrity.summary()).c_str());
+      emit exportFinished(false, tr("FACEGEN_GEOMETRY_CHANGED: el FaceGen a exportar no es el original con otro color de cabello (%1). "
+                                    "Exportación bloqueada.").arg(qs(integrity.summary())), {}, {});
+      return;
+    }
   }
   const auto output = QDir::toNativeSeparators(local_path(output_dir));
   QDir().mkpath(output);
@@ -1024,7 +1195,7 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
       for (const auto& p : recipe_->parts) {
         if (!p.official && !p.model.empty()) derived.push_back(p.plugin);
       }
-      if (state.geometry_mode == "preserve" && existing_facegen_) {
+      if ((hair_only || state.geometry_mode == "preserve") && existing_facegen_) {
         if (const auto ctx = context()) {
           if (const auto loc = ctx->resolver->locate(recipe_->facegen_mesh_path)) derived.push_back("FaceGen: " + loc->provider);
         }
@@ -1051,11 +1222,19 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                  {"height", draft_.height()},
                  {"generatedAssets", assets},
                  {"faceGen",
-                  {{"mode", state.geometry_mode},
+                  {{"mode", hair_only ? std::string("hair-color-safe") : state.geometry_mode},
                    {"parts", parts},
                    {"derivedFrom", derived},
                    {"customMorphs", v.custom_morphs.size()},
                    {"sculptTargets", v.sculpt.size()}}}};
+    // Minimal change: for a hair color and/or height edit the worker writes only these record fields
+    // on the winning record and rejects the export if any other face field differs from it.
+    if (hair_only || !face_edit) {
+      Json only = Json::array();
+      if (hair_only) only.push_back("HCLF");
+      if (body_edit) only.push_back("NAM6");
+      face_part["onlyFields"] = only;
+    }
   }
 
   Json providers = Json::object();

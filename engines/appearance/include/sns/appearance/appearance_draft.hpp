@@ -20,10 +20,29 @@ struct FaceState {
   std::vector<std::string> head_parts;  // PNAM, FormKeys ("051193:Skyrim.esm")
   std::string head_texture;             // FTST face texture set FormKey ("" = race default)
   std::string source;                   // provenance for the UI: "", "RaceMenu: Carrot.jslot", "Donante: ..."
-  std::string geometry_mode = "regenerate";  // "regenerate" or "preserve"
+  // "regenerate" or "preserve"; "pending" while the profile's FaceGen has not been analysed yet
+  // (AppearanceEditor accepts no edit and starts no build in that state).
+  std::string geometry_mode = "regenerate";
 
   bool operator==(const FaceState&) const = default;
 };
+inline constexpr const char* kGeometryPending = "pending";
+
+// The data a face state writes to the NPC_ record and bakes into the FaceGen: values (NAM9, NAMA,
+// weight, QNAM, HCLF, tints, RaceMenu morphs and sculpt), PNAM and FTST. `source` is provenance only.
+[[nodiscard]] bool same_face_record(const FaceState& a, const FaceState& b);
+// Only the hair color (HCLF) differs between the record data of the two states, with the same
+// geometry mode.
+[[nodiscard]] bool only_hair_color_differs(const FaceState& baseline, const FaceState& state);
+
+// What the FaceGen pipeline must do for `state` compared with the record (`baseline`).
+enum class FaceBuildKind {
+  Unchanged,        // same record data and geometry mode: nothing to build or export
+  WaitForAnalysis,  // the profile's FaceGen is still being analysed: build nothing yet
+  HairColorSafe,    // only HCLF changed: recolor the winning FaceGen (Hair Color Safe Mode), never rebuild
+  Full,             // other data changed (or the user chose another geometry mode): build_facegen
+};
+[[nodiscard]] FaceBuildKind face_build_kind(const FaceState& baseline, const FaceState& state);
 
 // One draft for everything the studio edits on an NPC: face, body height and outfit. Face and outfit
 // changes go through the same command stack (shared undo/redo), so the project, the comparison

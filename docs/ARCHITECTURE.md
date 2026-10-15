@@ -34,11 +34,30 @@ flowchart LR
 | `engines/projects`, `engines/outfit` | C++ sin Qt | `.snps`, `CommandStack`, `OutfitDraft` | — |
 | `engines/creation` | C++ sin Qt | Proyecto `.sncf` de Character Forge, borrador de NPC nativo, historial propio | Tocar `.snps` ni el borrador de NPC existentes |
 | `engines/gltf` | C++ sin Qt | Validación e inspección GLB/glTF 2.0 (referencias, rangos, índices, rutas confinadas, límites) | Renderizar |
+| `engines/appearance`, `engines/face` | C++ sin Qt | Borrador del rostro y decisión de build (`face_build_kind`); FaceGen: regeneración, Hair Color Safe Mode, guard de integridad, diagnóstico de compatibilidad | Leer MO2 o plugins |
 | Worker | .NET 10 | Lectura de plugins (Mutagen), índice, validación de registros, escritura del ESP, empaquetado | Saber qué es MO2 |
 
 **Decisión clave:** el worker no conoce MO2. El motor C++ resuelve el perfil a una lista de plugins con la ruta absoluta del archivo **ganador** y se la envía en `catalog.index`. Hay una única implementación de la lógica de prioridades de MO2, y el worker se prueba con fixtures sintéticos sin necesitar una instancia (ver [ADR 0001](ADR/0001-two-process-architecture.md)).
 
 **Los motores no dependen de Qt** ([ADR 0002](ADR/0002-engines-without-qt.md)): compilan y se prueban sin el SDK de Qt (`cmake --preset engines`), y los view models los envuelven.
+
+## Cambio de color de cabello (Hair Color Safe Mode)
+
+```mermaid
+flowchart LR
+  REC["face.getRecipe<br/>(registro ganador)"] --> AN["AppearanceEditor<br/>analyse_existing_facegen"]
+  RES[("FaceGen ganador<br/>AssetResolver: suelto o BSA")] --> AN
+  AN -- "modo: pending → preserve/regenerate<br/>diagnose_face_compatibility" --> ED["edit() / face_build_kind"]
+  ED -- "HairColorSafe" --> PATCH["face::patch_hair_tint<br/>copia + 12 bytes por HairTint"]
+  PATCH --> GUARD["verify_hair_tint_integrity<br/>bytes, semántica, canónico"]
+  GUARD -- "OK" --> PREV["vista previa = bytes a exportar"]
+  PREV --> EXP["export: guard otra vez<br/>onlyFields = [HCLF]"]
+  EXP --> WK["Worker: copia el ganador,<br/>escribe solo HCLF, relee con Mutagen"]
+```
+
+No existe *fallback* a `build_facegen()` para un cambio exclusivo de color: sin FaceGen ganador
+legible, o si el guard detecta cualquier otra diferencia, no se previsualiza ni se exporta nada.
+Detalle en [HIGH_POLY_HEAD_COMPATIBILITY.md](HIGH_POLY_HEAD_COMPATIBILITY.md).
 
 ## Vista previa de Character Forge
 

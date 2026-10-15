@@ -302,6 +302,82 @@ public sealed class FacePatchExportTests : IDisposable
         Assert.Equal((165, 58, 30), (color.Color.R, color.Color.G, color.Color.B));
     }
 
+    [Fact]
+    public void ExportFaceOverhaul_OnlyFieldsHclfKeepsTheWinningRecordExceptTheHairColor()
+    {
+        // Hair Color Safe Mode: the studio asks for HCLF only. Even if the values it sends do not
+        // round-trip exactly (here every slider is off), nothing but HCLF may reach the record.
+        var winner = _state.Read(c => c.Session.LinkCache.Resolve<INpcGetter>(SyntheticLoadOrder.Lydia));
+        var winnerSliders = FaceRecipeQueries.Sliders(winner.FaceMorph);
+        var winnerParts = winner.HeadParts.Select(h => h.FormKey).ToList();
+        var nif = Path.Combine(_out, "hair_safe.nif");
+        File.WriteAllBytes(nif, [0x4E, 0x49, 0x46, 0x02]);
+        var expectedFaceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
+        var request = new ExportFaceOverhaulRequest
+        {
+            PluginName = "SNS_Lydia_HairSafe.esp",
+            OutputDirectory = _out,
+            CreateZip = false,
+            Assignments =
+            [
+                new FaceAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    OnlyFields = ["HCLF"],
+                    Values = new FaceValuesDto
+                    {
+                        Sliders = Enumerable.Repeat(0.9f, 18).ToList(),
+                        Presets = [5, 5, 5, 5],
+                        Weight = 1f,
+                        SkinTone = new AppearanceColor(1, 2, 3),
+                        HairColor = new AppearanceColor(12, 200, 34),
+                        Tints = [],
+                    },
+                    GeneratedAssets =
+                    [
+                        new GeneratedAsset { SourcePath = nif, DataPath = expectedFaceGen.GeometryPath, Sha256 = Sha256Of(nif), Kind = "facegen-geometry" },
+                    ],
+                },
+            ],
+        };
+
+        var response = _state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, CancellationToken.None));
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(response.ManifestPath));
+        var changed = manifest.RootElement.GetProperty("faces")[0].GetProperty("changedFields").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Equal(["HCLF"], changed);
+        using var mod = ReadBack(response.PluginPath);
+        var lydia = Assert.Single(mod.Npcs);
+        Assert.Equal(winnerSliders, FaceRecipeQueries.Sliders(lydia.FaceMorph));
+        Assert.Equal(winner.Weight, lydia.Weight);
+        Assert.Equal(winnerParts, lydia.HeadParts.Select(h => h.FormKey).ToList());
+        Assert.Equal(winner.TintLayers.Count, lydia.TintLayers.Count);
+        var color = Assert.Single(mod.Colors);
+        Assert.Equal(color.FormKey, lydia.HairColor.FormKey);
+        Assert.Equal((12, 200, 34), (color.Color.R, color.Color.G, color.Color.B));
+    }
+
+    [Fact]
+    public void ExportFaceOverhaul_OnlyFieldsRejectsFieldsItCannotWriteMinimally()
+    {
+        var request = new ExportFaceOverhaulRequest
+        {
+            PluginName = "SNS_Lydia_OnlyNam9.esp",
+            OutputDirectory = _out,
+            CreateZip = false,
+            Assignments =
+            [
+                new FaceAssignment { NpcFormKey = SyntheticLoadOrder.Lydia.ToString(), OnlyFields = ["NAM9"] },
+            ],
+        };
+
+        var error = Assert.Throws<WorkerException>(() => _state.Read(c =>
+            ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, CancellationToken.None)));
+        Assert.Equal(ErrorCodes.ValidationFailed, error.Code);
+        Assert.Contains(error.Issues, issue => issue.Code == "OnlyFieldsUnsupported");
+        Assert.False(File.Exists(Path.Combine(_out, request.PluginName)));
+    }
+
     public void Dispose()
     {
         _state.Dispose();

@@ -51,6 +51,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/IssueList.qml
     qml/components/StatusBadge.qml
     qml/charactercreator/FaceSliderGroup.qml
+    qml/charactercreator/FaceProtectionCard.qml
     qml/charactercreator/FaceCustomizer.qml
     qml/charactercreator/PresetManager.qml
     qml/charactercreator/HairEyeCustomizer.qml

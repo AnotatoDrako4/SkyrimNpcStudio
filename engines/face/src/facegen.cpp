@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <format>
 #include <sstream>
+#include <unordered_map>
 
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
@@ -35,6 +37,12 @@ std::unique_ptr<nifly::NifFile> parse_nif(const std::string& bytes) {
   auto nif = std::make_unique<nifly::NifFile>();
   if (nif->Load(in) != 0 || !nif->IsValid()) return nullptr;
   return nif;
+}
+
+std::optional<std::string> serialize_nif(nifly::NifFile& nif) {
+  std::ostringstream stream(std::ios::out | std::ios::binary);
+  if (nif.Save(stream) != 0) return std::nullopt;
+  return std::move(stream).str();
 }
 
 bool is_drawn(nifly::NifFile& nif, nifly::NiShape* shape) {
@@ -587,33 +595,342 @@ FaceGenInfo inspect_facegen(std::string_view nif_bytes) {
   return info;
 }
 
+namespace {
+
+// Where each HairTint color lives in a NIF file: the last 12 bytes (three little-endian floats) of a
+// BSLightingShaderProperty block of shader type 6 (nifly BSLightingShaderProperty::Sync and nif.xml:
+// "Hair Tint Color" is the last field for Skyrim/SSE). Block offsets come from the header's block
+// sizes, counted back from the end of the file (footer: root count + root references). Every slot
+// is checked against the value nifly read; any disagreement means the layout is not what this code
+// expects, and nothing is patched.
+struct HairTintSlot {
+  std::size_t offset = 0;
+  std::vector<std::string> shapes;
+};
+
+std::optional<std::vector<HairTintSlot>> hair_tint_slots(nifly::NifFile& nif, std::string_view bytes, std::string& why) {
+  auto& hdr = nif.GetHeader();
+  const auto blocks = hdr.GetNumBlocks();
+  std::vector<std::size_t> offsets(blocks + 1, 0);
+  std::size_t total = 0;
+  for (std::uint32_t i = 0; i < blocks; ++i) {
+    const auto size = hdr.GetBlockSize(i);
+    if (size == nifly::NIF_NPOS) {
+      why = "the header has no size for block " + std::to_string(i);
+      return std::nullopt;
+    }
+    offsets[i] = total;
+    total += size;
+  }
+  const auto footer = 4 + 4 * hdr.GetRootBlockIds().size();
+  if (total + footer >= bytes.size()) {
+    why = "block sizes do not fit in the file";
+    return std::nullopt;
+  }
+  const auto header_end = bytes.size() - footer - total;
+  std::vector<HairTintSlot> slots;
+  for (auto* shape : nif.GetShapes()) {
+    auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(nif.GetShader(shape));
+    if (!lighting || lighting->GetShaderType() != kShaderHairTint) continue;
+    const auto id = nif.GetBlockID(lighting);
+    if (id == nifly::NIF_NPOS || id >= blocks || hdr.GetBlockSize(id) < 12) {
+      why = "HairTint shader of '" + shape->name.get() + "' has no usable block";
+      return std::nullopt;
+    }
+    const auto offset = header_end + offsets[id] + hdr.GetBlockSize(id) - 12;
+    float stored[3];
+    std::memcpy(stored, bytes.data() + offset, sizeof stored);
+    const float parsed[3] = {lighting->hairTintColor.x, lighting->hairTintColor.y, lighting->hairTintColor.z};
+    if (std::memcmp(stored, parsed, sizeof stored) != 0) {
+      why = "the HairTint color of '" + shape->name.get() + "' is not at the expected position of its shader block";
+      return std::nullopt;
+    }
+    const auto same = std::find_if(slots.begin(), slots.end(), [&](const HairTintSlot& s) { return s.offset == offset; });
+    if (same != slots.end()) {
+      same->shapes.push_back(shape->name.get());
+    } else {
+      slots.push_back({offset, {shape->name.get()}});
+    }
+  }
+  return slots;
+}
+
+std::string vec_text(const nifly::Vector3& v) { return std::format("({:.6g}, {:.6g}, {:.6g})", v.x, v.y, v.z); }
+
+std::string transform_text(const nifly::MatTransform& t) { return std::format("t{} s{:.6g}", vec_text(t.translation), t.scale); }
+
+bool same_transform(const nifly::MatTransform& a, const nifly::MatTransform& b) {
+  return a.translation == b.translation && a.rotation == b.rotation && a.scale == b.scale;
+}
+
+template <class T, class Eq>
+std::size_t count_different(const std::vector<T>& a, const std::vector<T>& b, Eq eq) {
+  if (a.size() != b.size()) return std::max(a.size(), b.size());
+  std::size_t n = 0;
+  for (std::size_t i = 0; i < a.size(); ++i) n += !eq(a[i], b[i]);
+  return n;
+}
+
+// Semantic comparison of everything Hair Color Safe Mode must keep, shape by shape (matched by name,
+// so a serializer that reorders equivalent blocks is not reported) plus the skeleton's nodes.
+void compare_semantics(nifly::NifFile& a, nifly::NifFile& b, std::vector<FaceGenDifference>& out) {
+  auto add = [&](std::string shape, std::string property, std::string before, std::string after) {
+    out.push_back({std::move(shape), std::move(property), std::move(before), std::move(after)});
+  };
+  const auto shapes_a = a.GetShapes();
+  const auto shapes_b = b.GetShapes();
+  if (shapes_a.size() != shapes_b.size()) add("", "shape count", std::to_string(shapes_a.size()), std::to_string(shapes_b.size()));
+  for (auto* sa : shapes_a) {
+    const auto name = sa->name.get();
+    const auto it = std::find_if(shapes_b.begin(), shapes_b.end(), [&](nifly::NiShape* s) { return s->name.get() == name; });
+    if (it == shapes_b.end()) {
+      add(name, "shape", "present", "missing");
+      continue;
+    }
+    auto* sb = *it;
+    if (std::string(sa->GetBlockName()) != sb->GetBlockName()) add(name, "block type", sa->GetBlockName(), sb->GetBlockName());
+    if (sa->flags != sb->flags) add(name, "flags", std::to_string(sa->flags), std::to_string(sb->flags));
+    if (!same_transform(sa->transform, sb->transform)) add(name, "transform", transform_text(sa->transform), transform_text(sb->transform));
+
+    std::vector<nifly::Vector3> pa, pb;
+    a.GetVertsForShape(sa, pa);
+    b.GetVertsForShape(sb, pb);
+    if (pa.size() != pb.size()) {
+      add(name, "vertices", std::to_string(pa.size()), std::to_string(pb.size()));
+    } else {
+      float worst = 0.0f;
+      std::size_t moved = 0;
+      for (std::size_t i = 0; i < pa.size(); ++i) {
+        if (pa[i] == pb[i]) continue;
+        ++moved;
+        worst = std::max(worst, (pa[i] - pb[i]).length());
+      }
+      if (moved) add(name, "positions", "original", std::format("{} vertices moved, up to {:.6g} units", moved, worst));
+    }
+    std::vector<nifly::Triangle> ta, tb;
+    sa->GetTriangles(ta);
+    sb->GetTriangles(tb);
+    if (ta.size() != tb.size()) {
+      add(name, "triangles", std::to_string(ta.size()), std::to_string(tb.size()));
+    } else if (const auto n = count_different(ta, tb, [](const nifly::Triangle& x, const nifly::Triangle& y) { return x == y; })) {
+      add(name, "indices", "original", std::to_string(n) + " triangles with other vertex indices");
+    }
+    const auto* na = a.GetNormalsForShape(sa);
+    const auto* nb = b.GetNormalsForShape(sb);
+    if (static_cast<bool>(na) != static_cast<bool>(nb)) {
+      add(name, "normals", na ? "present" : "absent", nb ? "present" : "absent");
+    } else if (na) {
+      if (const auto n = count_different(*na, *nb, [](const nifly::Vector3& x, const nifly::Vector3& y) { return x == y; })) {
+        add(name, "normals", "original", std::to_string(n) + " normals changed");
+      }
+    }
+    std::vector<nifly::Vector2> ua, ub;
+    a.GetUvsForShape(sa, ua);
+    b.GetUvsForShape(sb, ub);
+    if (const auto n = count_different(ua, ub, [](const nifly::Vector2& x, const nifly::Vector2& y) { return x.u == y.u && x.v == y.v; })) {
+      add(name, "uv", std::to_string(ua.size()) + " coordinates", std::to_string(n) + " coordinates changed");
+    }
+    std::vector<nifly::Vector3> ga, gb;
+    a.GetTangentsForShape(sa, ga);
+    b.GetTangentsForShape(sb, gb);
+    if (const auto n = count_different(ga, gb, [](const nifly::Vector3& x, const nifly::Vector3& y) { return x == y; })) {
+      add(name, "tangents", std::to_string(ga.size()), std::to_string(n) + " changed");
+    }
+    std::vector<nifly::Color4> ca, cb;
+    a.GetColorsForShape(sa, ca);
+    b.GetColorsForShape(sb, cb);
+    if (const auto n = count_different(ca, cb, [](const nifly::Color4& x, const nifly::Color4& y) {
+          return x.r == y.r && x.g == y.g && x.b == y.b && x.a == y.a;
+        })) {
+      add(name, "vertex colors", std::to_string(ca.size()), std::to_string(n) + " changed");
+    }
+
+    std::vector<std::string> bones_a, bones_b;
+    a.GetShapeBoneList(sa, bones_a);
+    b.GetShapeBoneList(sb, bones_b);
+    if (bones_a != bones_b) {
+      add(name, "skin bones", std::to_string(bones_a.size()) + " bones", std::to_string(bones_b.size()) + " bones (list differs)");
+    } else {
+      for (std::uint32_t bone = 0; bone < bones_a.size(); ++bone) {
+        std::unordered_map<std::uint16_t, float> wa, wb;
+        a.GetShapeBoneWeights(sa, bone, wa);
+        b.GetShapeBoneWeights(sb, bone, wb);
+        if (wa != wb) add(name, "bone weights", bones_a[bone], std::to_string(wb.size()) + " weighted vertices (differs)");
+        nifly::MatTransform xa, xb;
+        const bool ha = a.GetShapeTransformSkinToBone(sa, bone, xa);
+        const bool hb = b.GetShapeTransformSkinToBone(sb, bone, xb);
+        if (ha != hb || (ha && !same_transform(xa, xb))) add(name, "skin-to-bone transform", bones_a[bone], "differs");
+      }
+      nifly::MatTransform xa, xb;
+      const bool ha = a.GetShapeTransformGlobalToSkin(sa, xa);
+      const bool hb = b.GetShapeTransformGlobalToSkin(sb, xb);
+      if (ha != hb || (ha && !same_transform(xa, xb))) {
+        add(name, "global-to-skin transform", ha ? transform_text(xa) : "none", hb ? transform_text(xb) : "none");
+      }
+    }
+    nifly::NiVector<nifly::BSDismemberSkinInstance::PartitionInfo> pia, pib;
+    std::vector<int> tpa, tpb;
+    const bool parts_a = a.GetShapePartitions(sa, pia, tpa);
+    const bool parts_b = b.GetShapePartitions(sb, pib, tpb);
+    bool same_parts = parts_a == parts_b && pia.size() == pib.size() && tpa == tpb;
+    for (std::uint32_t i = 0; same_parts && i < pia.size(); ++i) same_parts = pia[i].partID == pib[i].partID && pia[i].flags == pib[i].flags;
+    if (!same_parts) add(name, "partitions", std::to_string(pia.size()), std::to_string(pib.size()) + " (differs)");
+
+    auto* sha = a.GetShader(sa);
+    auto* shb = b.GetShader(sb);
+    if (static_cast<bool>(sha) != static_cast<bool>(shb)) {
+      add(name, "shader", sha ? sha->GetBlockName() : "none", shb ? shb->GetBlockName() : "none");
+    } else if (sha) {
+      if (sha->GetShaderType() != shb->GetShaderType()) {
+        add(name, "shader type", std::to_string(sha->GetShaderType()), std::to_string(shb->GetShaderType()));
+      }
+      for (std::uint32_t slot = 0; slot < 9; ++slot) {
+        std::string xa, xb;
+        a.GetTextureSlot(sa, xa, slot);
+        b.GetTextureSlot(sb, xb, slot);
+        if (xa != xb) add(name, "texture slot " + std::to_string(slot), xa, xb);
+      }
+    }
+    auto* aa = a.GetAlphaProperty(sa);
+    auto* ab = b.GetAlphaProperty(sb);
+    if (static_cast<bool>(aa) != static_cast<bool>(ab) || (aa && (aa->flags != ab->flags || aa->threshold != ab->threshold))) {
+      add(name, "alpha", aa ? std::format("flags {} threshold {}", aa->flags, aa->threshold) : "none",
+          ab ? std::format("flags {} threshold {}", ab->flags, ab->threshold) : "none");
+    }
+  }
+  for (auto* node : a.GetNodes()) {
+    const auto name = node->name.get();
+    nifly::MatTransform ta, tb;
+    if (!a.GetNodeTransformToParent(name, ta)) continue;
+    if (!b.GetNodeTransformToParent(name, tb)) {
+      add(name, "node", "present", "missing");
+    } else if (!same_transform(ta, tb)) {
+      add(name, "node transform", transform_text(ta), transform_text(tb));
+    }
+  }
+}
+
+}  // namespace
+
 HairTintPatch patch_hair_tint(std::string_view facegen_nif, const FaceRecipe& recipe) {
   HairTintPatch patch;
   const auto nif = parse_nif(std::string(facegen_nif));
   if (!nif) {
-    issue(patch.issues, "error", "FaceGenUnreadable", "The FaceGen to update is not a readable NIF", recipe.facegen_mesh_path);
+    issue(patch.issues, "error", "FaceGenUnreadable", "The FaceGen to recolor is not a readable NIF", recipe.facegen_mesh_path);
     return patch;
   }
-  const auto tint = hair_tint_vector(recipe.values.hair_color);
+  std::string why;
+  const auto slots = hair_tint_slots(*nif, facegen_nif, why);
+  if (!slots) {
+    issue(patch.issues, "error", "HAIR_TINT_LAYOUT_UNVERIFIED",
+          "The HairTint color could not be located byte for byte (" + why + "); nothing was changed", recipe.facegen_mesh_path);
+    return patch;
+  }
   for (auto* shape : nif->GetShapes()) {
     auto* shader = nif->GetShader(shape);
-    if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader);
-        lighting && lighting->GetShaderType() == kShaderHairTint) {
-      lighting->hairTintColor = tint;
-      patch.patched.push_back(shape->name.get());
+    if (auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(shader); lighting && lighting->GetShaderType() == kShaderHairTint) {
       continue;
     }
     const auto part = std::find_if(recipe.parts.begin(), recipe.parts.end(),
                                    [&](const HeadPartData& p) { return text::iequals_ascii(p.editor_id, shape->name.get()); });
     if (part != recipe.parts.end() && is_hair_colored(part->type)) hair_tint_unsupported(patch.issues, *part, shader);
   }
-  std::ostringstream stream(std::ios::out | std::ios::binary);
-  if (nif->Save(stream) != 0) {
-    issue(patch.issues, "error", "FaceGenWriteFailed", "nifly could not serialize the FaceGen NIF", recipe.npc_form_key);
+  if (slots->empty()) {
+    issue(patch.issues, "error", "HAIR_TINT_NOT_APPLIED",
+          "No shape of this FaceGen uses the HairTint shader, so a CLFM hair color cannot change it. The FaceGen was left "
+          "untouched; recoloring needs a texture or material edit of the hair",
+          recipe.facegen_mesh_path);
     return patch;
   }
-  patch.nif = std::move(stream).str();
+  // Copy of the original with only the tint floats rewritten: every other byte is the original's.
+  const auto tint = hair_tint_vector(recipe.values.hair_color);
+  const float floats[3] = {tint.x, tint.y, tint.z};
+  std::string out(facegen_nif);
+  for (const auto& slot : *slots) {
+    std::memcpy(out.data() + slot.offset, floats, sizeof floats);
+    patch.patched.insert(patch.patched.end(), slot.shapes.begin(), slot.shapes.end());
+  }
+  const auto integrity = verify_hair_tint_integrity(facegen_nif, out);
+  if (!integrity.unchanged_except_hair_tint || !integrity.byte_identical_outside_hair_tint) {
+    issue(patch.issues, "error", "FACEGEN_GEOMETRY_CHANGED", "Hair Color Safe Mode: " + integrity.summary(), recipe.facegen_mesh_path);
+    patch.patched.clear();
+    return patch;
+  }
+  // The rewritten file must read back with the requested color on every HairTint shape.
+  const auto check = parse_nif(out);
+  bool applied = static_cast<bool>(check);
+  if (check) {
+    for (auto* shape : check->GetShapes()) {
+      auto* lighting = dynamic_cast<nifly::BSLightingShaderProperty*>(check->GetShader(shape));
+      if (lighting && lighting->GetShaderType() == kShaderHairTint && !(lighting->hairTintColor == tint)) applied = false;
+    }
+  }
+  if (!applied) {
+    issue(patch.issues, "error", "HAIR_TINT_NOT_APPLIED", "The recolored FaceGen does not read back with the requested color",
+          recipe.facegen_mesh_path);
+    patch.patched.clear();
+    return patch;
+  }
+  patch.nif = std::move(out);
   return patch;
+}
+
+std::string FaceGenIntegrity::summary() const {
+  if (unchanged_except_hair_tint) return "only the HairTint color differs";
+  if (differences.empty()) return readable ? "unknown NIF difference" : "unreadable FaceGen";
+  const auto& d = differences.front();
+  auto text = (d.shape.empty() ? std::string("file") : "'" + d.shape + "'") + ": " + d.property + " changed from " + d.before + " to " + d.after;
+  if (differences.size() > 1) text += std::format(" (+{} more)", differences.size() - 1);
+  return text;
+}
+
+FaceGenIntegrity verify_hair_tint_integrity(std::string_view original, std::string_view candidate) {
+  FaceGenIntegrity result;
+  auto before = parse_nif(std::string(original));
+  auto after = parse_nif(std::string(candidate));
+  if (!before || !after) {
+    result.differences.push_back({"", "file", before ? "readable" : "unreadable", after ? "readable" : "unreadable"});
+    return result;
+  }
+  result.readable = true;
+  std::string why;
+  const auto slots = hair_tint_slots(*before, original, why);
+
+  // 1. Byte level: equal size and every differing byte inside a HairTint color of the original.
+  if (slots && original.size() == candidate.size()) {
+    bool outside = false;
+    for (std::size_t i = 0; i < original.size() && !outside; ++i) {
+      if (original[i] == candidate[i]) continue;
+      outside = std::none_of(slots->begin(), slots->end(), [&](const HairTintSlot& s) { return i >= s.offset && i < s.offset + 12; });
+    }
+    result.byte_identical_outside_hair_tint = !outside;
+  }
+
+  // 2. Semantics, shape by shape (also explains what changed when the bytes differ elsewhere).
+  compare_semantics(*before, *after, result.differences);
+
+  // 3. Catch-all for properties not listed above: with the candidate's tints set back to the
+  // original's, both files must serialize identically.
+  if (!result.byte_identical_outside_hair_tint && result.differences.empty()) {
+    for (auto* shape : after->GetShapes()) {
+      auto* tinted = dynamic_cast<nifly::BSLightingShaderProperty*>(after->GetShader(shape));
+      if (!tinted || tinted->GetShaderType() != kShaderHairTint) continue;
+      for (auto* other : before->GetShapes()) {
+        auto* source = dynamic_cast<nifly::BSLightingShaderProperty*>(before->GetShader(other));
+        if (other->name.get() == shape->name.get() && source && source->GetShaderType() == kShaderHairTint) {
+          tinted->hairTintColor = source->hairTintColor;
+        }
+      }
+    }
+    const auto canonical_before = serialize_nif(*before);
+    const auto canonical_after = serialize_nif(*after);
+    if (!canonical_before || !canonical_after || *canonical_before != *canonical_after) {
+      result.differences.push_back(
+          {"", "NIF block graph", "original", "a block outside HairTint differs (material, controller, extra data or another property)"});
+    }
+  }
+  result.unchanged_except_hair_tint = result.differences.empty();
+  return result;
 }
 
 FaceGenComparison compare_facegen(std::string_view a, std::string_view b) {
@@ -716,6 +1033,143 @@ std::vector<FaceIssue> audit_facegen(const FaceGenInfo& facegen, const FaceRecip
     }
   }
   return issues;
+}
+
+FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, FaceAssetCache& assets,
+                                                    const std::string* winning_facegen, const FaceGenBuild& regenerated) {
+  FaceCompatibilityReport r;
+  auto allow = [&](std::initializer_list<const char*> ops) { r.allowed.insert(r.allowed.end(), ops.begin(), ops.end()); };
+  auto block = [&](const char* op, std::string why) { r.blocked.emplace_back(op, std::move(why)); };
+  auto set = [&](FaceCompatibility kind, const char* code) {
+    r.kind = kind;
+    r.code = code;
+  };
+
+  // Meshes and TRI files of the head parts: missing ones, and TRI files that do not fit their mesh.
+  FaceGenInfo info;
+  if (winning_facegen) info = inspect_facegen(*winning_facegen);
+  for (const auto& part : recipe.parts) {
+    if (part.model.empty()) continue;
+    std::size_t mesh_vertices = 0;
+    for (const auto& [name, count] : info.shapes) {
+      if (text::iequals_ascii(name, part.editor_id)) mesh_vertices = count;
+    }
+    if (mesh_vertices == 0) {
+      const auto raw = assets.bytes(part.model);
+      const auto mesh = raw ? parse_nif(*raw) : nullptr;
+      if (!mesh) {
+        r.missing.push_back(part.editor_id + ": " + part.model);
+        continue;
+      }
+      for (auto* s : mesh->GetShapes()) {
+        if (is_drawn(*mesh, s)) {
+          mesh_vertices = s->GetNumVertices();
+          break;
+        }
+      }
+    }
+    for (const auto& t : part.tris) {
+      std::shared_ptr<const TriFile> tri;
+      try {
+        tri = assets.tri(t.path);
+      } catch (const std::exception&) {
+        r.missing.push_back(part.editor_id + ": " + t.path + " (unreadable)");
+        continue;
+      }
+      if (!tri) {
+        r.missing.push_back(part.editor_id + ": " + t.path);
+      } else if (mesh_vertices != 0 && tri->vertex_count != mesh_vertices) {
+        r.tri_mismatches.push_back({part.editor_id, t.path, tri->vertex_count, mesh_vertices});
+      }
+    }
+  }
+  for (const auto& m : r.tri_mismatches) {
+    r.evidence.push_back(std::format("{}: {} has {} vertices, the mesh {}", m.part, m.tri, m.tri_vertices, m.mesh_vertices));
+  }
+  for (const auto& m : r.missing) r.evidence.push_back("missing or unreadable: " + m);
+
+  if (!winning_facegen) {
+    set(FaceCompatibility::FaceGenMissing, "facegen-missing");
+    r.evidence.push_back("no FaceGen at " + recipe.facegen_mesh_path + " in the profile: the game builds the head at run time");
+    allow({"outfit"});
+    block("hair-color", "there is no FaceGen of the profile to recolor");
+    if (regenerated.exportable()) {
+      allow({"face-morphs", "head-parts", "regenerate"});
+    } else {
+      for (const char* op : {"face-morphs", "head-parts", "regenerate"}) block(op, "the head cannot be built from the record's head parts");
+    }
+    return r;
+  }
+  if (!info.readable) {
+    set(FaceCompatibility::FaceGenInconsistent, "facegen-inconsistent");
+    r.evidence.push_back("the winning FaceGen is not a readable NIF");
+    allow({"outfit"});
+    for (const char* op : {"hair-color", "face-morphs", "head-parts", "regenerate"}) block(op, "the winning FaceGen cannot be read");
+    return r;
+  }
+  r.hair_tint = !info.hair_tints.empty();
+  r.evidence.push_back(std::format("winning FaceGen: {} shapes, {} with HairTint", info.shapes.size(), info.hair_tints.size()));
+  const auto hair_color = [&] {
+    if (r.hair_tint) {
+      allow({"hair-color"});
+    } else {
+      block("hair-color", "no shape of the winning FaceGen uses HairTint: a CLFM color does not reach the hair");
+    }
+  };
+
+  if (!regenerated.nif.empty()) {
+    const auto cmp = compare_facegen(regenerated.nif, *winning_facegen);
+    r.regeneration_deviation = cmp.same_topology ? cmp.max_distance : -1.0f;
+    r.evidence.push_back(cmp.same_topology ? std::format("regeneration from the record deviates up to {:.3f} units", cmp.max_distance)
+                                           : std::string("regeneration from the record has other shapes or vertex counts"));
+    if (regenerated.exportable() && cmp.same_topology && cmp.max_distance < 0.05f) {
+      set(FaceCompatibility::VanillaCompatible, "vanilla-compatible");
+      hair_color();
+      allow({"outfit", "face-morphs", "head-parts", "regenerate"});
+      return r;
+    }
+  }
+  const auto audit = audit_facegen(info, recipe);
+  const bool part_mismatch =
+      std::any_of(audit.begin(), audit.end(), [](const FaceIssue& i) { return i.code == "FaceGenPartMismatch" || i.code == "FaceGenNodeMissing"; });
+  for (const auto& i : audit) {
+    if (i.severity != "info") r.evidence.push_back(i.code + ": " + i.message);
+  }
+  if (part_mismatch) {
+    set(FaceCompatibility::FaceGenInconsistent, "facegen-inconsistent");
+    hair_color();
+    allow({"outfit"});
+    for (const char* op : {"face-morphs", "head-parts", "regenerate"}) block(op, "the winning FaceGen was not made from the record's head parts");
+    return r;
+  }
+  if (!r.missing.empty()) {
+    set(FaceCompatibility::MissingDependencies, "missing-dependencies");
+    hair_color();
+    allow({"outfit"});
+    for (const char* op : {"face-morphs", "head-parts", "regenerate"}) block(op, "head part meshes or TRI files are missing");
+    return r;
+  }
+  if (!r.tri_mismatches.empty()) {
+    set(FaceCompatibility::CustomIncompatibleMorphs, "custom-incompatible-morphs");
+    hair_color();
+    allow({"outfit"});
+    block("face-morphs", "the head's TRI files do not fit its mesh: sliders and presets cannot be applied");
+    block("head-parts", "not verified for a head whose morphs do not fit");
+    block("regenerate", "regenerating would lose the custom geometry and sculpt");
+    return r;
+  }
+  if (regenerated.nif.empty()) {
+    set(FaceCompatibility::Undetermined, "undetermined");
+    hair_color();
+    allow({"outfit"});
+    for (const char* op : {"face-morphs", "head-parts", "regenerate"}) block(op, "the head could not be regenerated for comparison");
+    return r;
+  }
+  set(FaceCompatibility::CustomLimited, "custom-limited");
+  hair_color();
+  allow({"outfit", "face-morphs", "head-parts"});
+  block("regenerate", "regenerating would lose the custom geometry and sculpt");
+  return r;
 }
 
 }  // namespace sns::face

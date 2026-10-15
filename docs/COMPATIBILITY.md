@@ -13,6 +13,17 @@
 | LZ4 | 1.10.0 | BSA 105 |
 | DirectXTex | May 2026 | DDS a RGBA8; límites en NIF_PIPELINE.md |
 
+## Cabezas personalizadas y High Poly
+
+El color de cabello se edita sin regenerar geometría cuando existe un FaceGen ganador legible
+(SSE) y al menos una shape usa el shader HairTint: solo cambian los 12 bytes del color de cada una,
+y un guard bloquea la exportación si cambia cualquier otro dato. Sliders, presets y Head Parts
+dependen de TRI cuyo número de vértices coincida con la malla; el diagnóstico facial lo comprueba
+pieza a pieza y nunca deduce una cabeza «High Poly» por su nombre. Probado con el replacer de
+Serana `Priscilla.Serana.Replacer.esp` (cabeza de 3832 vértices con TRI vanilla de 996): color
+permitido, sliders y regeneración bloqueados. Comportamiento en el juego sin verificar. Consulta
+[HIGH_POLY_HEAD_COMPATIBILITY.md](HIGH_POLY_HEAD_COMPATIBILITY.md).
+
 ## Plugins
 
 - `.esm`, `.esp`, `.esl`; flags ESM y ESL (ESP-FE); masters ligeros resueltos con `MasterFlagsLookup`.

@@ -9,9 +9,18 @@ ScrollView {
     contentWidth: availableWidth
     clip: true
 
+    // Sliders and presets need the analysed FaceGen and TRI files that fit the head's meshes.
+    readonly property bool morphsAllowed: !root.studio.appearance.analysing
+        && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "face-morphs")
+
     ColumnLayout {
         width: root.availableWidth
         spacing: 12
+
+        FaceProtectionCard {
+            Layout.fillWidth: true
+            studio: root.studio
+        }
 
         RowLayout {
             Layout.fillWidth: true
@@ -45,6 +54,7 @@ ScrollView {
         // Nose
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Nariz")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Nose")
@@ -56,6 +66,7 @@ ScrollView {
         // Jaw
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Mandíbula")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Jaw")
@@ -67,6 +78,7 @@ ScrollView {
         // Cheeks
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Mejillas")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Cheeks")
@@ -78,6 +90,7 @@ ScrollView {
         // Eyes
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Ojos")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Eyes")
@@ -89,6 +102,7 @@ ScrollView {
         // Brows
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Cejas")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Brows")
@@ -100,6 +114,7 @@ ScrollView {
         // Lips
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Labios y Boca")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Lips")
@@ -111,6 +126,7 @@ ScrollView {
         // Chin
         FaceSliderGroup {
             Layout.fillWidth: true
+            enabled: root.morphsAllowed
             title: qsTr("Barbilla")
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Chin")
