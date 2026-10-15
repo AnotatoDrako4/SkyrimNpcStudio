@@ -21,6 +21,9 @@
 #include <windows.h>
 // clang-format off
 #include <dbghelp.h>
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
 // clang-format on
 #pragma comment(lib, "dbghelp.lib")
 #endif
@@ -61,6 +64,35 @@ ContextEntry g_context[kContextEntries];
 std::mutex g_context_mutex;
 std::atomic<std::uint64_t> g_task{0};
 std::atomic<bool> g_crashing{false};
+
+#if defined(_WIN32) && defined(_DEBUG)
+struct AllocCapture {
+  long req = 0;
+  std::size_t size = 0;
+  void* backtrace[32]{};
+  WORD frames = 0;
+};
+constexpr long kTrackedRangeStart = 260000;
+constexpr long kTrackedCount = 10000;
+static AllocCapture g_tracked_allocs[kTrackedCount];
+
+int alloc_hook(int allocType, void* userData, size_t size, int blockType, long requestNumber,
+               const unsigned char* filename, int lineNumber) {
+  (void)userData;
+  (void)filename;
+  (void)lineNumber;
+  (void)blockType;
+  if (allocType == _HOOK_ALLOC) {
+    if (requestNumber >= kTrackedRangeStart && requestNumber < kTrackedRangeStart + kTrackedCount) {
+      auto& slot = g_tracked_allocs[requestNumber - kTrackedRangeStart];
+      slot.req = requestNumber;
+      slot.size = size;
+      slot.frames = RtlCaptureStackBackTrace(2, 32, slot.backtrace, nullptr);
+    }
+  }
+  return TRUE;
+}
+#endif
 
 std::mutex g_log_mutex;
 std::FILE* g_log = nullptr;
@@ -230,6 +262,52 @@ std::filesystem::path write_report(EXCEPTION_POINTERS* info, const char* reason)
   ReportFile report(txt_path);
   report.put("Skyrim NPC Studio - crash report\n");
   report.printf("reason: %s\n", reason);
+#ifdef _DEBUG
+  if (reason) {
+    if (const char* hash = std::strchr(reason, '#')) {
+      char* end = nullptr;
+      const long req = std::strtol(hash + 1, &end, 10);
+      if (req >= kTrackedRangeStart && req < kTrackedRangeStart + kTrackedCount) {
+        const auto& slot = g_tracked_allocs[req - kTrackedRangeStart];
+        if (slot.req == req) {
+          report.printf("origin of block #%ld (size %llu bytes):\n", slot.req,
+                        static_cast<unsigned long long>(slot.size));
+          std::fprintf(stderr, "origin of block #%ld (size %llu bytes):\n", slot.req,
+                       static_cast<unsigned long long>(slot.size));
+          for (WORD f = 0; f < slot.frames; ++f) {
+            char mod[MAX_PATH + 32];
+            describe_module(reinterpret_cast<DWORD64>(slot.backtrace[f]), mod, sizeof(mod));
+            report.printf("  alloc #%02d: %s\n", f, mod);
+            std::fprintf(stderr, "  alloc #%02d: %s\n", f, mod);
+          }
+          uintptr_t addr = 0;
+          if (const char* at = std::strstr(reason, "at 0x")) {
+            addr = std::strtoull(at + 5, nullptr, 16);
+          }
+          if (addr && slot.size > 0) {
+            const unsigned char* p = reinterpret_cast<const unsigned char*>(addr);
+            char hex[128]{};
+            int off = 0;
+            for (int k = 0; k < 16; ++k) off += std::snprintf(hex + off, sizeof(hex) - off, "%02x ", p[slot.size + k]);
+            char ascii[32]{};
+            for (int k = 0; k < 16; ++k) ascii[k] = (p[slot.size + k] >= 32 && p[slot.size + k] < 127) ? p[slot.size + k] : '.';
+            report.printf("trailing guard bytes at +%llu: %s | %s\n", static_cast<unsigned long long>(slot.size), hex, ascii);
+            std::fprintf(stderr, "trailing guard bytes at +%llu: %s | %s\n", static_cast<unsigned long long>(slot.size), hex, ascii);
+
+            int buf_off = slot.size > 32 ? static_cast<int>(slot.size - 32) : 0;
+            int blen = static_cast<int>(slot.size - buf_off);
+            char bhex[128]{}, bascii[64]{};
+            int boff = 0;
+            for (int k = 0; k < blen; ++k) boff += std::snprintf(bhex + boff, sizeof(bhex) - boff, "%02x ", p[buf_off + k]);
+            for (int k = 0; k < blen; ++k) bascii[k] = (p[buf_off + k] >= 32 && p[buf_off + k] < 127) ? p[buf_off + k] : '.';
+            report.printf("buffer tail bytes [-%d]: %s | %s\n", blen, bhex, bascii);
+            std::fprintf(stderr, "buffer tail bytes [-%d]: %s | %s\n", blen, bhex, bascii);
+          }
+        }
+      }
+    }
+  }
+#endif
   report.printf("process %lu, thread %lu%s, uptime %lld ms\n", GetCurrentProcessId(), thread_id(),
                 thread_id() == g_main_thread ? " (main/GUI thread)" : " (background thread)", static_cast<long long>(uptime_ms()));
   if (info && info->ExceptionRecord) {
@@ -346,6 +424,22 @@ void on_invalid_parameter(const wchar_t*, const wchar_t*, const wchar_t*, unsign
   report_and_continue_dying(nullptr, "invalid parameter passed to a C runtime function");
   std::abort();
 }
+#ifdef _DEBUG
+// Debug CRT reports ("HEAP CORRUPTION DETECTED", failed _ASSERTs): instead of a modal message box
+// (which blocks unattended runs and keeps the corrupted process alive), the message goes to the
+// session log and errors end the process with the usual crash report and minidump.
+int on_crt_report(int type, char* message, int* return_value) {
+  if (return_value) *return_value = 0;
+  if (type == _CRT_WARN) return TRUE;  // handled: no dialog, keep running
+  // The heap may be damaged and the CRT can report again while the report is written (it
+  // allocates): only the first report counts, nothing after it touches the C runtime.
+  static std::atomic<bool> reporting{false};
+  if (reporting.exchange(true)) return TRUE;
+  report_and_continue_dying(nullptr, message ? message : "debug CRT report");
+  TerminateProcess(GetCurrentProcess(), 3);
+  return TRUE;
+}
+#endif
 #endif
 
 bool ended_cleanly(const std::filesystem::path& log) {
@@ -416,6 +510,10 @@ std::filesystem::path install(const std::filesystem::path& directory) {
   std::signal(SIGABRT, &on_abort);
   _set_purecall_handler(&on_purecall);
   _set_invalid_parameter_handler(&on_invalid_parameter);
+#ifdef _DEBUG
+  _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &on_crt_report);
+  _CrtSetAllocHook(&alloc_hook);
+#endif
 #endif
   char line[kLineChars];
   std::snprintf(line, sizeof(line), "=== session start, pid %lu, main thread %lu ===",

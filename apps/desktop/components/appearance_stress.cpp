@@ -652,7 +652,8 @@ struct Stress : std::enable_shared_from_this<Stress> {
       });
       steps.push_back([self, color] {
         self->check(self->appearance()->npc_form_key() == self->primary_npc, "reopened project selects " + self->appearance()->npc_form_key());
-        self->check_hair(color);
+        // A reopened hair color edit is still a hair color edit of the record (Hair Color Safe Mode).
+        self->check_hair_safe(color);
         self->step();
       });
     } else if (name == "quit-during-build") {

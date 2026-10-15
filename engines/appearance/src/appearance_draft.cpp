@@ -145,7 +145,7 @@ projects::FaceConfig to_face_config(const FaceState& state, const face::FaceReci
   c.skin_tone = to_project(v.skin_tone);
   if (v.hair_color) c.hair_color = to_project(*v.hair_color);
   for (const auto& t : v.tints) {
-    c.tint_layers.push_back({t.index, to_project(t.color), t.value, static_cast<std::uint32_t>(std::max(t.preset, 0))});
+    c.tint_layers.push_back({t.index, to_project(t.color), t.value, t.preset});
   }
   c.custom_morphs = v.custom_morphs;
   for (const auto& s : v.sculpt) {
@@ -193,9 +193,15 @@ FaceState from_face_config(const projects::FaceConfig& config, const FaceState& 
   if (config.hair_color) s.values.hair_color = to_face(*config.hair_color);
   if (!config.tint_layers.empty()) {
     if (config.complete) s.values.tints.clear();
+    const auto record_tints = baseline.values.tints;
     for (const auto& t : config.tint_layers) {
-      face::TintLayer layer{static_cast<std::uint16_t>(t.index), to_face(t.color), std::clamp(t.alpha, 0.0f, 1.0f),
-                            static_cast<std::int32_t>(t.preset)};
+      face::TintLayer layer{static_cast<std::uint16_t>(t.index), to_face(t.color), std::clamp(t.alpha, 0.0f, 1.0f), t.preset};
+      // Files written before 2026-10-14 stored a missing TINP (-1) as 0. A layer that is otherwise
+      // the record's own keeps the record's -1, so an unedited layer still matches the record.
+      const auto same = std::find_if(record_tints.begin(), record_tints.end(), [&](const face::TintLayer& r) {
+        return r.index == layer.index && r.color == layer.color && r.value == layer.value;
+      });
+      if (layer.preset == 0 && same != record_tints.end() && same->preset < 0) layer.preset = same->preset;
       const auto it = std::find_if(s.values.tints.begin(), s.values.tints.end(), [&](const auto& x) { return x.index == layer.index; });
       if (it != s.values.tints.end()) *it = layer;
       else s.values.tints.push_back(layer);

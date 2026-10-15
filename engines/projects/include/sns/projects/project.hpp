@@ -78,7 +78,7 @@ struct TintLayerConfig {
   std::uint32_t index = 0;
   ColorRgb color;
   float alpha = 1.0f;
-  std::uint32_t preset = 0;
+  std::int32_t preset = 0;  // TINP; -1 when the record has none
 
   bool operator==(const TintLayerConfig&) const = default;
 };

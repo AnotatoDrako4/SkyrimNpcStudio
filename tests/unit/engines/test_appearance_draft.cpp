@@ -173,6 +173,31 @@ TEST_CASE("Only a hair color change takes Hair Color Safe Mode, from the first e
   CHECK(face_build_kind(draft.face_baseline(), reopened) == FaceBuildKind::HairColorSafe);
 }
 
+TEST_CASE("A tint layer without TINP (-1) survives the project round trip", "[appearance][projects]") {
+  // Serana's record has a tint layer without a preset; projects used to store it as 0, so a
+  // reopened hair color edit no longer matched the record and rebuilt the head and its FaceTint.
+  auto recipe = lydia_recipe();
+  recipe.values.tints.push_back({27, {95, 125, 129}, 0.37f, -1});
+  auto baseline = face_state_from_recipe(recipe);
+  baseline.geometry_mode = "preserve";
+  auto edited = baseline;
+  edited.values.hair_color = face::Rgb8{46, 134, 193};
+
+  auto config = to_face_config(edited, recipe);
+  const auto layer = std::find_if(config.tint_layers.begin(), config.tint_layers.end(), [](const auto& t) { return t.index == 27; });
+  REQUIRE(layer != config.tint_layers.end());
+  CHECK(layer->preset == -1);
+  const auto reopened = from_face_config(config, baseline, recipe);
+  CHECK(reopened.values.tints == baseline.values.tints);
+  CHECK(face_build_kind(baseline, reopened) == FaceBuildKind::HairColorSafe);
+
+  // A file written before the fix (preset clamped to 0) gets the record's -1 back for that layer.
+  layer->preset = 0;
+  const auto legacy = from_face_config(config, baseline, recipe);
+  CHECK(legacy.values.tints == baseline.values.tints);
+  CHECK(face_build_kind(baseline, legacy) == FaceBuildKind::HairColorSafe);
+}
+
 TEST_CASE("Format 3 projects store and restore the complete face", "[appearance][projects]") {
   const auto recipe = lydia_recipe();
   auto draft = loaded_draft(recipe);

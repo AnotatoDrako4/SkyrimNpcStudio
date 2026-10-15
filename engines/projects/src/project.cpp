@@ -105,7 +105,7 @@ void from_json(const Json& j, TintLayerConfig& v) {
   v.index = j.value("index", 0u);
   if (j.contains("color")) v.color = j["color"].get<ColorRgb>();
   v.alpha = j.value("alpha", 1.0f);
-  v.preset = j.value("preset", 0u);
+  v.preset = j.value("preset", std::int32_t{0});  // -1 (no TINP) since 2026-10-14; older files clamped it to 0
 }
 void to_json(Json& j, const SculptConfig& v) {
   j = {{"host", v.host}, {"vertexCount", v.vertex_count}, {"deltas", v.deltas}};
