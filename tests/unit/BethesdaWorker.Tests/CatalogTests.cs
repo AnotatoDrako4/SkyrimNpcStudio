@@ -15,7 +15,7 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
         Assert.Equal(4, r.PluginCount);
         Assert.Equal(4, r.NpcCount);          // Lydia, Hert (vampire), guard template, templated guard
         Assert.Equal(7, r.ArmorCount);        // 5 vanilla-like + 2 from the ESL pack
-        Assert.Equal(1, r.OutfitCount);
+        Assert.Equal(2, r.OutfitCount);       // HousecarlOutfit, GuardConflictOutfit
         Assert.DoesNotContain(r.Issues, i => i.Severity == "error");
     }
 

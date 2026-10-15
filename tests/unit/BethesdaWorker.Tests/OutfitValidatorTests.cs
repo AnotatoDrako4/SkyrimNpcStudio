@@ -43,6 +43,22 @@ public sealed class OutfitValidatorTests(CatalogFixture fixture) : IClassFixture
     }
 
     [Fact]
+    public void AConflictAlreadyInTheNpcsOutfit_IsAWarning_ButANewOneIsAnError()
+    {
+        var guard = SyntheticLoadOrder.GuardTemplate.ToString();
+        // Its current outfit already has two body pieces: keeping them is how it is in game.
+        var kept = Validate(guard, SyntheticLoadOrder.SteelCuirass.ToString(), SyntheticLoadOrder.ElvenCuirass.ToString());
+        Assert.DoesNotContain(kept.Issues, i => i.Code == "SlotConflict");
+        Assert.Contains(kept.Issues, i => i.Code == "SlotConflictInherited" && i.Severity == "warning");
+
+        // A third body piece added by the edit is a real conflict.
+        var added = Validate(guard, SyntheticLoadOrder.SteelCuirass.ToString(), SyntheticLoadOrder.ElvenCuirass.ToString(),
+            fixture.LoadOrder.CrimsonCuirass.ToString());
+        Assert.False(added.Exportable);
+        Assert.Contains(added.Issues, i => i.Code == "SlotConflict" && i.Subject == fixture.LoadOrder.CrimsonCuirass.ToString());
+    }
+
+    [Fact]
     public void ArmorWithoutAddonForNordArmorRace_IsInvisible()
     {
         // NordRace → armor race DefaultRace; the hood only has an ARMA for KhajiitRace.

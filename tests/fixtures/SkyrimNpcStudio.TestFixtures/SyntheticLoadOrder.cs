@@ -33,6 +33,8 @@ public sealed class SyntheticLoadOrder : IDisposable
     public static readonly FormKey DefaultRace = new(Skyrim, 0x000019);
     public static readonly FormKey KhajiitRace = new(Skyrim, 0x013745);
     public static readonly FormKey HousecarlOutfit = new(Skyrim, 0x0A0010);
+    /// <summary>GuardTemplate's outfit: two body pieces sharing slot 32, as some mod outfits ship.</summary>
+    public static readonly FormKey GuardConflictOutfit = new(Skyrim, 0x0A0011);
     public static readonly FormKey SteelCuirass = new(Skyrim, 0x013952);
     public static readonly FormKey SteelBoots = new(Skyrim, 0x013951);
     public static readonly FormKey SteelGauntlets = new(Skyrim, 0x013953);
@@ -146,9 +148,18 @@ public sealed class SyntheticLoadOrder : IDisposable
         vampire.Configuration.Flags = NpcConfiguration.Flag.Female;
         master.Npcs.Add(vampire);
 
+        master.Outfits.Add(new Outfit(GuardConflictOutfit, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "GuardConflictOutfit",
+            Items = new ExtendedList<IFormLinkGetter<IOutfitTargetGetter>>
+            {
+                new FormLink<IOutfitTargetGetter>(SteelCuirass),
+                new FormLink<IOutfitTargetGetter>(ElvenCuirass),
+            },
+        });
         var template = new Npc(GuardTemplate, SkyrimRelease.SkyrimSE) { EditorID = "GuardTemplate", Name = "Guard" };
         template.Race.SetTo(NordRace);
-        template.DefaultOutfit.SetTo(HousecarlOutfit);
+        template.DefaultOutfit.SetTo(GuardConflictOutfit);
         master.Npcs.Add(template);
 
         var guard = new Npc(TemplatedGuard, SkyrimRelease.SkyrimSE) { EditorID = "TemplatedGuard", Name = "Whiterun Guard" };
