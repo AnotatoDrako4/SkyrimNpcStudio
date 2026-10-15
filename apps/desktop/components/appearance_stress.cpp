@@ -21,6 +21,12 @@
 #include <deque>
 #include <memory>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+
 #include "viewmodels/studio_controller.hpp"
 #include "sns/core/text.hpp"
 #include "sns/face/facegen.hpp"
@@ -30,6 +36,13 @@ namespace {
 
 const char* const kPalette[] = {"#111111", "#3B2219", "#5A3825", "#8B5A2B", "#C2B280", "#E6C280",
                                 "#A53A1E", "#C0392B", "#808080", "#ECECEC", "#2980B9", "#8E44AD"};
+
+// Private bytes of this process (logged, not asserted: allocator caches make one-off growth normal).
+qint64 process_memory_mb() {
+  PROCESS_MEMORY_COUNTERS_EX counters{};
+  if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) return -1;
+  return static_cast<qint64>(counters.PrivateUsage / (1024 * 1024));
+}
 
 struct Stress : std::enable_shared_from_this<Stress> {
   QPointer<QQuickWindow> window;
@@ -1300,6 +1313,133 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->check_hair_safe(color);
         self->step();
       });
+    } else if (name == "undo-redo-exact") {
+      // Undo/redo land on exact states. Consecutive hair colors merge into one entry (like dragging the
+      // picker), so a height edit separates them: hair A, height, hair B = three entries.
+      const QColor a("#8E44AD"), b("#16A085");
+      auto base_hair = std::make_shared<QColor>();
+      auto base_height = std::make_shared<float>(0.f);
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, base_hair, base_height] {
+        *base_hair = self->appearance()->hair_color();
+        *base_height = self->appearance()->height();
+        self->step();
+      });
+      steps.push_back([self, hair, a] { hair(a); self->then_idle(); });
+      steps.push_back([self, base_height] { self->appearance()->setHeight(*base_height + 0.05f); self->then_idle(); });
+      steps.push_back([self, hair, b] { hair(b); self->then_idle(); });
+      struct Expect { bool undo; QColor hair; bool raised; const char* what; };
+      const std::vector<Expect> expected = {{true, a, true, "undo: hair A, raised"}, {true, a, false, "undo: hair A, record height"},
+                                            {true, QColor(), false, "undo: record"}, {false, a, false, "redo: hair A"},
+                                            {false, a, true, "redo: raised"}, {false, b, true, "redo: hair B, raised"}};
+      for (const auto& e : expected) {
+        steps.push_back([self, e] { e.undo ? self->appearance()->undo() : self->appearance()->redo(); self->then_idle(); });
+        steps.push_back([self, e, base_hair, base_height] {
+          const QColor want = e.hair.isValid() ? e.hair : *base_hair;
+          const float want_h = e.raised ? *base_height + 0.05f : *base_height;
+          const auto got = self->appearance()->hair_color();
+          self->check(got.name() == want.name() && std::abs(self->appearance()->height() - want_h) < 1e-4f,
+                      QStringLiteral("%1 (hair %2, height %3)").arg(QString::fromLatin1(e.what), got.name()).arg(self->appearance()->height()));
+          self->step();
+        });
+      }
+      steps.push_back([self] {
+        self->check(!self->appearance()->can_redo(), "nothing left to redo");
+        self->check_hair_view(self->appearance()->hair_color());
+        self->check_exportable_or_explained();
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
+      // Two consecutive colors are one entry: one undo goes back to before both.
+      steps.push_back([self, hair] {
+        hair(QColor("#C0392B"));
+        self->after(30, [self, hair] { hair(QColor("#2980B9")); self->then_idle(); });
+      });
+      steps.push_back([self] { self->appearance()->undo(); self->then_idle(); });
+      steps.push_back([self, base_hair] {
+        self->check(self->appearance()->hair_color().name() == base_hair->name(),
+                    "consecutive colors undo as one entry: " + self->appearance()->hair_color().name());
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
+    } else if (name == "switch-npc-rapid") {
+      // Thirty actions per round across three NPCs (selections, plus hair edits fired while one loads),
+      // 15 or 60 ms apart. The editor must end on the last selected NPC, loaded, with its record face.
+      const QStringList cycle = {second_npc, QStringLiteral("01363F:Skyrim.esm"), primary_npc};
+      for (int round = 0; round < 3; ++round) {
+        steps.push_back([self, hair, cycle, round] {
+          self->log(QStringLiteral("round %1, memory %2 MB").arg(round + 1).arg(process_memory_mb()));
+          std::vector<std::function<void()>> actions;
+          for (int i = 0; i < 30; ++i) {
+            actions.push_back([self, hair, cycle, i] {
+              if (i % 4 == 1 && self->appearance()->loaded()) hair(QColor(kPalette[i % std::size(kPalette)]));
+              else self->studio->selectNpc(cycle[i % cycle.size()]);
+            });
+          }
+          self->chain(std::move(actions), round % 2 == 0 ? 15 : 60, [self, cycle] {
+            self->studio->selectNpc(cycle.back());
+            self->then_idle();
+          });
+        });
+        steps.push_back([self, round] {
+          self->check(self->appearance()->npc_form_key() == self->primary_npc && self->appearance()->loaded(),
+                      QStringLiteral("round %1 ends on %2, loaded").arg(round + 1).arg(self->appearance()->npc_form_key()));
+          self->check(!self->appearance()->has_face_edits(), "the last selected NPC starts with the record's face");
+          self->step();
+        });
+      }
+      steps.push_back([self, hair] {
+        self->log(QStringLiteral("after 3 rounds, memory %1 MB").arg(process_memory_mb()));
+        hair(QColor("#E67E22"));
+        self->then_idle();
+      });
+      steps.push_back([self] {
+        self->check_hair_view(QColor("#E67E22"));
+        self->check_exportable_or_explained();
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
+    } else if (name == "project-cycle") {
+      // A two-NPC project saved once, then opened five times; each time both NPCs come back with their
+      // own hair color, including switches fired while one is still loading.
+      const QString other = QStringLiteral("01363F:Skyrim.esm");
+      const QColor a("#1ABC9C"), b("#D35400");
+      const auto project = QDir(work_dir).filePath(QStringLiteral("CycleProject.snps"));
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, hair, a] { hair(a); self->then_idle(); });
+      steps.push_back([self, other] { self->studio->outfit()->addCurrentToProject(); self->studio->selectNpc(other); self->then_idle(); });
+      steps.push_back([self, hair, b] { hair(b); self->then_idle(); });
+      steps.push_back([self, project] {
+        self->studio->outfit()->addCurrentToProject();
+        self->check(self->studio->outfit()->saveProject(project, QStringLiteral("CycleProject")), "project with two NPCs saved: " + project);
+        self->studio->selectNpc(self->second_npc);  // leave both NPCs before reopening
+        self->then_idle();
+      });
+      for (int i = 0; i < 5; ++i) {
+        steps.push_back([self, project, i] {
+          self->log(QStringLiteral("open %1, memory %2 MB").arg(i + 1).arg(process_memory_mb()));
+          self->check(self->studio->outfit()->openProject(project), QStringLiteral("open %1").arg(i + 1));
+          self->then_idle();
+        });
+        steps.push_back([self, other, a, i] {
+          self->check(self->appearance()->npc_form_key() == self->primary_npc && self->appearance()->hair_color().name() == a.name(),
+                      QStringLiteral("open %1: %2 with hair %3").arg(i + 1).arg(self->appearance()->npc_form_key(), self->appearance()->hair_color().name()));
+          self->studio->outfit()->loadNpcFromProject(other);
+          self->after(20, [self] { self->studio->outfit()->loadNpcFromProject(self->primary_npc); });
+          self->after(40, [self, other] { self->studio->outfit()->loadNpcFromProject(other); self->then_idle(); });
+        });
+        steps.push_back([self, other, b, i] {
+          self->check(self->appearance()->npc_form_key() == other && self->appearance()->hair_color().name() == b.name(),
+                      QStringLiteral("open %1: %2 with hair %3").arg(i + 1).arg(self->appearance()->npc_form_key(), self->appearance()->hair_color().name()));
+          self->step();
+        });
+      }
+      steps.push_back([self] {
+        self->log(QStringLiteral("after 5 opens, memory %1 MB").arg(process_memory_mb()));
+        self->studio->selectNpc(self->primary_npc);
+        self->then_idle();
+      });
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {
         hair(QColor("#E6C280"));
@@ -1327,7 +1467,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,
