@@ -18,6 +18,45 @@ Skyrim. Detalle, pruebas y recuperación en
 Nota de pruebas: `sns_integration_tests` necesita el entorno de `scripts/dev-env.ps1`; sin él el
 worker (framework .NET 10) no arranca con el .NET 8 del sistema y la prueba espera sin progreso.
 
+## Actualización 2026-10-15 — árbol `build\debug` inconsistente (corrupción del montón y «guardar/reabrir»)
+
+Dos problemas abiertos de la rama de Serana (corrupción del montón al cerrar tras el arnés de
+Serana; el cambio de color tras reabrir el proyecto construido como `full` y no `hair-safe`) **no se
+reprodujeron** al reconstruir el árbol Debug bien configurado. El árbol que los mostraba tenía tres
+defectos medidos el 2026-10-15 (estado local, no del repositorio):
+
+1. **Dependencias de cabeceras vacías.** `ninja -t deps` daba `#deps 0` en 133 objetos propios
+   (`ctest -R "build:header"` fallaba). Causa: con MSVC en español `cl /showIncludes` escribe
+   «inclusión» en la página de códigos de la consola y CMake guardaba el prefijo ya convertido
+   (`inclusi├│n`, bytes distintos de los que Ninja ve al compilar). Un cambio en una cabecera
+   (`facegen.hpp`, `appearance_draft.hpp`) no recompilaba a quienes la incluían: se enlazaban objetos
+   con otra disposición de las estructuras. Corrección en `CMakeLists.txt`: el prefijo se mide con el
+   propio compilador en la consola que configura (`ENCODING NONE`, bytes sin convertir) y se asigna a
+   `CMAKE_CL_SHOWINCLUDES_PREFIX`; basta compilar desde la consola con la misma página de códigos
+   (`scripts/dev-env.ps1` la fija en UTF-8). Tras la corrección `ctest -R "build:header"` pasa.
+2. **Caché de CMake sin los valores por defecto de MSVC.** `CMAKE_CXX_FLAGS`,
+   `CMAKE_CXX_FLAGS_DEBUG` y `CMAKE_EXE_LINKER_FLAGS_DEBUG` estaban vacías: el código de terceros
+   (Catch2, nifly, nlohmann_json) se compilaba sin `/EHsc` (un `SKIP()` de Catch2 abortaba el
+   proceso con el diálogo «abort() has been called»), sin `/RTC1` y el enlace Debug sin `/debug`
+   (sin `.pdb`: el informe de cierre simbolizaba contra un `.pdb` antiguo y la prueba
+   `app:crash report … (access-violation)` fallaba con nombres de funciones sin relación).
+   `cmake/CompilerOptions.cmake` ahora **falla al configurar** si falta `/EHsc` en
+   `CMAKE_CXX_FLAGS` o `/debug` en `CMAKE_EXE_LINKER_FLAGS_DEBUG` (Debug) y pide
+   `cmake --preset <preset> --fresh`.
+3. Un árbol así no se arregla con una compilación incremental: `cmake --preset debug --fresh` y
+   `cmake --build --preset debug`.
+
+Resultado tras reconstruir (Windows, Debug, perfil MO2 `Default` real): `ctest --preset debug`
+128/128 sin fallos (2 omitidos: Blender sin `SNS_LOCAL_BLENDER`), `dotnet test` 67/67 y el arnés de
+Serana `hair-single, replacer-facegen, hair-safe, early-edit, sliders, undo-redo, export-reopen`
+terminó en `summary: PASSED` (410 comprobaciones, 0 fallos, cierre limpio sin aviso del CRT), con
+`export-reopen` construyendo `hair-safe` tras reabrir el proyecto. Esto **no demuestra** que la
+corrupción anterior viniera de los objetos obsoletos: es la causa más probable (estructuras con
+distinta disposición entre objetos) y deja de reproducirse, pero la comprobación con el preset
+`asan` sigue siendo la verificación definitiva (comando en §4). Se retiró del código de cierres la
+instrumentación de asignaciones (rango fijo de solicitudes) añadida para esa búsqueda; se mantiene el
+manejador de informes del CRT de Debug (sin diálogo modal, con informe y minivolcado).
+
 Este documento recoge la investigación del cierre reportado al cambiar el color de cabello de
 Lydia (`0A2C8E:Skyrim.esm`), lo que se corrigió, cómo se diagnostica un cierre a partir de ahora y
 cómo se ejecutan las pruebas de regresión.

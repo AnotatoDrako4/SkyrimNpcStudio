@@ -10,11 +10,33 @@ if(NOT WIN32)
 endif()
 
 # Ninja tracks header dependencies through the /showIncludes prefix of cl.exe. A localized prefix
-# (non-ASCII) only matches when the build runs in a UTF-8 console; otherwise header changes stop
-# recompiling their users (see docs/CRASH_DIAGNOSTICS.md and tests "build:header dependencies").
+# (non-ASCII, e.g. Spanish "Nota: inclusión del archivo:") is stored by CMake after converting cl's
+# output from the console code page to UTF-8, while Ninja compares raw bytes at build time: the
+# two only agree by luck, otherwise header changes stop recompiling their users (stale objects
+# with old struct layouts get linked; see docs/CRASH_DIAGNOSTICS.md, test "build:header
+# dependencies"). Measure the prefix exactly as the compiler writes it in the console that is
+# configuring (ENCODING NONE keeps the raw bytes); builds must then run in a console with the same
+# code page, which scripts/dev-env.ps1 guarantees (UTF-8).
 if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT "${CMAKE_CXX_CL_SHOWINCLUDES_PREFIX}" MATCHES "^[ -~]*$")
-  message(STATUS "Localized MSVC (/showIncludes prefix '${CMAKE_CXX_CL_SHOWINCLUDES_PREFIX}'): build from a UTF-8 "
-                 "console (scripts/dev-env.ps1 sets it) or header dependencies are not recorded.")
+  set(_sns_probe "${CMAKE_BINARY_DIR}/CMakeFiles/sns_showincludes")
+  file(WRITE "${_sns_probe}/sns_showincludes_probe.h" "#pragma once\n")
+  file(WRITE "${_sns_probe}/probe.cpp" "#include \"sns_showincludes_probe.h\"\n")
+  execute_process(COMMAND "${CMAKE_CXX_COMPILER}" /nologo /showIncludes /c probe.cpp "/Fo${_sns_probe}/probe.obj"
+                  WORKING_DIRECTORY "${_sns_probe}" OUTPUT_VARIABLE _sns_out ERROR_QUIET ENCODING NONE)
+  string(FIND "${_sns_out}" "sns_showincludes_probe.h" _sns_pos)
+  if(_sns_pos GREATER 0)
+    string(SUBSTRING "${_sns_out}" 0 ${_sns_pos} _sns_head)
+    string(REGEX REPLACE "[A-Za-z]:[^:]*$" "" _sns_head "${_sns_head}")   # drop the include path
+    string(REGEX MATCH "[^\r\n]*$" _sns_prefix "${_sns_head}")             # the line holding the prefix
+    string(STRIP "${_sns_prefix}" _sns_prefix)
+    if(_sns_prefix)
+      set(CMAKE_CL_SHOWINCLUDES_PREFIX "${_sns_prefix}")   # the one the Ninja generator reads
+      set(CMAKE_C_CL_SHOWINCLUDES_PREFIX "${_sns_prefix}")
+      set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${_sns_prefix}")
+      message(STATUS "Localized MSVC: /showIncludes prefix measured in this console (${_sns_prefix}); "
+                     "build from a console with the same code page (scripts/dev-env.ps1).")
+    endif()
+  endif()
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

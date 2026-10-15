@@ -14,7 +14,8 @@ VERIFICACIÓN, VERIFICADO EN CLOUD, VERIFICADO EN WINDOWS, VERIFICADO EN SKYRIM,
 | P2 FaceGen Geometry Integrity Guard (pieza, propiedad, antes, después) | VERIFICADO EN WINDOWS | unitarias: posiciones, textura, índices, UV, shape eliminada, archivo ilegible |
 | P3 Exportación mínima (`OnlyFields`, releída con Mutagen) | VERIFICADO EN WINDOWS | .NET `FacePatchExportTests`; manifiesto de la exportación real de Serana: `changedFields = [HCLF]` |
 | Diagnóstico de compatibilidad facial y tarjeta «Protección facial» | IMPLEMENTADO SIN VERIFICACIÓN visual por una persona | unitarias `[face][compat]`; ejecución en la app con Serana |
-| P4 Regresiones (Lydia, suites completas, `local-review`) | EN DESARROLLO | ver registro de la entrega |
+| Estabilidad del árbol de compilación (dependencias de cabeceras, caché MSVC) | VERIFICADO EN WINDOWS | 2026-10-15: `build:header` pasa; configuración falla si la caché pierde `/EHsc` o `/debug`; ver [CRASH_DIAGNOSTICS.md](CRASH_DIAGNOSTICS.md) |
+| P4 Regresiones (Lydia, suites completas, `local-review`) | EN DESARROLLO | 2026-10-15, Windows, Debug, perfil MO2 `Default`: `ctest` 128/128 (2 omitidos: Blender), `dotnet test` 67/67, arnés Serana de 7 escenarios `PASSED` dos veces (410 comprobaciones). Pendiente: regresión Lydia con el arnés, `local-review.ps1`, ASan |
 | Comportamiento dentro de Skyrim | PENDIENTE | prueba manual |
 | P5–P6 Creador de mods — Modo fácil | PENDIENTE | diseño en [EASY_MOD_CREATOR.md](EASY_MOD_CREATOR.md) |
 

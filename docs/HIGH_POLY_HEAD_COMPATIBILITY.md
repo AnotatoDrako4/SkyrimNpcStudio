@@ -150,14 +150,18 @@ a `Skyrim/Data`.
 
 ## 7. Limitaciones y problemas abiertos
 
-- **Corrupción del montón al cerrar (abierto):** una ejecución del arnés sobre Serana
-  (`hair-single, replacer-facegen, hair-safe, early-edit, sliders, undo-redo, export-reopen`) acabó,
-  al cerrar la app Debug, con el aviso del CRT «HEAP CORRUPTION DETECTED … wrote to memory after
-  end of heap buffer». Origen sin localizar; pendiente de una ejecución con ASan. Hasta entonces
-  nada de esta rama se considera estable.
-- **Guardar y reabrir (abierto):** tras reabrir el proyecto, el cambio de color de Serana se
-  construyó como build completo (con FaceTint recompuesto) y no por Hair Color Safe Mode: el ciclo
-  del proyecto altera algún dato del rostro de Serana. Pendiente de corregir.
+- **Corrupción del montón al cerrar (no reproducida, sin ASan):** una ejecución del arnés sobre
+  Serana acabó, en un árbol Debug con 133 objetos sin dependencias de cabeceras y sin los
+  indicadores por defecto de MSVC, con «HEAP CORRUPTION DETECTED … wrote to memory after end of
+  heap buffer». Tras reconstruir el árbol correctamente (ver `docs/CRASH_DIAGNOSTICS.md`,
+  actualización 2026-10-15) el mismo arnés terminó dos veces en `summary: PASSED` (410
+  comprobaciones, 0 fallos) y cerró sin aviso. Causa más probable: objetos compilados contra otra
+  disposición de `FaceGenBuild`/`FaceState`; no está demostrada. Pendiente: una ejecución con el
+  preset `asan` como verificación definitiva.
+- **Guardar y reabrir (resuelto en el árbol corregido):** el cambio de color de Serana tras reabrir el
+  proyecto se construía como `full`; en el árbol reconstruido el escenario `export-reopen` da
+  `build kind hair-safe`, integridad `hair-tint-only` y FaceGen exportado = ganador salvo HairTint
+  (3.726.729 B). La prueba unitaria con datos tipo Lydia ya daba `HairColorSafe`.
 - Verificación dentro de Skyrim: pendiente (manual).
 - Solo NIF SSE (`BSLightingShaderProperty` tipo 6); otras disposiciones se rechazan sin cambios.
 - El FaceGen exportado deriva del FaceGen del replacer: es para uso personal salvo permiso del
