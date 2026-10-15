@@ -202,6 +202,26 @@ public sealed class NpcSafePatchTests : IDisposable
     }
 
     [Fact]
+    public void ALocalizedNameWrittenAsTheSameText_IsNotAChange()
+    {
+        // Skyrim.esm keeps names in string tables; a non-localized patch writes the resolved text.
+        var winner = LydiaWinner();
+        var original = winner.DeepCopy();
+        original.Name = new Mutagen.Bethesda.Strings.TranslatedString(Mutagen.Bethesda.Strings.Language.Spanish, "Lydia");
+        var exported = winner.DeepCopy();
+        exported.Name = "Lydia";
+
+        var violations = new List<Issue>();
+        var diff = NpcSafePatch.Check(original, exported, TestPatch, new HashSet<string>(), "nothing", violations);
+        Assert.Empty(violations);
+        Assert.Empty(diff.Changes);
+
+        exported.Name = "Otra";
+        NpcSafePatch.Check(original, exported, TestPatch, new HashSet<string>(), "nothing", violations);
+        Assert.Contains(violations, v => v.Message.Contains("Name", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void AnUnchangedCopy_HasNoDifferencesAtAll()
     {
         var winner = LydiaWinner();

@@ -180,8 +180,16 @@ internal static partial class NpcSafePatch
             }
         }
 
-        return any ? differing : throw new InvalidOperationException("Mutagen's equality mask for NPC_ exposes no members; the safe patch check cannot run.");
+        if (!any) throw new InvalidOperationException("Mutagen's equality mask for NPC_ exposes no members; the safe patch check cannot run.");
+        // A localized master (Skyrim.esm) stores a name as a string-table reference; a non-localized patch
+        // stores the text the session resolved in the game's language. Same text, different storage:
+        // what the game shows does not change, so it is not a change.
+        return differing.Where(name => !SameResolvedText(Read(original, name), Read(exported, name))).ToList();
     }
+
+    private static bool SameResolvedText(object? a, object? b) =>
+        a is Mutagen.Bethesda.Strings.ITranslatedStringGetter ta && b is Mutagen.Bethesda.Strings.ITranslatedStringGetter tb
+        && string.Equals(ta.String, tb.String, StringComparison.Ordinal);
 
     /// <summary>A mask member is a bool or a MaskItem whose Overall is the bool; null = nothing to compare.</summary>
     private static bool IsEqual(object? member)

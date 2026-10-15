@@ -81,7 +81,9 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
 
     [JsonRpcMethod(Methods.SearchHeadParts)]
     public SearchHeadPartsResponse SearchHeadParts(SearchHeadPartsRequest request) =>
-        Guard(() => state.Read(c => c.Queries.SearchHeadParts(request)));
+        Guard(() => state.Read(c => string.IsNullOrWhiteSpace(request.NpcFormKey)
+            ? c.Queries.SearchHeadParts(request)
+            : HeadPartQueries.ForNpc(c.Session, c.Queries, request)));
 
     [JsonRpcMethod(Methods.GetFaceRecipe)]
     public FaceRecipeResponse GetFaceRecipe(FaceRecipeRequest request) =>

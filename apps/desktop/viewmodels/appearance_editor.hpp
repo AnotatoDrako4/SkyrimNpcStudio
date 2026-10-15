@@ -96,6 +96,8 @@ class AppearanceEditor : public QObject {
   // Easy Mod Creator: what a guided export would write now, its mode and every check
   // (sns::appearance::plan_easy_mod over the face and outfit state of the shared draft).
   Q_PROPERTY(QVariantMap easyModPlan READ easy_mod_plan NOTIFY easyModChanged)
+  // Head parts the current NPC can use (race and sex), from the last searchHeadParts().
+  Q_PROPERTY(QVariantList headPartOptions READ head_part_options NOTIFY headPartOptionsChanged)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
@@ -154,6 +156,7 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] bool exporting() const { return exporting_; }
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
   [[nodiscard]] QVariantMap easy_mod_plan() const;
+  [[nodiscard]] QVariantList head_part_options() const { return head_part_options_; }
   [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
   // The FaceGen the profile loads for the NPC (MO2 winner), as read for the analysis; null if none.
   [[nodiscard]] std::shared_ptr<const std::string> winning_facegen() const { return existing_facegen_; }
@@ -166,6 +169,8 @@ class AppearanceEditor : public QObject {
   Q_INVOKABLE void setHeight(float height);
   Q_INVOKABLE void setHeadPart(const QString& formKey, const QString& type);
   Q_INVOKABLE void removeHeadPart(const QString& type);
+  // Fills headPartOptions with the head parts of `type` ("Hair", "Eyes", ...) valid for this NPC.
+  Q_INVOKABLE void searchHeadParts(const QString& type, const QString& text = {});
   Q_INVOKABLE void setTint(int index, const QColor& color, float value);
   Q_INVOKABLE void setGeometryMode(const QString& mode);
   Q_INVOKABLE void resetFace();
@@ -189,6 +194,7 @@ class AppearanceEditor : public QObject {
   void exportingChanged();
   void exportFinished(bool success, const QString& message, const QString& modDirectory, const QString& zipPath);
   void easyModChanged();
+  void headPartOptionsChanged();
 
  private:
   struct Build;
@@ -219,6 +225,8 @@ class AppearanceEditor : public QObject {
   WorkerClient* worker_;
   ConsoleModel* console_;
   OutfitEditor* outfit_;
+  QVariantList head_part_options_;
+  int head_part_serial_ = 0;
   SnapshotProvider snapshot_;
   appearance::AppearanceDraft& draft_;
   EditHistory* history_;

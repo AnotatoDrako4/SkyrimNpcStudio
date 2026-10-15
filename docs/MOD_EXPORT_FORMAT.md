@@ -56,7 +56,9 @@ operación:
 | Rostro completo (B/C) | `HairColor` (HCLF), `FaceMorph` (NAM9), `FaceParts` (NAMA), `HeadParts` (PNAM), `HeadTexture` (FTST), `Weight` (NAM7), `Height` (NAM6), `TextureLighting` (QNAM), `TintLayers` |
 | Hair Color Safe Mode (`onlyFields`) | solo `HairColor` (y `Height` si se pidió `NAM6`) |
 
-Cualquier otra diferencia → `UnauthorizedNpcChange` (error) y no se entrega nada. Las diferencias
+Cualquier otra diferencia → `UnauthorizedNpcChange` (error) y no se entrega nada. Los textos traducibles (p. ej. `Name`) se comparan por su valor resuelto en el idioma del juego:
+un master localizado (`Skyrim.esm`) guarda una referencia a STRINGS y el parche, no localizado, el texto; es el
+mismo nombre en el juego (como cualquier parche no localizado, queda fijado en ese idioma). Las diferencias
 permitidas forman el **diff semántico** (`semanticDiff`): campo, subregistro, valor original, valor
 exportado, motivo y dependencias (FormKeys a los que apunta el valor nuevo; «(nuevo en este mod)»
 si el registro lo crea el parche). Va en la respuesta RPC, en `manifest.json` y en el README.

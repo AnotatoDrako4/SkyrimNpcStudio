@@ -206,6 +206,11 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   build_timer_.stop();
   cancel_jobs();
   target_ = target;
+  ++head_part_serial_;  // options of the previous NPC are not valid for this one
+  if (!head_part_options_.isEmpty()) {
+    head_part_options_.clear();
+    emit headPartOptionsChanged();
+  }
   diag::set_context("npc", target.form_key + " " + target.editor_id + " (" + target.name + ")");
   diag::set_context("winningPlugin", target.winning_plugin);
   base_recipe_.reset();
@@ -932,6 +937,26 @@ void AppearanceEditor::setHeadPart(const QString& formKey, const QString& type) 
   edit(std::move(next), tr("Cambiar %1").arg(type));
 }
 
+void AppearanceEditor::searchHeadParts(const QString& type, const QString& text) {
+  if (target_.form_key.empty() || !worker_) return;
+  const int serial = ++head_part_serial_;
+  Json params{{"npcFormKey", target_.form_key}, {"limit", 300}};
+  if (!type.isEmpty()) params["type"] = ss(type);
+  if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
+  worker_->call(method::kSearchHeadParts, params, 30s, this,
+                [this, serial](const Json& r) {
+                  if (serial != head_part_serial_) return;
+                  head_part_options_ = to_variant(r.value("items", Json::array())).toList();
+                  emit headPartOptionsChanged();
+                },
+                [this, serial](int, const QString& message, const Json&) {
+                  if (serial != head_part_serial_) return;
+                  head_part_options_.clear();
+                  emit headPartOptionsChanged();
+                  console_->append("warning", "appearance", tr("Búsqueda de piezas de cabeza: %1").arg(message));
+                });
+}
+
 void AppearanceEditor::removeHeadPart(const QString& type) {
   if (!recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
   const auto wanted = face::string_to_head_part_type(ss(type));
@@ -1367,7 +1392,15 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                 [this, stage](int, const QString& error, const Json& data) {
                   QDir(stage).removeRecursively();
                   QVariantMap extra{{"issues", to_variant(data.is_object() ? data.value("issues", Json::array()) : Json::array())}};
-                  finish_export(false, tr("Exportación cancelada: %1").arg(error), {}, {}, extra);
+                  // The reasons (e.g. which NPC field the safe patch refused) are part of the message:
+                  // the console, the assistant and the session log show them.
+                  QStringList reasons;
+                  for (const auto& i : extra.value("issues").toList()) {
+                    const auto m = i.toMap();
+                    if (m.value("severity").toString() == "error") reasons << m.value("code").toString() + ": " + m.value("message").toString();
+                  }
+                  finish_export(false, tr("Exportación cancelada: %1").arg(error) + (reasons.isEmpty() ? QString() : "\n" + reasons.join("\n")),
+                                {}, {}, extra);
                 });
 }
 

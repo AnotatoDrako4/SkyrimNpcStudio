@@ -49,6 +49,8 @@ ScrollView {
     // Hair color edits need the analysed FaceGen and a HairTint shader (Hair Color Safe Mode).
     readonly property bool hairColorAllowed: !root.studio.appearance.analysing
         && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "hair-color")
+    readonly property bool headPartsAllowed: !root.studio.appearance.analysing
+        && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "head-parts")
 
     ColumnLayout {
         width: root.availableWidth
@@ -194,6 +196,60 @@ ScrollView {
                         ToolTip.visible: hovered
                     }
                 }
+            }
+        }
+
+        // Change a head part: only parts valid for this NPC's race and sex (worker query), applied as
+        // a PNAM edit; the head is rebuilt and the export carries it. Blocked for heads whose morphs do
+        // not match their mesh (see «Protección facial»).
+        Text {
+            text: qsTr("Cambiar pieza de cabeza")
+            color: Theme.textDim
+            font.pixelSize: 11
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            enabled: root.headPartsAllowed
+            ComboBox {
+                id: partType
+                implicitWidth: 120
+                model: ["Hair", "Eyes", "Eyebrows", "FacialHair", "Scars"]
+            }
+            TextField {
+                id: partFilter
+                Layout.fillWidth: true
+                placeholderText: qsTr("Filtrar (opcional)")
+                onAccepted: root.studio.appearance.searchHeadParts(partType.currentText, partFilter.text)
+            }
+            Button {
+                text: qsTr("Buscar")
+                onClicked: root.studio.appearance.searchHeadParts(partType.currentText, partFilter.text)
+            }
+        }
+        Text {
+            visible: !root.headPartsAllowed
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Theme.textDim
+            font.pixelSize: 11
+            text: root.studio.appearance.analysing ? qsTr("Disponible cuando termine el análisis del FaceGen.")
+                                                   : qsTr("Bloqueado para esta cabeza: ver «Protección facial».")
+        }
+        ListView {
+            id: partOptions
+            Layout.fillWidth: true
+            Layout.preferredHeight: count > 0 ? Math.min(contentHeight, 180) : 0
+            visible: count > 0
+            clip: true
+            enabled: root.headPartsAllowed
+            model: root.studio.appearance.headPartOptions
+            delegate: ItemDelegate {
+                required property var modelData
+                width: ListView.view.width
+                height: 26
+                font.pixelSize: 11
+                text: (modelData.editorId || modelData.formKey) + "  ·  " + modelData.plugin
+                onClicked: root.studio.appearance.setHeadPart(modelData.formKey, modelData.type)
             }
         }
 

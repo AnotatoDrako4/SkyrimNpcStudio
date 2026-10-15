@@ -44,6 +44,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
   bool finished = false;
   QStringList failures;
   QString primary_npc;
+  bool head_part_skip = false;
   bool baseline_outfit_exportable = false;
   std::deque<std::function<void()>> steps;  // the current scenario, one action per entry
 
@@ -824,6 +825,76 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->appearance()->resetFace();
         self->then_idle();
       });
+    } else if (name == "head-part") {
+      // Beta item 5: change a head part to one valid for the NPC (worker query), rebuild, export, and
+      // check through the worker's semantic diff that PNAM changed and nothing outside the face did.
+      // A head whose diagnosis blocks head parts must refuse the edit instead.
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        if (self->appearance()->operation_blocked(QStringLiteral("head-parts"))) {
+          const auto before = self->appearance()->head_parts();
+          self->appearance()->setHeadPart(QStringLiteral("000001:Skyrim.esm"), QStringLiteral("Hair"));
+          self->check(self->appearance()->head_parts() == before, "head parts blocked for this head: the edit is refused");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        self->appearance()->searchHeadParts(QStringLiteral("Hair"));
+        auto poll = std::make_shared<std::function<void()>>();
+        auto started = self->clock.elapsed();
+        *poll = [self, poll, started] {
+          if (self->appearance()->head_part_options().isEmpty() && self->clock.elapsed() - started < 15000) {
+            self->after(100, *poll);
+            return;
+          }
+          const auto options = self->appearance()->head_part_options();
+          self->check(!options.isEmpty(), QStringLiteral("hair head parts valid for this NPC: %1").arg(options.size()));
+          QStringList current;
+          for (const auto& h : self->appearance()->head_parts()) current << h.toMap().value("formKey").toString();
+          QString pick;
+          for (const auto& o : options) {
+            const auto fk = o.toMap().value("formKey").toString();
+            if (!current.contains(fk)) { pick = fk; break; }
+          }
+          self->check(!pick.isEmpty(), "a different hair to try: " + pick);
+          if (!pick.isEmpty()) {
+            self->log("setHeadPart " + pick + " (Hair)");
+            self->appearance()->setHeadPart(pick, QStringLiteral("Hair"));
+          }
+          self->then_idle();
+        };
+        self->after(100, *poll);
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("head-part-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, dir] {
+        if (self->head_part_skip) { self->step(); return; }
+        const auto plan = self->appearance()->easy_mod_plan();
+        self->check(plan.value("mode").toString() == "face-overhaul", "head part edit plans " + plan.value("mode").toString());
+        self->check_exportable();
+        self->log("exportFaceOverhaul to " + dir);
+        self->appearance()->exportFaceOverhaul(QStringLiteral("SNS_HeadPart.esp"), dir, true, false);
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "head part export: " + r.value("message").toString());
+          QStringList fields;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+          }
+          self->check(fields.contains("HeadParts"), "semantic diff contains HeadParts: " + fields.join(", "));
+          const QStringList face{"HairColor", "FaceMorph", "FaceParts", "HeadParts", "HeadTexture", "Weight", "Height", "TextureLighting", "TintLayers"};
+          bool only_face = true;
+          for (const auto& f : fields) only_face &= face.contains(f);
+          self->check(only_face, "only face fields changed");
+          self->check(r.value("verificationProblems").toStringList().isEmpty(),
+                      "exported FaceGen identical to the preview (" + r.value("verifiedFiles").toStringList().join(", ") + ")");
+          self->appearance()->resetFace();
+          self->then_idle();
+        };
+        self->after(100, *wait);
+      });
     } else if (name == "export-reopen") {
       const QColor color("#2E86C1");
       const auto dir = QDir(work_dir).filePath(QStringLiteral("export-%1").arg(QDateTime::currentMSecsSinceEpoch()));
@@ -893,7 +964,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "export-reopen", "switch-npc", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-outfit", "head-part", "export-reopen", "switch-npc", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

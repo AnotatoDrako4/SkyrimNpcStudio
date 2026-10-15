@@ -285,6 +285,11 @@ public sealed record HeadPartSummary
 
 public sealed record SearchHeadPartsRequest
 {
+    /// <summary>
+    /// Only head parts this NPC can use: its race (or morph race) in the part's valid-races list and
+    /// a sex flag that allows it. Extra parts are left out (they come with their parent part).
+    /// </summary>
+    public string? NpcFormKey { get; init; }
     public string? Type { get; init; }
     public string? Text { get; init; }
     public string? Plugin { get; init; }
