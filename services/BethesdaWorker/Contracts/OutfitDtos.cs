@@ -197,6 +197,14 @@ public sealed record FaceAssignment
     /// with MinimalChangeViolated. Null applies the complete face (Values, HeadParts, HeadTexture, Height).
     /// </summary>
     public IReadOnlyList<string>? OnlyFields { get; init; }
+
+    /// <summary>
+    /// For a complete face (no OnlyFields): the NPC_ properties the user changed in the studio
+    /// ("FaceMorph", "FaceParts", "Weight", "TextureLighting", "TintLayers", "HairColor", "HeadParts",
+    /// "HeadTexture", "Height"). Only these are written and only these may differ from the winning
+    /// record (UnauthorizedNpcChange otherwise). Null keeps the previous behavior (the whole face).
+    /// </summary>
+    public IReadOnlyList<string>? RequestedFields { get; init; }
 }
 
 public sealed record ExportFaceOverhaulRequest

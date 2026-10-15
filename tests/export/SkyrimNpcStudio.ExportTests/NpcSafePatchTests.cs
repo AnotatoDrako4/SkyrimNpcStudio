@@ -247,6 +247,73 @@ public sealed class NpcSafePatchTests : IDisposable
         Assert.Contains(violations, v => v.Code == "UnauthorizedNpcChange" && v.Message.Contains("DefaultOutfit", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AnUnreadableMaskVerdict_IsADifference_NeverEqual()
+    {
+        Assert.Null(NpcSafePatch.MaskVerdict(null));
+        Assert.True(NpcSafePatch.MaskVerdict(true));
+        Assert.False(NpcSafePatch.MaskVerdict(false));
+        Assert.False(NpcSafePatch.MaskVerdict(new { Something = 1 }));
+        Assert.False(NpcSafePatch.MaskVerdict(new { Overall = "not a bool" }));
+        Assert.True(NpcSafePatch.MaskVerdict(new { Overall = true }));
+    }
+
+    [Fact]
+    public void RequestedFields_NarrowTheFaceFields()
+    {
+        var allowed = NpcSafePatch.AllowedForFace(new FaceAssignment
+        {
+            NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+            RequestedFields = ["FaceMorph", "Height", "Race"],
+        });
+        Assert.Equal(2, allowed.Count);
+        Assert.Contains("FaceMorph", allowed);
+        Assert.Contains("Height", allowed);
+    }
+
+    [Fact]
+    public void ACompleteFaceWithRequestedFields_WritesOnlyWhatWasRequested()
+    {
+        // The studio sends the complete face; the user only moved sliders. Another weight and skin
+        // tone in the values (round-trip drift) must not reach the record.
+        var winner = LydiaWinner();
+        var nif = Path.Combine(_out, "requested.nif");
+        File.WriteAllBytes(nif, [0x4E, 0x49, 0x46, 0x03]);
+        var faceGen = CatalogQueries.FaceGenFor(SyntheticLoadOrder.Lydia);
+        var request = new ExportFaceOverhaulRequest
+        {
+            PluginName = "SNS_Requested.esp",
+            OutputDirectory = _out,
+            CreateZip = false,
+            Assignments =
+            [
+                new FaceAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    RequestedFields = ["FaceMorph"],
+                    Values = new FaceValuesDto
+                    {
+                        Sliders = Enumerable.Repeat(0.3f, 18).ToList(),
+                        Presets = [0, 0, 0, 0],
+                        Weight = winner.Weight + 25f,
+                        SkinTone = new AppearanceColor(10, 20, 30),
+                        HairColor = new AppearanceColor(1, 2, 3),
+                        Tints = [],
+                    },
+                    HeadParts = winner.HeadParts.Select(h => h.FormKey.ToString()).ToList(),
+                    GeneratedAssets =
+                    [
+                        new GeneratedAsset { SourcePath = nif, DataPath = faceGen.GeometryPath, Sha256 = Sha256Of(nif), Kind = "facegen-geometry" },
+                    ],
+                },
+            ],
+        };
+
+        var response = _state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, CancellationToken.None));
+        var change = Assert.Single(Assert.Single(response.SemanticDiff).Changes);
+        Assert.Equal("FaceMorph", change.Field);
+    }
+
     public void Dispose()
     {
         _state.Dispose();

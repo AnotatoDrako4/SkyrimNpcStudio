@@ -53,10 +53,11 @@ operación:
 | Operación | Campos que puede cambiar |
 |---|---|
 | Atuendo (A, o el atuendo de C) | `DefaultOutfit` (DOFT), `SleepingOutfit` (SOFT) si se pidió |
-| Rostro completo (B/C) | `HairColor` (HCLF), `FaceMorph` (NAM9), `FaceParts` (NAMA), `HeadParts` (PNAM), `HeadTexture` (FTST), `Weight` (NAM7), `Height` (NAM6), `TextureLighting` (QNAM), `TintLayers` |
+| Rostro completo (B/C) | Solo los campos que el usuario cambió (`requestedFields`, calculados por el estudio comparando el borrador con el registro), dentro de `HairColor`, `FaceMorph`, `FaceParts`, `HeadParts`, `HeadTexture`, `Weight`, `Height`, `TextureLighting`, `TintLayers`; el worker escribe solo esos (sin `requestedFields`, todo el rostro) |
 | Hair Color Safe Mode (`onlyFields`) | solo `HairColor` (y `Height` si se pidió `NAM6`) |
 
-Cualquier otra diferencia → `UnauthorizedNpcChange` (error) y no se entrega nada. Los textos traducibles (p. ej. `Name`) se comparan por su valor resuelto en el idioma del juego:
+Cualquier otra diferencia → `UnauthorizedNpcChange` (error) y no se entrega nada. Un miembro de la máscara que no se puede interpretar cuenta como diferencia; uno que la máscara no informa se
+vuelve a comparar con el valor completo de la propiedad (nunca se asume igualdad). Los textos traducibles (p. ej. `Name`) se comparan por su valor resuelto en el idioma del juego:
 un master localizado (`Skyrim.esm`) guarda una referencia a STRINGS y el parche, no localizado, el texto; es el
 mismo nombre en el juego (como cualquier parche no localizado, queda fijado en ese idioma). Las diferencias
 permitidas forman el **diff semántico** (`semanticDiff`): campo, subregistro, valor original, valor

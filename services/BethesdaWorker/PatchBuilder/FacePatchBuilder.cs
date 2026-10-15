@@ -245,6 +245,8 @@ internal static partial class FacePatchBuilder
         SkyrimMod patch, HashSet<string> usedEditorIds, List<ExportedRecord> records, List<Issue> issues)
     {
         var subject = winner.FormKey.ToString();
+        // Only what the user changed is written (RequestedFields); the rest stays the winner's copy.
+        bool Want(string field) => face.RequestedFields is not { } requested || requested.Contains(field);
         if (face.Values is { } v)
         {
             if (v.Sliders.Count != 18 || v.Presets.Count != 4)
@@ -253,6 +255,8 @@ internal static partial class FacePatchBuilder
                 return null;
             }
 
+            if (Want("FaceMorph"))
+            {
             var fm = npc.FaceMorph ?? new NpcFaceMorph();
             float S(int i) => Math.Clamp(float.IsFinite(v.Sliders[i]) ? v.Sliders[i] : 0f, -1f, 1f);
             fm.NoseLongVsShort = S(0);
@@ -274,24 +278,25 @@ internal static partial class FacePatchBuilder
             fm.ChinUnderbiteVsOverbite = S(16);
             fm.EyesForwardVsBack = S(17);
             npc.FaceMorph = fm;
-            npc.FaceParts = new NpcFaceParts
+            }
+            if (Want("FaceParts")) npc.FaceParts = new NpcFaceParts
             {
                 Nose = unchecked((uint)v.Presets[0]),
                 Unknown = unchecked((uint)v.Presets[1]),
                 Eyes = unchecked((uint)v.Presets[2]),
                 Mouth = unchecked((uint)v.Presets[3]),
             };
-            npc.Weight = Math.Clamp(v.Weight, 0f, 100f);
+            if (Want("Weight")) npc.Weight = Math.Clamp(v.Weight, 0f, 100f);
             // QNAM is stored as RGB: the alpha Mutagen reports is not data. Keep the record's value so
             // an unchanged skin tone stays byte-identical.
             // A record without QNAM is read as white (FaceRecipeQueries): leave it without QNAM unless
             // the tone was really changed.
             var untouchedDefault = winner.TextureLighting is null && v.SkinTone.R == 255 && v.SkinTone.G == 255 && v.SkinTone.B == 255;
-            npc.TextureLighting = untouchedDefault
+            if (Want("TextureLighting")) npc.TextureLighting = untouchedDefault
                 ? null
                 : System.Drawing.Color.FromArgb(winner.TextureLighting?.A ?? 255, v.SkinTone.R, v.SkinTone.G, v.SkinTone.B);
-            npc.TintLayers.Clear();
-            foreach (var t in v.Tints)
+            if (Want("TintLayers")) npc.TintLayers.Clear();
+            foreach (var t in Want("TintLayers") ? v.Tints : [])
             {
                 npc.TintLayers.Add(new TintLayer
                 {
@@ -304,7 +309,7 @@ internal static partial class FacePatchBuilder
             }
         }
 
-        if (face.HeadParts is { } parts)
+        if (face.HeadParts is { } parts && Want("HeadParts"))
         {
             npc.HeadParts.Clear();
             foreach (var text in parts)
@@ -320,7 +325,7 @@ internal static partial class FacePatchBuilder
             }
         }
 
-        if (face.HeadTexture is { } texture)
+        if (face.HeadTexture is { } texture && Want("HeadTexture"))
         {
             if (texture.Length == 0)
             {
@@ -336,12 +341,12 @@ internal static partial class FacePatchBuilder
             }
         }
 
-        if (face.Height is { } height)
+        if (face.Height is { } height && Want("Height"))
         {
             npc.Height = Math.Clamp(height, 0.5f, 2.0f);
         }
 
-        return face.Values is { } values
+        return face.Values is { } values && Want("HairColor")
             ? SetHairColor(session, values.HairColor, winner, npc, patch, usedEditorIds, records)
             : npc.HairColor.FormKeyNullable;
     }
@@ -527,10 +532,11 @@ internal static partial class FacePatchBuilder
                 continue;
             }
 
+            bool Req(string field) => face.RequestedFields is not { } requested || requested.Contains(field);
             if (face.Values is { } v)
             {
                 var sliders = FaceRecipeQueries.Sliders(npc.FaceMorph);
-                for (var i = 0; i < 18; i++)
+                for (var i = 0; i < (Req("FaceMorph") ? 18 : 0); i++)
                 {
                     if (Math.Abs(sliders[i] - Math.Clamp(v.Sliders[i], -1f, 1f)) > 1e-5f)
                     {
@@ -538,24 +544,24 @@ internal static partial class FacePatchBuilder
                     }
                 }
 
-                if (npc.FaceParts is not { } fp || unchecked((int)fp.Nose) != v.Presets[0] || unchecked((int)fp.Eyes) != v.Presets[2]
-                    || unchecked((int)fp.Mouth) != v.Presets[3])
+                if (Req("FaceParts") && (npc.FaceParts is not { } fp || unchecked((int)fp.Nose) != v.Presets[0] || unchecked((int)fp.Eyes) != v.Presets[2]
+                    || unchecked((int)fp.Mouth) != v.Presets[3]))
                 {
                     throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: NAMA of {key} differs after writing.");
                 }
 
-                if (npc.TintLayers.Count != v.Tints.Count)
+                if (Req("TintLayers") && npc.TintLayers.Count != v.Tints.Count)
                 {
                     throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: tint layers of {key} differ after writing.");
                 }
 
-                if (npc.HairColor.FormKeyNullable != hair)
+                if (Req("HairColor") && npc.HairColor.FormKeyNullable != hair)
                 {
                     throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: hair color of {key} differs after writing.");
                 }
             }
 
-            if (face.HeadParts is { } parts)
+            if (face.HeadParts is { } parts && Req("HeadParts"))
             {
                 var wanted = parts.Select(p => queries.TryParseAnyFormKey(p, out var k) ? k : FormKey.Null).ToList();
                 if (!npc.HeadParts.Select(h => h.FormKey).SequenceEqual(wanted))

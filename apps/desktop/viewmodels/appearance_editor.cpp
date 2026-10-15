@@ -1349,6 +1349,21 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
       if (hair_only) only.push_back("HCLF");
       if (body_edit) only.push_back("NAM6");
       face_part["onlyFields"] = only;
+    } else {
+      // A complete face: the worker writes and allows only the NPC_ fields the user changed (draft
+      // against the record), so values that merely round-trip can never alter other fields.
+      const auto& base = draft_.face_baseline();
+      Json requested = Json::array();
+      if (v.sliders != base.values.sliders) requested.push_back("FaceMorph");
+      if (v.presets != base.values.presets) requested.push_back("FaceParts");
+      if (v.weight != base.values.weight) requested.push_back("Weight");
+      if (v.skin_tone != base.values.skin_tone) requested.push_back("TextureLighting");
+      if (v.tints != base.values.tints) requested.push_back("TintLayers");
+      if (v.hair_color != base.values.hair_color) requested.push_back("HairColor");
+      if (state.head_parts != base.head_parts) requested.push_back("HeadParts");
+      if (state.head_texture != base.head_texture) requested.push_back("HeadTexture");
+      if (body_edit) requested.push_back("Height");
+      face_part["requestedFields"] = requested;
     }
   }
 

@@ -167,7 +167,10 @@ Dialog {
                             value: (root.summary.winningPlugin || "") + (root.summary.overrideCount > 0 ? qsTr("  (%1 override(s))").arg(root.summary.overrideCount) : "")
                         }
                         KeyValue { label: qsTr("Raza"); value: root.summary.raceEditorId || "" }
-                        KeyValue { label: qsTr("Sexo"); value: root.summary.sex || "" }
+                        KeyValue {
+                            label: qsTr("Sexo")
+                            value: root.summary.sex === "female" ? qsTr("Mujer") : root.summary.sex === "male" ? qsTr("Hombre") : (root.summary.sex || "")
+                        }
                         KeyValue {
                             label: qsTr("Rostro")
                             value: root.studio.appearance.analysing ? qsTr("Analizando el FaceGen…") : (root.compat.label || qsTr("Sin diagnóstico"))

@@ -57,7 +57,10 @@ internal static partial class NpcSafePatch
     {
         if (face.OnlyFields is not { } only)
         {
-            return FaceFields;
+            // The fields the user actually changed, when the studio says so; else the whole face.
+            return face.RequestedFields is { } requested
+                ? new HashSet<string>(requested.Where(FaceFields.Contains), StringComparer.Ordinal)
+                : FaceFields;
         }
 
         var allowed = new HashSet<string>(StringComparer.Ordinal);
@@ -174,10 +177,11 @@ internal static partial class NpcSafePatch
         foreach (var (name, value) in members)
         {
             any = true;
-            if (!Bookkeeping.Contains(name) && !IsEqual(value))
-            {
-                differing.Add(name);
-            }
+            if (Bookkeeping.Contains(name)) continue;
+            // null: the mask reported nothing for the member, so it is checked again on the values
+            // themselves; a verdict that cannot be read counts as a difference (never assumed equal).
+            var equal = MaskVerdict(value) ?? Fingerprint(Read(original, name)) == Fingerprint(Read(exported, name));
+            if (!equal) differing.Add(name);
         }
 
         if (!any) throw new InvalidOperationException("Mutagen's equality mask for NPC_ exposes no members; the safe patch check cannot run.");
@@ -191,20 +195,37 @@ internal static partial class NpcSafePatch
         a is Mutagen.Bethesda.Strings.ITranslatedStringGetter ta && b is Mutagen.Bethesda.Strings.ITranslatedStringGetter tb
         && string.Equals(ta.String, tb.String, StringComparison.Ordinal);
 
-    /// <summary>A mask member is a bool or a MaskItem whose Overall is the bool; null = nothing to compare.</summary>
-    private static bool IsEqual(object? member)
+    /// <summary>
+    /// Verdict of one mask member: a bool, or a MaskItem whose Overall is the bool. Null when the mask
+    /// reported nothing (the caller compares the values); false for any shape this code cannot read,
+    /// so an unknown mask type is a difference, never a silent "equal".
+    /// </summary>
+    internal static bool? MaskVerdict(object? member)
     {
         switch (member)
         {
             case null:
-                return true;
+                return null;
             case bool equal:
                 return equal;
         }
 
         var type = member.GetType();
         var overall = type.GetProperty("Overall")?.GetValue(member) ?? type.GetField("Overall")?.GetValue(member);
-        return overall is not bool b || b;
+        return overall is bool b ? b : false;
+    }
+
+    /// <summary>Complete text of a value (links, lists and Mutagen objects), for comparing values the mask did not report.</summary>
+    internal static string Fingerprint(object? value)
+    {
+        return value switch
+        {
+            null => "",
+            IFormLinkGetter link => link.IsNull ? "" : link.FormKey.ToString(),
+            string text => text,
+            IEnumerable items and not string => string.Join("|", items.Cast<object?>().Select(Fingerprint)),
+            _ => Whitespace().Replace(value.ToString() ?? "", " ").Trim(),
+        };
     }
 
     private static object? Read(INpcGetter record, string name)
