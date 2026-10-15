@@ -66,6 +66,27 @@ Este documento recoge la investigación del cierre reportado al cambiar el color
 Lydia (`0A2C8E:Skyrim.esm`), lo que se corrigió, cómo se diagnostica un cierre a partir de ahora y
 cómo se ejecutan las pruebas de regresión.
 
+## Actualización 2026-10-15 — P3: cambio rápido de NPC, deshacer/rehacer y proyectos
+
+Escenarios nuevos `undo-redo-exact`, `switch-npc-rapid` y `project-cycle` (tabla de la sección 4).
+Resultados en Windows, perfil MO2 `Default`, ventana oculta:
+
+- Debug, Lydia, con `undo-redo`, `switch-npc` y `export-reopen` (6 escenarios en un proceso):
+  `summary: PASSED`, 86 comprobaciones, 0 fallos. Memoria privada: 1096 → 1119 MB en las tres
+  rondas de 30 selecciones y 987 → 1003 MB en las cinco aperturas del proyecto (crecimiento
+  pequeño y estable; se registra, no se afirma que no haya fugas).
+- ASan (`buildsan` RelWithDebInfo con las fuentes de esta rama, mismas `ASAN_OPTIONS` que abajo),
+  Lydia y Serana, un grupo de escenarios por proceso: las seis ejecuciones terminan con código 0,
+  `summary: PASSED`, 86 comprobaciones por NPC, 0 fallos y ningún informe de ASan.
+- Un primer intento con los seis escenarios en un solo proceso bajo ASan terminó con código 4: es
+  el límite de 10 minutos de las ejecuciones automatizadas (`main.cpp`), no un cierre; ASan va unas
+  cinco veces más lento. Todo lo ejecutado hasta entonces pasó y no hubo informes.
+- La memoria bajo ASan (2,5–3,9 GB) no sirve para medir fugas: incluye la memoria sombra y la
+  cuarentena de bloques liberados. Windows no tiene LeakSanitizer.
+
+Límites: Qt no está instrumentado; es una ejecución por configuración, no una prueba de ausencia de
+errores; la GPU y la ventana visible no se ejercitan (el visor se renderiza solo al capturar).
+
 ## 1. Investigación del cierre reportado
 
 ### Evidencia reunida
@@ -193,6 +214,9 @@ Código de salida 0 = todos pasan; las exportaciones van a `out\stress-work\<fec
 | `material-preview-block` | Rechazar una variante sin DDS/NIF verificados y permitir exportar al restablecerla | Exportación de vestuario |
 | `export-reopen` | Exportar, verificar bytes, guardar proyecto, restablecer y reabrir | 12 |
 | `switch-npc` | Cambiar de NPC durante la generación (dos veces) | 5 |
+| `undo-redo-exact` | Color A, estatura, color B: cada deshacer/rehacer vuelve al estado exacto (color y estatura); dos colores seguidos son una sola entrada | 6 |
+| `switch-npc-rapid` | Tres rondas de 30 acciones (selecciones entre tres NPC y colores lanzados mientras cargan) cada 15 o 60 ms; termina en el último NPC, cargado y sin ediciones; memoria privada registrada | 5 |
+| `project-cycle` | Proyecto con dos NPC guardado y abierto cinco veces; cada NPC vuelve con su color, también con cambios lanzados mientras otro carga; memoria registrada | 12 |
 | `quit-during-build` | Cerrar la aplicación con un trabajo activo | 8 |
 
 ### Otras pruebas
