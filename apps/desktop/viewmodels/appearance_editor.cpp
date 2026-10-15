@@ -62,6 +62,7 @@ QString operation_label(const std::string& op) {
   if (op == "face-morphs") return QObject::tr("Sliders y presets del rostro");
   if (op == "head-parts") return QObject::tr("Cambiar piezas de cabeza (Head Parts)");
   if (op == "regenerate") return QObject::tr("Regenerar la cabeza desde el registro");
+  if (op == "skin-tone") return QObject::tr("Tono de piel y tintes del rostro");
   return qs(op);
 }
 
@@ -84,6 +85,10 @@ QString blocked_reason(const face::FaceCompatibilityReport& r, const std::string
                          "editar su textura o material por separado (no se modifica el shader de terceros).");
     }
     return QObject::tr("El FaceGen ganador no se puede leer.");
+  }
+  if (op == "skin-tone" && r.kind != FaceCompatibility::FaceGenInconsistent) {
+    return QObject::tr("La cabeza usa su propia textura de cara (ranura 6) en lugar del FaceTint: cambiar el tono de piel o los "
+                       "tintes la sustituiría por un FaceTint generado y cambiaría su aspecto.");
   }
   if (op == "regenerate" && (r.kind == FaceCompatibility::CustomLimited || r.kind == FaceCompatibility::CustomIncompatibleMorphs)) {
     return QObject::tr("Regenerar desde el registro perdería la geometría personalizada y el esculpido.");
@@ -1004,6 +1009,8 @@ void AppearanceEditor::setGeometryMode(const QString& mode) {
 void AppearanceEditor::resetFace() {
   if (!draft_.face_loaded()) return;
   edit(draft_.face_baseline(), tr("Restablecer el rostro del registro"));
+  // "Restablecer" returns the NPC to its record: the body height too (an undoable step of its own).
+  if (draft_.is_height_dirty()) history_->push(appearance::make_set_height(draft_, draft_.height_baseline()));
 }
 
 void AppearanceEditor::undo() {
