@@ -52,8 +52,21 @@ internal static class OutfitValidator
             issues.Add(Issue.Warning("EmptyOutfit", "The outfit has no pieces: the NPC will appear without clothes."));
         }
 
+        // Pieces already in the NPC's current default outfit (winning record). Two of them sharing a slot
+        // is how that outfit already is in game (one of them is equipped): not introduced by this edit,
+        // so it does not block it; a conflict involving a piece the edit adds still does.
+        var inherited = new HashSet<FormKey>();
+        if (npc.DefaultOutfit.FormKeyNullable is { } currentOutfit && session.LinkCache.TryResolve<IOutfitGetter>(currentOutfit, out var outfit))
+        {
+            foreach (var item in outfit.Items ?? [])
+            {
+                inherited.Add(item.FormKey);
+            }
+        }
+
         uint combined = 0;
         var owners = new Dictionary<int, string>();
+        var ownerKeys = new Dictionary<int, FormKey>();
         var seen = new HashSet<FormKey>();
         foreach (var text in armorFormKeys)
         {
@@ -79,15 +92,16 @@ internal static class OutfitValidator
 
             foreach (var slot in BipedSlots.ToSlots(mask & combined))
             {
-                issues.Add(Issue.Error(
-                    "SlotConflict",
-                    $"'{label}' and '{owners[slot]}' both use slot {BipedSlots.Describe(slot)}; the game would equip only one of them.",
-                    armorKey.ToString()));
+                var message = $"'{label}' and '{owners[slot]}' both use slot {BipedSlots.Describe(slot)}; the game would equip only one of them.";
+                issues.Add(inherited.Contains(armorKey) && inherited.Contains(ownerKeys[slot])
+                    ? Issue.Warning("SlotConflictInherited", message + " Both are already in the NPC's current outfit.", armorKey.ToString())
+                    : Issue.Error("SlotConflict", message, armorKey.ToString()));
             }
 
             foreach (var slot in BipedSlots.ToSlots(mask & ~combined))
             {
                 owners[slot] = label;
+                ownerKeys[slot] = armorKey;
             }
 
             combined |= mask;

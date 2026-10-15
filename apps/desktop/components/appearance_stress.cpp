@@ -790,6 +790,11 @@ struct Stress : std::enable_shared_from_this<Stress> {
         const auto plan = self->appearance()->easy_mod_plan();
         self->check(plan.value("mode").toString() == "outfit-patch", "outfit edit plans " + plan.value("mode").toString() + " (expected outfit-patch)");
         if (!outfit->exportable()) {
+          for (const auto& i : outfit->validation().value("issues").toList()) {
+            const auto m = i.toMap();
+            self->log(QStringLiteral("  outfit issue %1 %2: %3 [%4]").arg(m.value("severity").toString(), m.value("code").toString(),
+                                                                         m.value("message").toString(), m.value("subject").toString()));
+          }
           self->check(!plan.value("canExport").toBool(), "an outfit the validator rejects blocks the plan");
           self->log("outfit not exportable for this NPC: mode A export skipped");
           self->step();
