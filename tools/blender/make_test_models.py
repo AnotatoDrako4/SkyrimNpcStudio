@@ -7,6 +7,7 @@ Everything is made from Blender primitives (no third-party asset):
   rigged_figure.glb    body + head mesh, 4-bone armature with automatic weights, one shape key,
                        a 12-frame bone animation and an embedded generated texture.
   rigged_figure_split/ the same figure as .gltf + .bin + .png (external resources).
+  bridge_sources      optional local-only OBJ, FBX, BLEND fixtures for bridge tests.
   parts_set.glb        four mesh nodes in a hierarchy (Body > Helmet, Body > Shield, Sword at the
                        root); Body has two materials, so its mesh has two primitives.
 Naming models (suzanne, rigged_figure, parts_set) builds only those.
@@ -173,7 +174,30 @@ def parts_set(folder):
     export(os.path.join(folder, "parts_set.glb"), "GLB")
 
 
-MODELS = {"suzanne": suzanne, "rigged_figure": rigged_figure, "parts_set": parts_set}
+def bridge_sources(folder):
+    """Create local-only OBJ, FBX and BLEND from the same mesh to test the bridge.
+
+    These outputs are generated in the test run directory, never committed as
+    third-party assets or copied into Skyrim/MO2.
+    """
+    reset()
+    bpy.ops.mesh.primitive_cube_add(size=1.0)
+    cube = bpy.context.active_object
+    cube.name = "BridgeCube"
+    cube.data.materials.append(material("BridgeMaterial", (0.2, 0.6, 0.8, 1.0)))
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "bridge_sample.blend"))
+    bpy.ops.export_scene.fbx(filepath=os.path.join(folder, "bridge_sample.fbx"))
+    bpy.ops.wm.obj_export(filepath=os.path.join(folder, "bridge_sample.obj"))
+    for extension in ("obj", "fbx", "blend"):
+        path = os.path.join(folder, "bridge_sample." + extension)
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            raise RuntimeError("Missing generated Blender fixture: " + path)
+        print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
+
+
+DEFAULT_MODELS = ("suzanne", "rigged_figure", "parts_set")
+MODELS = {"suzanne": suzanne, "rigged_figure": rigged_figure,
+          "parts_set": parts_set, "bridge_sources": bridge_sources}
 
 
 def main():
@@ -182,7 +206,7 @@ def main():
     unknown = [n for n in names if n not in MODELS]
     if unknown:
         raise SystemExit("unknown model(s): " + ", ".join(unknown))
-    for name in names or MODELS:
+    for name in names or DEFAULT_MODELS:
         MODELS[name](folder)
 
 
