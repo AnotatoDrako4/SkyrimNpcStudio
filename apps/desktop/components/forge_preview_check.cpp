@@ -5,10 +5,10 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QImage>
-#include <QMouseEvent>
 #include <QPointer>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTest>
 #include <QTimer>
 #include <cstdio>
 #include <filesystem>
@@ -59,14 +59,10 @@ struct Check : std::enable_shared_from_this<Check> {
     }
     return nullptr;
   }
-  // A left click delivered to the window like a real one (press + release at a scene position).
-  void click_at(QPointF pos) {
-    const auto global = window->mapToGlobal(pos);
-    QMouseEvent press(QEvent::MouseButtonPress, pos, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent release(QEvent::MouseButtonRelease, pos, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(window, &press);
-    QCoreApplication::sendEvent(window, &release);
-  }
+  // A left click through the platform input path, like a real mouse. A QMouseEvent sent directly
+  // does not record the press position (Qt 6.11 QSinglePointEvent constructor), so pointer
+  // handlers such as TapHandler see a drag past the threshold and cancel the tap.
+  void click_at(QPointF pos) { QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos.toPoint()); }
   bool click(const QString& text) {
     auto* item = find_text(text);
     if (!item) return false;
@@ -193,8 +189,8 @@ struct Check : std::enable_shared_from_this<Check> {
       auto* v = self->view();
       const int hit = self->scene()->selected_part();
       self->check(hit >= 0, "a click on the model centre selects the part under the pointer: " + self->part_label(hit));
-      auto* box = self->window->findChild<QObject*>("forgeSelectionBox");
-      self->check(box && box->property("visible").toBool(), "selection box shown around the selected part");
+      auto* viewport = self->window->findChild<QQuickItem*>("forgeViewport");
+      self->check(viewport && viewport->property("selectionShown").toBool(), "selection box shown around the selected part");
       self->click_at(v->mapToScene(QPointF(4, 4)));
       self->after(400, [self] {
         self->check(self->scene()->selected_part() == -1, "a click on empty space clears the selection");
