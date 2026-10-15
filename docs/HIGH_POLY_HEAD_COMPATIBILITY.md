@@ -113,7 +113,9 @@ a cada TRI, mallas o TRI ausentes, auditoría FaceGen/registro y desviación de 
 | FaceGen inconsistente | vestuario; color si es legible y tiene HairTint | sliders, Head Parts, regenerar |
 | Dependencias faltantes | color, vestuario | sliders, Head Parts, regenerar |
 
-La UI (tarjeta «Protección facial» en Character Creator) muestra la clasificación, cada operación
+La UI (tarjeta «Protección facial» al final de las pestañas Pelo/Ojos y Rostro, plegada por defecto
+con una línea de veredicto; si estuviera arriba empujaría la paleta fuera de la vista y el escenario
+`ui-hair-clicks` fallaba) muestra la clasificación, cada operación
 con ✓/✕ y su motivo, la procedencia MO2 del ESP ganador, del FaceGen y del FaceTint, un aviso si el
 ESP ganador y el FaceGen vienen de mods distintos (no se reordena nada) y «Pendiente de verificación
 en Skyrim». Los sliders, el color o los Head Parts bloqueados se desactivan y `AppearanceEditor`

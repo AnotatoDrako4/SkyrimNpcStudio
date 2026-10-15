@@ -54,17 +54,24 @@ ScrollView {
         width: root.availableWidth
         spacing: 14
 
-        FaceProtectionCard {
-            Layout.fillWidth: true
-            studio: root.studio
-        }
-
         // --- SECCIÓN: CABELLO ---
-        Text {
-            text: qsTr("Color de Cabello")
-            color: Theme.accent
-            font.bold: true
-            font.pixelSize: 13
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: qsTr("Color de Cabello")
+                color: Theme.accent
+                font.bold: true
+                font.pixelSize: 13
+            }
+            // Same line, so nothing moves when the analysis ends: why the palette is disabled.
+            Text {
+                visible: !root.hairColorAllowed
+                Layout.fillWidth: true
+                text: root.studio.appearance.analysing ? qsTr("· analizando el FaceGen…") : qsTr("· bloqueado (ver Protección facial)")
+                color: Theme.textDim
+                font.pixelSize: 11
+                elide: Text.ElideRight
+            }
         }
 
         RowLayout {
@@ -234,6 +241,12 @@ ScrollView {
                     }
                 }
             }
+        }
+
+        // Diagnosis of the face protection, collapsed: below the controls so they keep their place.
+        FaceProtectionCard {
+            Layout.fillWidth: true
+            studio: root.studio
         }
     }
 }

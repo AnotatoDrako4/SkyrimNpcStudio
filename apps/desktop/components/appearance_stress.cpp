@@ -62,8 +62,10 @@ struct Stress : std::enable_shared_from_this<Stress> {
     }
   }
   bool busy() const {
-    return appearance()->building() || appearance()->loading() || appearance()->analysing() || scene()->loading() ||
-           studio->npc_loading();
+    // !loaded(): right after the NPC is selected nothing is "loading" yet and the face is not
+    // analysing until it has been read, so edits started in that gap would be refused.
+    return !appearance()->loaded() || appearance()->building() || appearance()->loading() || appearance()->analysing() ||
+           scene()->loading() || studio->npc_loading();
   }
   // Hair Color Safe Mode: the previewed FaceGen is the profile's winning FaceGen with only the
   // HairTint colors rewritten (byte for byte), and the report says so.

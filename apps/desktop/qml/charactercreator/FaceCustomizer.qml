@@ -17,11 +17,6 @@ ScrollView {
         width: root.availableWidth
         spacing: 12
 
-        FaceProtectionCard {
-            Layout.fillWidth: true
-            studio: root.studio
-        }
-
         RowLayout {
             Layout.fillWidth: true
             Text {
@@ -131,6 +126,12 @@ ScrollView {
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Chin")
             onSliderChanged: (key, val) => root.studio.appearance.setSlider(key, val)
+        }
+
+        // Diagnosis of the face protection, collapsed: below the controls so they keep their place.
+        FaceProtectionCard {
+            Layout.fillWidth: true
+            studio: root.studio
         }
     }
 }
