@@ -273,11 +273,15 @@ Rectangle {
         // ============================================================= TOOLBAR FLOTANTE MINIMALISTA
         Rectangle {
             id: floatingToolbar
+            objectName: "viewportToolbar"
             anchors.top: parent.top
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.topMargin: 8
             implicitHeight: 38
             implicitWidth: toolRow.implicitWidth + 16
+            // Never wider than the viewport: on a narrow viewport the selectors shrink instead of the bar
+            // spilling over the neighbouring panels.
+            width: Math.min(implicitWidth, parent.width - 12)
             radius: Theme.radiusLarge
             color: Qt.rgba(0.09, 0.10, 0.12, 0.90)
             border.color: Theme.borderSubtle
@@ -285,7 +289,9 @@ Rectangle {
 
             RowLayout {
                 id: toolRow
-                anchors.centerIn: parent
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
                 spacing: 6
 
                 // Selector de Cámara
@@ -293,6 +299,8 @@ Rectangle {
                     id: cameraPreset
                     implicitWidth: 125
                     implicitHeight: 28
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 84
                     model: [qsTr("Cuerpo entero"), qsTr("Frontal"), qsTr("Lateral"), qsTr("Posterior"), qsTr("Rostro")]
                     onActivated: root.applyCameraPreset(currentIndex)
                 }
@@ -302,6 +310,8 @@ Rectangle {
                     visible: root.previewMode
                     implicitWidth: 140
                     implicitHeight: 28
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 96
                     model: [qsTr("Prenda aislada"), qsTr("Maniquí"), qsTr("Probar en NPC"), qsTr("Outfit completo")]
                     onActivated: root.scene.setPreviewMode(["piece", "mannequin", "npc", "outfit"][currentIndex])
                 }
@@ -311,6 +321,8 @@ Rectangle {
                     id: poseBox
                     implicitWidth: 110
                     implicitHeight: 28
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 76
                     model: [qsTr("Pose T"), qsTr("A-Pose"), qsTr("Relajada"), qsTr("Combate")]
                     onActivated: root.scene.pose = ["reference", "apose", "relaxed", "combat"][currentIndex]
                     ToolTip.visible: hovered

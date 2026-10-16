@@ -104,5 +104,25 @@ Estado de partida: PR #8 → #14 abiertos, sin fusionar; `main` en `78ea95c`.
   - **Pruebas:** `creator-layout` 1100×700 y 1600×900 PASSED (antes: 4 de 5 pestañas fallaban a
     1100×700); Serana `creator-layout, easy-mod-layout, armor-mod-filter, hair-safe` 363
     comprobaciones PASSED; ctest 138, 0 fallos.
-- **Próxima tarea:** la barra flotante del visor (vista, pose…) es más ancha que el visor a 1100 px y
-  asoma sobre el panel izquierdo.
+- **Commit:** `8276f1d`.
+
+## Iteración 4
+
+- **Commit base:** `8276f1d` (PR #15).
+- **Problema 1 — barra flotante del visor más ancha que el visor.** Evidencia: captura a 1100×700, la
+  barra (cámara, pose, original/modificado…) asomaba sobre el panel izquierdo.
+  - **Solución:** ancho limitado al del visor; los selectores se encogen hasta un mínimo legible.
+    `creator-layout` comprueba que queda dentro: 1100×700 «6..386 de 392 px», 1600×900 «176..619 de 796».
+- **Problema 2 — «Usar como Donante» fuera del panel.** Evidencia: `creator-layout` (10 px de más) con
+  filas de donante de subtítulo largo; los textos no se recortaban (sin `Layout.fillWidth`).
+  - **Solución:** los textos de la fila se recortan con «…».
+- **Pruebas:** 1100×700 `creator-layout` PASSED; 1600×900 `creator-layout, viewport-during-build,
+  original-toggle, donor-export` PASSED; ctest 138, 0 fallos.
+
+## Estado al cerrar el loop
+
+Defectos críticos y altos detectados en estas iteraciones: corregidos (prioridad del FaceGen en MO2;
+donante, presets y proyectos que saltaban la protección facial; pestaña Donantes vacía; indicador de
+donante; paneles cortados a 1100×700; aviso QML). Lo que queda depende de acciones externas:
+`PENDIENTE_DE_VALIDACION_SKYRIM` (prueba de aceptación en el juego), revisión y fusión de los PR #8–#15,
+facturación de GitHub Actions y revisión con la ventana visible.

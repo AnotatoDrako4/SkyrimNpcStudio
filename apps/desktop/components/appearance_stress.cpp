@@ -1535,6 +1535,15 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->check(panel && tabs, "Character Creator right panel found");
         if (!panel || !tabs) { self->step(); return; }
         const auto size = QStringLiteral("%1x%2").arg(self->window->width()).arg(self->window->height());
+        // The viewport's floating toolbar stays inside the viewport (it used to spill over the panels).
+        for (auto* o : self->window->findChildren<QQuickItem*>()) {
+          if (o->objectName() != QLatin1String("viewportToolbar") || !o->isVisible() || !o->parentItem()) continue;
+          self->window->grabWindow();
+          const QRectF r = o->mapRectToItem(o->parentItem(), QRectF(0, 0, o->width(), o->height()));
+          self->check(r.left() >= -0.5 && r.right() <= o->parentItem()->width() + 0.5,
+                      QStringLiteral("%1 viewport toolbar inside the viewport (%2..%3 of %4 px)").arg(size).arg(int(r.left())).arg(int(r.right())).arg(int(o->parentItem()->width())));
+          break;
+        }
         const QStringList names = {"presets", "rostro", "pelo-ojos", "cuerpo", "vestuario"};
         std::vector<std::function<void()>> actions;
         for (int i = 0; i < names.size(); ++i) {

@@ -219,9 +219,12 @@ ScrollView {
                     spacing: 8
 
                     ColumnLayout {
+                        // Long names/plugins elide instead of pushing the button out of the panel.
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         spacing: 2
                         Text {
+                            Layout.fillWidth: true
                             text: model.name || model.editorId || model.formKey
                             color: Theme.text
                             font.bold: true
@@ -229,6 +232,7 @@ ScrollView {
                             elide: Text.ElideRight
                         }
                         Text {
+                            Layout.fillWidth: true
                             text: (model.race || "") + " · " + (model.sex || "") + " · " + (model.winningPlugin || "")
                             color: Theme.textDim
                             font.pixelSize: 10
