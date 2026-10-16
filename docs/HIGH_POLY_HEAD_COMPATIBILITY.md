@@ -121,6 +121,19 @@ ESP ganador y el FaceGen vienen de mods distintos (no se reordena nada) y «Pend
 en Skyrim». Los sliders, el color o los Head Parts bloqueados se desactivan y `AppearanceEditor`
 rechaza la edición con el motivo.
 
+### Vías que reemplazaban la cabeza saltándose los bloqueos (cerradas el 2026-10-16)
+
+Además de los editores (sliders, peso, tono, tintes, Head Parts), que ya consultaban el diagnóstico, había
+tres vías que no lo hacían. Todas reproducidas o comprobadas en el arnés sobre Serana:
+
+| Vía | Antes | Ahora |
+|---|---|---|
+| Aplicar un donante | sustituía morphs, Head Parts y tono y regeneraba la cabeza | rechazado si `face-morphs`, `head-parts` o `skin-tone` están bloqueados (`donor_blocked_reason`) |
+| Preset RaceMenu `.jslot` | «Carrot» salía exportable y se exportó con FaceGen regenerado | veredicto `blocking` (`FaceProtected`); no se aplica |
+| Rostro guardado en un proyecto `.snps` | se aplicaba antes del análisis y conservaba un peso bloqueado | tras el análisis, los campos bloqueados vuelven al registro; el color de cabello se conserva |
+
+Escenarios: `donor-export`, `preset-export`, `project-blocked-face` (Serana y Lydia PASSED).
+
 ## 5. Archivos
 
 `engines/appearance/{include/sns/appearance/appearance_draft.hpp, src/appearance_draft.cpp}`,

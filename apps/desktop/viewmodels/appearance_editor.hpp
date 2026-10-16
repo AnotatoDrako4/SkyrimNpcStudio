@@ -215,6 +215,9 @@ class AppearanceEditor : public QObject {
   void edit(appearance::FaceState next, const QString& description, const QString& merge_key = {});
   // True (and the reason written to the console) when the compatibility diagnosis blocks `op`.
   bool refuse_blocked(const QString& op);
+  // After the analysis: fields of the draft that differ from the record in a blocked operation (a face
+  // restored from a project before the blocks were known) go back to the record.
+  void enforce_face_blocks();
   void request_recipe(bool initial);
   void on_recipe(const Json& json, bool initial, int serial);
   void analyse_existing_facegen();

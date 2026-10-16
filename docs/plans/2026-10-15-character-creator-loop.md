@@ -73,5 +73,17 @@ Estado de partida: PR #8 → #14 abiertos, sin fusionar; `main` en `78ea95c`.
   - **Pruebas:** Serana → todos `blocking`, rostro intacto, PASSED; Ingrid → Carrot aplicado y exportado
     (diff solo de rostro), PASSED. `setHeadPart`, sliders, peso, tono y tintes ya comprobaban los bloqueos.
 - **Regresión:** ctest 138, 0 fallos.
-- **Pendiente detectado:** abrir un proyecto `.snps` creado antes de estos bloqueos podría cargar
-  ediciones de morphs en una cabeza protegida (revisar en la próxima iteración).
+- **Problema 5 (crítico) — rostro de proyecto con campos bloqueados.** Reproducción (arreglo
+  desactivado, escenario nuevo `project-blocked-face` en Serana): un rostro de proyecto con el color de
+  cabello y un peso distinto (operación bloqueada) se cargaba entero: `changes [face]`. Causa: el rostro
+  guardado se aplica en `set_recipe`, antes de que el análisis conozca los bloqueos.
+  - **Solución:** `enforce_face_blocks()` al terminar el análisis: los campos de operaciones bloqueadas
+    (morphs/presets/peso/morphs RaceMenu/esculpido; Head Parts/textura; tono/tintes) vuelven al
+    registro, lo permitido se conserva y se avisa en la consola.
+  - **Pruebas:** Serana y Lydia `changes [hair]`, PASSED. Regresión Serana `project-blocked-face,
+    donor-export, preset-export, hair-safe, easy-mod, easy-mod-layout` 377 comprobaciones PASSED;
+    Lydia `project-blocked-face, easy-mod-outfit` PASSED; ctest 138, 0 fallos.
+- **Problema 6 — aviso QML introducido en la iteración 1.** El aviso de prioridad del paso 4 asignaba
+  `undefined` a `visible` antes del diagnóstico (`ExportWizardDialog.qml:316`); lo detectó el arnés
+  (falla con avisos QML). Corregido con `!!`.
+- **Próxima tarea:** seguir la auditoría del editor (vista previa frente a exportación, textos de error).

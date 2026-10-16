@@ -1475,6 +1475,45 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->then_idle();
       });
       steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+    } else if (name == "project-blocked-face") {
+      // A face saved in a project with an edit that is blocked for this head (an older project, or one
+      // made before a replacer was installed): loading it must keep the allowed edit (hair color) and
+      // put the blocked field (weight, a morph operation) back to the record.
+      const QColor color("#7D3C98");
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, hair, color] { hair(color); self->then_idle(); });
+      steps.push_back([self] {
+        if (!self->appearance()->operation_blocked(QStringLiteral("face-morphs"))) {
+          self->log("face morphs allowed on this head: scenario needs a protected head");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        auto config = self->appearance()->face_config_for_project();
+        self->check(config.has_value(), "project face available for the hair edit");
+        if (!config) { self->step(); return; }
+        config->weight = config->weight > 50.0f ? config->weight - 30.0f : config->weight + 30.0f;
+        self->appearance()->queue_saved_face(self->primary_npc.toStdString(), config);
+        self->log("reload the NPC with a saved face whose weight is blocked for this head");
+        self->studio->selectNpc(self->second_npc);
+        self->then_idle();
+      });
+      steps.push_back([self] {
+        if (self->head_part_skip) { self->step(); return; }
+        self->studio->selectNpc(self->primary_npc);
+        self->then_idle();
+      });
+      steps.push_back([self, color] {
+        if (self->head_part_skip) { self->step(); return; }
+        const auto plan = self->appearance()->easy_mod_plan();
+        QStringList keys;
+        for (const auto& c : plan.value("changes").toList()) keys << c.toMap().value("key").toString();
+        self->check(keys == QStringList{"hair"}, "blocked weight reverted, hair color kept: changes [" + keys.join(", ") + "]");
+        self->check(self->appearance()->hair_color().name() == color.name(), "hair color from the project: " + self->appearance()->hair_color().name());
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
     } else if (name == "armor-mod-filter") {
       // Outfit catalog filtered by mod: the plugin list comes from the index, the selector shows it, and
       // choosing a plugin returns exactly the armors that plugin defines or overrides.
@@ -1549,7 +1588,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "armor-mod-filter", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "armor-mod-filter", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

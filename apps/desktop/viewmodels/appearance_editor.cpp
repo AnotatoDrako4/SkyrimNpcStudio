@@ -478,6 +478,7 @@ void AppearanceEditor::analyse_existing_facegen() {
       self->compatibility_ = result->compatibility;
       diag::record("facegen", ("compatibility " + ss(result->compatibility.value("code").toString())).c_str());
       self->draft_.set_baseline_geometry_mode(ss(result->mode));
+      self->enforce_face_blocks();
       emit self->appearanceChanged();
       emit self->faceGenChanged();
       self->schedule_build();
@@ -882,6 +883,30 @@ void AppearanceEditor::edit(appearance::FaceState next, const QString& descripti
   if (next == draft_.face()) return;
   diag::record("appearance", QStringLiteral("edit '%1' npc=%2").arg(description, qs(target_.form_key)).toStdString());
   history_->push(appearance::make_set_face(draft_, std::move(next), ss(description), ss(merge_key)));
+}
+
+void AppearanceEditor::enforce_face_blocks() {
+  if (!draft_.face_loaded()) return;
+  const auto& base = draft_.face_baseline();
+  auto face = draft_.face();
+  QStringList reverted;
+  const auto revert = [&](const char* op, bool differs, auto&& restore) {
+    if (!differs || !operation_blocked(QString::fromLatin1(op))) return;
+    restore();
+    reverted << operation_label(op);
+  };
+  auto& v = face.values;
+  const auto& b = base.values;
+  revert("face-morphs", v.sliders != b.sliders || v.presets != b.presets || v.weight != b.weight || v.custom_morphs != b.custom_morphs || v.sculpt != b.sculpt,
+         [&] { v.sliders = b.sliders; v.presets = b.presets; v.weight = b.weight; v.custom_morphs = b.custom_morphs; v.sculpt = b.sculpt; });
+  revert("head-parts", face.head_parts != base.head_parts || face.head_texture != base.head_texture,
+         [&] { face.head_parts = base.head_parts; face.head_texture = base.head_texture; });
+  revert("skin-tone", v.skin_tone != b.skin_tone || v.tints != b.tints, [&] { v.skin_tone = b.skin_tone; v.tints = b.tints; });
+  if (reverted.isEmpty()) return;
+  draft_.set_face(std::move(face));
+  console_->append("warning", "appearance",
+                   tr("El rostro cargado para %1 tenía cambios bloqueados para esta cabeza (%2): se restauran los del registro; "
+                      "el resto (p. ej. el color de cabello) se conserva.").arg(npc_label(), reverted.join(", ")));
 }
 
 bool AppearanceEditor::refuse_blocked(const QString& op) {

@@ -313,7 +313,7 @@ Dialog {
                             readonly property var prov: root.compat.provenance || ({})
                             readonly property var competitors: prov.faceGenCompetitors || []
                             readonly property bool writesFaceGen: root.plan.mode === "face-overhaul" || root.plan.mode === "complete-overhaul"
-                            visible: writesFaceGen && (competitors.length > 0 || (prov.faceGen && prov.faceGen.kind === "BSA"))
+                            visible: writesFaceGen && (competitors.length > 0 || !!(prov.faceGen && prov.faceGen.kind === "BSA"))
                             width: checksColumn.width
                             wrapMode: Text.Wrap
                             font.pixelSize: Theme.small
