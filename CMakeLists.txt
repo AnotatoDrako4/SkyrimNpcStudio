@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(SkyrimNpcStudio
-  VERSION 0.1.0
+  VERSION 1.1.0
   DESCRIPTION "Skyrim NPC Studio Ultimate - NPC appearance and outfit studio for Skyrim SE/AE"
   LANGUAGES C CXX)
 
