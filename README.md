@@ -2,7 +2,7 @@
 
 Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, indexa los NPC y prendas de tu perfil de **Skyrim SE/AE** y exporta los cambios como **mods reales e instalables en MO2**.
 
-> Estado: explorador MO2, visor 3D, editor de atuendos, edición facial y exportación A/B/C disponibles con validaciones. La fidelidad de algunas mallas de replacers limita los morphs, y la comprobación final dentro de Skyrim sigue siendo manual ([plan](docs/DEVELOPMENT_PLAN.md), [diagnóstico de cierres](docs/CRASH_DIAGNOSTICS.md)).
+> Estado: explorador MO2, visor 3D, editor de atuendos, edición facial y exportación A/B/C disponibles con validaciones. La fidelidad de algunas mallas de replacers limita los morphs, y la comprobación final dentro de Skyrim sigue siendo manual ([beta candidata 1](docs/BETA_CANDIDATE.md), [plan](docs/DEVELOPMENT_PLAN.md), [diagnóstico de cierres](docs/CRASH_DIAGNOSTICS.md)).
 
 ## Qué hace hoy
 
@@ -11,6 +11,8 @@ Estudio de escritorio para Windows que lee tu instancia de **Mod Organizer 2**, 
 - Ficha del NPC: plugin de origen y ganador, **ubicaciones en el mundo (referencias ACHR por celda)**, historial de overrides con los campos que cambia cada mod, **ediciones perdidas**, cabeza, facciones, inventario, FaceGen (y qué mod la aporta).
 - Editor de atuendos con deshacer/rehacer, catálogo filtrable por slot, validación en vivo (slots, raza/ARMA, plantillas, mallas).
 - **GUARDAR MOD (Modo A)**: OTFT nuevo (y atuendo de dormir opcional) + override mínimo copiado del registro ganador → ESP (opcionalmente ESL) verificado releyéndolo, carpeta lista para MO2 + ZIP, README y `manifest.json`. Atómico y sin sobrescribir nada.
+- **Rostro (Modo B) y NPC completo (Modo C)**: solo los campos de rostro que cambiaste, con su FaceGen; el modo C junta rostro y atuendo del mismo NPC en un plugin. El **NPC Safe Patch Engine** relee cada override y lo compara campo a campo con el registro ganador: cualquier cambio no pedido bloquea la exportación, y lo permitido queda en el diff semántico del manifiesto y del README ([formato](docs/MOD_EXPORT_FORMAT.md)).
+- **Easy Mod Creator**: asistente de 5 pasos (personaje, modificación, vista previa, comprobación, crear mod) que elige el modo con el cambio mínimo, avisa de las dependencias y de lo bloqueado para ese NPC, y crea el ZIP para MO2 ([guía](docs/EASY_MOD_CREATOR.md)).
 - **Instalación asistida en MO2**: Opción directa desde el diálogo de exportación para copiar el mod a `mods/` tras validar que `ModOrganizer.exe` está cerrado y previa confirmación de seguridad.
 - Proyectos editables `.snps` con historial de versiones, rostro y vestuario compartiendo el borrador.
 - Cambios de color de cabello con **Hair Color Safe Mode**: desde el primer cambio se copia el FaceGen ganador de MO2 y solo se reescribe el color de las shapes HairTint; un guard bloquea cualquier otra diferencia y el plugin exportado cambia únicamente `HCLF`. Un diagnóstico facial (FaceGen, mallas y TRI, sin fiarse de nombres) indica qué ediciones son seguras y bloquea las demás con su motivo, p. ej. sliders en cabezas cuyos TRI no coinciden con la malla ([compatibilidad facial](docs/HIGH_POLY_HEAD_COMPATIBILITY.md)). Probado con el replacer de Serana fuera del juego; verificación en Skyrim pendiente.
@@ -60,7 +62,7 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 ## Release
 
 ```powershell
-.\scriptselease.ps1      # desde un commit sin cambios: paquete Release, ZIP y verificación
+.\scripts\release.ps1      # desde un commit sin cambios: paquete Release, ZIP y verificación
 ```
 
 - Rechaza cambios sin commit en archivos versionados (`-AllowDirty` solo para pruebas, marca `-dirty`).
@@ -69,7 +71,7 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
   (`.pdb`) quedan fuera, en `dist\symbols\<commit>`.
 - Reproducible: el paquete se compila con `/Brepro` y los archivos llevan la fecha del commit; dos
   reconstrucciones desde cero del mismo commit dieron el mismo ZIP byte a byte (2026-10-15).
-- `scriptserify-release.ps1 -Zip <zip>` (también lo llama `release.ps1`) comprueba archivos
+- `scripts\verify-release.ps1 -Zip <zip>` (también lo llama `release.ps1`) comprueba archivos
   obligatorios (incluida `Qt6Test.dll`), que no haya restos de compilación, cada hash, y arranca la
   copia extraída con un entorno nuevo (sin Qt, MSVC ni SDK de .NET). Con `-Instance`, `-MO2Profile`,
   `-Npc` y `-Scenarios` además carga un perfil real en solo lectura.

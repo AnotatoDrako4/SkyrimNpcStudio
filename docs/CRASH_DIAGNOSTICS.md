@@ -75,7 +75,7 @@ Resultados en Windows, perfil MO2 `Default`, ventana oculta:
   `summary: PASSED`, 86 comprobaciones, 0 fallos. Memoria privada: 1096 → 1119 MB en las tres
   rondas de 30 selecciones y 987 → 1003 MB en las cinco aperturas del proyecto (crecimiento
   pequeño y estable; se registra, no se afirma que no haya fugas).
-- ASan (`buildsan` RelWithDebInfo con las fuentes de esta rama, mismas `ASAN_OPTIONS` que abajo),
+- ASan (`build\asan` RelWithDebInfo con las fuentes de esta rama, mismas `ASAN_OPTIONS` que abajo),
   Lydia y Serana, un grupo de escenarios por proceso: las seis ejecuciones terminan con código 0,
   `summary: PASSED`, 86 comprobaciones por NPC, 0 fallos y ningún informe de ASan.
 - Un primer intento con los seis escenarios en un solo proceso bajo ASan terminó con código 4: es

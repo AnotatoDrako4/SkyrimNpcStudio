@@ -1,6 +1,16 @@
 # Formato de exportación
 
-Implementado: **Modo A — Outfit Patch** (`export.outfitPatch`). Los modos B (Face Overhaul), C (Complete NPC Overhaul) y D (Multi-NPC Pack) reutilizarán el mismo empaquetado; el contrato ya admite varias asignaciones por parche.
+Implementados (verificados en Windows; en Skyrim, pendiente — ver [SKYRIM_ACCEPTANCE_TEST.md](SKYRIM_ACCEPTANCE_TEST.md)):
+
+| Modo | Método RPC | Qué cambia |
+|---|---|---|
+| A — Outfit Patch | `export.outfitPatch` | OTFT nuevo + `DefaultOutfit` (y `SleepingOutfit` si se pide) |
+| B — Face Overhaul | `export.faceOverhaul` | Solo los campos de rostro que el usuario cambió + su FaceGen |
+| C — Complete NPC Overhaul | `export.completeOverhaul` | A y B del mismo NPC en un único plugin |
+
+El Easy Mod Creator elige el modo con el cambio mínimo ([EASY_MOD_CREATOR.md](EASY_MOD_CREATOR.md)). Varios NPC
+por parche: el contrato admite varias asignaciones (Outfit Studio exporta todos los NPC del proyecto); un
+«Multi-NPC Pack» (modo D) como flujo propio sigue sin implementar.
 
 ## Qué se escribe en el plugin
 
@@ -32,10 +42,22 @@ Antes de escribir, por cada asignación (`OutfitValidator`):
 | `NoAddonForRace` | error | Ningún ARMA cubre la raza del NPC ni su *armor race*: la pieza sería invisible |
 | `OutfitFromTemplate` | error | El NPC hereda el inventario de su plantilla (flag *Inventory*): el atuendo se ignoraría |
 | `DuplicateNpc` | error | Dos atuendos para el mismo NPC en un parche |
+| `SlotConflictInherited` | warning | Conflicto de slot que ya trae el atuendo actual del NPC (no lo introduce el estudio; p. ej. Lydia con Helen: Torso V1 y V2) |
 | `NoModelForSex`, `NoBipedSlots`, `AddonNotFound`, `DuplicatePiece`, `EmptyOutfit` | warning | Exportable, pero probablemente no deseado |
 | `NonPlayable`, `SaveGamePersistence` | info | Informativo |
 
 El estudio añade `MeshNotLoose` (warning) si una malla no existe como archivo suelto en el VFS (puede estar en un BSA). Con cualquier `error`, no se escribe nada.
+
+Rostro (modos B y C, `FacePatchBuilder`), todos `error`:
+
+| Código | Qué significa |
+|---|---|
+| `TargetNpcNotFound`, `EmptyAssignment` | NPC fuera del load order activo, o una asignación sin rostro ni atuendo |
+| `FaceValuesInvalid`, `HeadPartUnresolved`, `HeadTextureUnresolved` | Valores incompletos (18 sliders, 4 presets) o referencias que no resuelven |
+| `OnlyFieldsUnsupported`, `MinimalChangeViolated` | Cambio mínimo (`onlyFields`) con un campo que no sabe escribir, o con otro campo distinto del ganador |
+| `FaceGenRequired`, `FaceTintRequired` | El cambio exige FaceGen/FaceTint y el estudio no lo envió |
+| `GeneratedAssetRejected`, `GeneratedAssetMissing`, `GeneratedAssetHashMismatch` | Archivo generado fuera de las rutas FaceGen del NPC, ausente o con otro SHA-256 |
+| `UnauthorizedNpcChange` | El override releído difiere del ganador en un campo no pedido (NPC Safe Patch Engine) |
 
 ## Verificación tras escribir
 
@@ -84,7 +106,15 @@ mismo SHA-256 que cada archivo. Si falla, no se mueve nada al destino.
 └── SkyrimNpcStudio_Lydia.zip       ← ESP + README + manifest (sin meta.ini: MO2 crea el suyo)
 ```
 
-FaceGen: los archivos de cara siempre se nombran según el plugin **de origen** del NPC y su FormID local (`meshes\actors\character\facegendata\facegeom\Skyrim.esm\000A2C8E.nif`), nunca según el parche. El Modo A no toca la cara, así que no genera FaceGen.
+FaceGen: los archivos de cara siempre se nombran según el plugin **de origen** del NPC y su FormID local (`meshes\actors\character\facegendata\facegeom\Skyrim.esm\000A2C8E.nif`), nunca según el parche. El Modo A no toca la cara, así que no genera FaceGen. En B/C:
+
+- **Hair Color Safe Mode** (solo el color de cabello): el NIF es el FaceGen ganador del perfil con solo los
+  colores HairTint reescritos (mismo tamaño; los bytes sobrantes tras el pie se conservan); sin FaceTint.
+- **Regenerar** (sliders, presets, peso, tono, tintes, Head Parts, donante): NIF de `facegeom` y DDS de
+  `facetint`, comprobados contra la vista previa. Las cabezas cuya textura de cara no es el FaceTint del
+  NPC (replacers como Priscilla o Helen) bloquean el tono de piel y conservan su textura en la ranura 6.
+- `generatedAssets` y `faces[]` del manifiesto dicen qué se generó y cómo (`faceGenMode`, `changedFields`,
+  `derivedFrom`); si el FaceGen procede de otro mod, `personalUseOnly: true`.
 
 ## Atomicidad
 
@@ -102,7 +132,7 @@ Se rechazan destinos que contengan plugins activos (la `Data/` del juego o un mo
 {
   "format": "skyrim-npc-studio/export",
   "formatVersion": 2,
-  "tool": { "name": "Skyrim NPC Studio", "workerVersion": "0.1.0", "protocol": "1.0" },
+  "tool": { "name": "Skyrim NPC Studio", "workerVersion": "0.1.0", "protocol": "1.3" },
   "createdUtc": "2026-10-11T20:05:00.0000000Z",
   "mode": "outfit-patch",
   "plugin": { "fileName": "SkyrimNpcStudio_Lydia.esp", "sha256": "…", "eslFlagged": true },
@@ -131,4 +161,4 @@ todo esto plegado en «Qué contiene este mod».
 
 ## Partidas guardadas
 
-Un NPC ya cargado en una partida puede conservar su equipamiento hasta que el juego lo reinicialice. No se garantiza la aplicación inmediata en todas las partidas; se recomienda probar en una partida nueva o tras reinicializar al NPC por un medio soportado.
+Un NPC ya cargado en una partida puede conservar su equipamiento hasta que el juego lo reinicialice (aviso `SaveGamePersistence` en los modos A y C). No se garantiza la aplicación inmediata en todas las partidas; se recomienda probar en una partida nueva o tras reinicializar al NPC por un medio soportado.
