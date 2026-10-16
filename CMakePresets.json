@@ -31,7 +31,8 @@
       "name": "package",
       "displayName": "MSVC x64 Release for dist/ (no tests)",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SNS_BUILD_TESTS": "OFF" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "SNS_BUILD_TESTS": "OFF",
+        "SNS_REPRODUCIBLE": "ON" }
     },
     {
       "name": "engines",

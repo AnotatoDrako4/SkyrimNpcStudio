@@ -134,7 +134,9 @@ try {
     Copy-Item (Join-Path $root 'build\package\_deps\directxtex-src\LICENSE') (Join-Path $licenses 'DirectXTex-MIT.txt')
     $commit = (git -C $root rev-parse --short HEAD 2>$null)
     if ($LASTEXITCODE) { $commit = 'sin-commit' }  # a repo without commits must not fail the package
-    "Skyrim NPC Studio $(Get-Date -Format s) $commit" | Set-Content (Join-Path $full 'VERSION.txt')
+    # Dated with the commit, not the clock: the same commit packages to the same bytes.
+    $commitTime = [DateTimeOffset]::Parse((git -C $root log -1 --format=%cI 2>$null))
+    "Skyrim NPC Studio $($commitTime.ToString('s')) $commit" | Set-Content (Join-Path $full 'VERSION.txt')
     # What produced this package, so a release can be rebuilt from the same sources and toolchain.
     $projectVersion = if ((Get-Content (Join-Path $root 'CMakeLists.txt') -Raw) -match 'project\(SkyrimNpcStudio\s+VERSION\s+([0-9.]+)') { $Matches[1] } else { '' }
     $dirty = @(git -C $root status --porcelain --untracked-files=no 2>$null).Count -gt 0
@@ -143,7 +145,7 @@ try {
         version     = $projectVersion
         commit      = (git -C $root rev-parse HEAD 2>$null)
         dirty       = $dirty
-        builtUtc    = (Get-Date).ToUniversalTime().ToString('o')
+        commitUtc   = $commitTime.ToUniversalTime().ToString('o')
         msvc        = $env:VCToolsVersion
         qt          = (Split-Path -Leaf (Split-Path -Parent $env:SNS_QT_DIR))
         dotnetSdk   = (dotnet --version)
