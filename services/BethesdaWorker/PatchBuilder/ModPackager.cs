@@ -261,6 +261,7 @@ internal static class ModPackager
             derivedFrom = f.Provenance.DerivedFrom,
             customMorphs = f.Provenance.CustomMorphs,
             sculptTargets = f.Provenance.SculptTargets,
+            installAbove = f.Provenance.InstallAbove,
         }),
         personalUseOnly = (built.Faces ?? []).Any(f => f.Provenance.DerivedFrom.Count > 0),
         // Every NPC_ field that differs from the winning record, re-read from the written plugin.
@@ -311,6 +312,12 @@ internal static class ModPackager
             {
                 sb.AppendLine(CultureInfo.InvariantCulture,
                     $"  - Contiene geometría derivada de: {string.Join(", ", face.Provenance.DerivedFrom)}. Uso personal: no lo redistribuyas sin permiso de sus autores.");
+            }
+
+            if (face.Provenance.InstallAbove.Count > 0)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  - **Prioridad en MO2:** coloca este mod por encima de {string.Join(", ", face.Provenance.InstallAbove.Select(m => $"«{m}»"))}. También contienen el FaceGen de este NPC; si alguno queda por encima, Skyrim usará su cabeza con este plugin (cara oscura o distinta).");
             }
         }
 
@@ -418,7 +425,10 @@ internal static class ModPackager
         };
         if (bundledAssets.Count > 0)
         {
-            pending.Add("Comprobar en MO2 que ningún otro mod con FaceGen de estos NPC queda con mayor prioridad que este.");
+            var above = (built.Faces ?? []).SelectMany(f => f.Provenance.InstallAbove).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            pending.Add(above.Count > 0
+                ? $"Comprobar en MO2 que este mod queda por encima de {string.Join(", ", above.Select(m => $"«{m}»"))} (también contienen el FaceGen de estos NPC)."
+                : "Comprobar en MO2 que ningún otro mod con FaceGen de estos NPC queda con mayor prioridad que este.");
         }
 
         if (built.Faces is { Count: > 0 })

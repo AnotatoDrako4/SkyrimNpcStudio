@@ -152,6 +152,20 @@ int setting_ms(const char* key, int fallback) {
   return ok ? std::clamp(value, 0, 5000) : fallback;
 }
 
+// MO2 mods (and overwrite) with loose FaceGen/FaceTint files of this NPC, ascending priority: an
+// exported FaceGen must be installed above all of them, or the game shows their head with the new
+// record. Archives never compete (a loose file always wins over a BSA), nor does the game's Data.
+std::vector<std::string> facegen_competitors(const mo2::VirtualFileSystem& vfs, const face::FaceRecipe& recipe) {
+  std::vector<std::string> mods;
+  for (const auto* path : {&recipe.facegen_mesh_path, &recipe.facegen_tint_path}) {
+    for (const auto i : vfs.providers_of(*path)) {
+      const auto& p = vfs.providers()[i];
+      if (p.kind != mo2::ProviderKind::GameData && std::find(mods.begin(), mods.end(), p.name) == mods.end()) mods.push_back(p.name);
+    }
+  }
+  return mods;
+}
+
 }  // namespace
 
 AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot,
@@ -414,6 +428,9 @@ void AppearanceEditor::analyse_existing_facegen() {
       provenance["faceGen"] = mesh_at;
       provenance["faceTint"] = where(ctx->resolver->locate(recipe.facegen_tint_path));
       provenance["faceGenPath"] = qs(recipe.facegen_mesh_path);
+      QStringList competitors;
+      for (const auto& m : facegen_competitors(ctx->snapshot->vfs, recipe)) competitors << qs(m);
+      provenance["faceGenCompetitors"] = competitors;
       const auto facegen_mod = mesh_at.value("kind").toString() == "suelto" ? mesh_at.value("provider").toString()
                                                                              : mesh_at.value("archiveProvider").toString();
       const auto plugin_mod = provenance.value("pluginProvider").toString();
@@ -1342,6 +1359,10 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                    {"derivedFrom", derived},
                    {"customMorphs", v.custom_morphs.size()},
                    {"sculptTargets", v.sculpt.size()}}}};
+    // A generated FaceGen only shows in game if this mod wins over every mod with the NPC's loose FaceGen.
+    if (!assets.empty()) {
+      if (const auto ctx = context()) face_part["faceGen"]["installAbove"] = facegen_competitors(ctx->snapshot->vfs, *recipe_);
+    }
     // Minimal change: for a hair color and/or height edit the worker writes only these record fields
     // on the winning record and rejects the export if any other face field differs from it.
     if (hair_only || !face_edit) {

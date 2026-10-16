@@ -90,6 +90,9 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QString redoText READ redo_text NOTIFY appearanceChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY appearanceChanged)
   Q_PROPERTY(bool hasFaceEdits READ has_face_edits NOTIFY appearanceChanged)
+  // Where the current face comes from ("Donante: …", a project preset name, or empty). Part of the face
+  // state, so undo/redo and reset restore it with the face.
+  Q_PROPERTY(QString faceSource READ face_source NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList presetsList READ presets_list NOTIFY presetsChanged)
   Q_PROPERTY(bool exporting READ exporting NOTIFY exportingChanged)
   Q_PROPERTY(QVariantMap lastExport READ last_export NOTIFY exportingChanged)
@@ -152,6 +155,7 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QString redo_text() const { return history_->redo_text(); }
   [[nodiscard]] bool dirty() const { return draft_.is_face_dirty() || draft_.is_height_dirty(); }
   [[nodiscard]] bool has_face_edits() const { return draft_.is_face_dirty(); }
+  [[nodiscard]] QString face_source() const { return QString::fromStdString(draft_.face().source); }
   [[nodiscard]] QVariantList presets_list() const { return presets_list_; }
   [[nodiscard]] bool exporting() const { return exporting_; }
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
