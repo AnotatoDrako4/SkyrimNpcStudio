@@ -21,7 +21,9 @@
 #include <algorithm>
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
+#include "sns/appearance/control_map.hpp"
 #include "sns/core/error.hpp"
+#include "sns/face/facegen.hpp"
 #include "sns/core/text.hpp"
 #include "sns/ipc/protocol.hpp"
 
@@ -90,6 +92,8 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   history_ = new EditHistory(this);
   outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, draft_, history_, this);
   appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
+  // The control map uses the facial analysis (measured deviation) once it is available.
+  connect(appearance_, &AppearanceEditor::faceGenChanged, this, &StudioController::refresh_appearance_control);
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
   armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
   forge_ = new CharacterForgeViewModel([this] {
@@ -217,6 +221,11 @@ void StudioController::loadProfile(const QString& profile) {
   scene_->clear();
   armor_preview_->clear();
   snapshot_.reset();
+  // A profile scan belongs to the previous snapshot: its pending answers are dropped.
+  if (scan_) {
+    scan_.reset();
+    emit appearanceScanChanged();
+  }
   set_progress(tr("Leyendo perfil '%1'…").arg(profile), -1.0);
   scan_cancel_ = std::make_shared<std::atomic<bool>>(false);
   QPointer<StudioController> self(this);
@@ -590,18 +599,12 @@ void StudioController::selectNpc(const QString& form_key) {
     const auto facegen = details.value("faceGen").toMap();
     details["faceGenGeometry"] = resolveAsset(facegen.value("geometryPath").toString());
     details["faceGenTint"] = resolveAsset(facegen.value("tintPath").toString());
-    const auto summary = details.value("summary").toMap();
-    const auto winner_mod = providerOf(summary.value("winningPlugin").toString());
-    const auto geometry = details["faceGenGeometry"].toMap();
-    if (geometry.value("found").toBool() && geometry.value("provider").toString() != winner_mod) {
-      details["faceGenWarning"] = tr("La FaceGen la aporta '%1' pero el registro ganador viene de '%2' (%3). Si no "
-                                     "coinciden puede aparecer el error de cara oscura.")
-                                      .arg(geometry.value("provider").toString(), winner_mod,
-                                           summary.value("winningPlugin").toString());
-    }
     npc_ = details;
     npc_loading_ = false;
     emit npcChanged();
+    // Which mod controls each part (record versions + FaceGen files); the measured deviation joins
+    // when the facial analysis of this NPC finishes (faceGenChanged).
+    refresh_appearance_control();
     const auto sum = details.value("summary").toMap();
     projects::NpcTarget target{
         .form_key = ss(sum.value("formKey").toString()),
@@ -622,6 +625,328 @@ void StudioController::selectNpc(const QString& form_key) {
     log("error", tr("No se pudo cargar el NPC %1: %2").arg(form_key, message));
     emit npcLoadFailed(message);
   });
+}
+
+namespace {
+
+// QML form of a control report: {facePlugin, faceMod, worst, components, findings}.
+QVariantMap control_report_map(const appearance::ControlReport& report) {
+  QVariantList components, findings;
+  for (const auto& c : report.components) {
+    QStringList overridden;
+    for (const auto& o : c.overridden) overridden << qs(o);
+    components << QVariantMap{{"key", qs(c.key)}, {"label", qs(c.label)}, {"plugin", qs(c.plugin)},
+                              {"mod", qs(c.mod)}, {"kind", qs(c.kind)},   {"overridden", overridden}};
+  }
+  QString worst = QStringLiteral("ok");
+  for (const auto& f : report.findings) {
+    findings << QVariantMap{{"severity", qs(f.severity)}, {"code", qs(f.code)}, {"message", qs(f.message)},
+                            {"consequence", qs(f.consequence)}, {"suggestion", qs(f.suggestion)}};
+    if (f.severity == "warning" || (f.severity == "info" && worst == "ok")) worst = qs(f.severity);
+  }
+  return {{"facePlugin", qs(report.face_plugin)}, {"faceMod", qs(report.face_mod)}, {"worst", worst},
+          {"components", components},             {"findings", findings}};
+}
+
+}  // namespace
+
+appearance::ControlInputs StudioController::control_inputs(const QVariantMap& details) const {
+  appearance::ControlInputs in;
+  if (!snapshot_) return in;
+  for (const auto& o : details.value("overrides").toList()) {
+    const auto e = o.toMap();
+    appearance::OverrideLink link;
+    link.plugin = ss(e.value("plugin").toString());
+    link.mod = ss(e.value("mod").toString());
+    link.is_origin = e.value("isOrigin").toBool();
+    link.is_winner = e.value("isWinner").toBool();
+    for (const auto& f : e.value("changedFields").toList()) link.changed_fields.push_back(ss(f.toString()));
+    for (const auto i : snapshot_->vfs.providers_of(link.plugin)) link.plugin_mods.push_back(snapshot_->vfs.providers()[i].name);
+    in.chain.push_back(std::move(link));
+  }
+  for (const auto& c : details.value("conflicts").toList()) in.lost_fields.push_back(ss(c.toMap().value("field").toString()));
+
+  // Effective copy (loose files over archives, like the game) and every loose copy in MO2.
+  const auto ctx = ResourceContext::for_snapshot(snapshot_);
+  const auto source = [&](const QString& path) {
+    appearance::AssetSource a;
+    a.path = ss(path);
+    if (path.isEmpty()) return a;
+    for (const auto i : snapshot_->vfs.providers_of(a.path)) a.loose_mods.push_back(snapshot_->vfs.providers()[i].name);
+    const auto loc = ctx && ctx->resolver ? ctx->resolver->locate(a.path) : std::nullopt;
+    if (loc) {
+      a.found = true;
+      a.kind = loc->kind == assets::AssetLocation::Kind::Loose ? "loose" : "bsa";
+      a.winner_mod = a.kind == "bsa" && !loc->archive_provider.empty() ? loc->archive_provider : loc->provider;
+    } else if (!a.loose_mods.empty()) {
+      a.found = true;
+      a.kind = "loose";
+      a.winner_mod = a.loose_mods.back();
+    }
+    return a;
+  };
+  const auto facegen = details.value("faceGen").toMap();
+  in.facegen = source(facegen.value("geometryPath").toString());
+  in.facetint = source(facegen.value("tintPath").toString());
+  in.facegen_expected = facegen_expected(details);
+
+  // When another mod than the FaceGen's set the head parts: are all of them in the FaceGen? Its shapes
+  // are named after the head part EditorIDs.
+  const auto parts = details.value("headParts").toList();
+  if (in.facegen.found && !parts.isEmpty() && !in.chain.empty() && ctx && ctx->resolver) {
+    std::size_t at = 0;
+    for (std::size_t i = in.chain.size(); i-- > 1;) {
+      const auto& fields = in.chain[i].changed_fields;
+      if (std::find(fields.begin(), fields.end(), "HeadParts") != fields.end()) { at = i; break; }
+    }
+    if (in.chain[at].mod != in.facegen.winner_mod) {
+      if (const auto bytes = ctx->resolver->read(in.facegen.path)) {
+        const auto info = face::inspect_facegen(*bytes);
+        bool all = info.readable;
+        for (const auto& p : parts) {
+          // A head part without a mesh (the "...00NoGash" / "NoBeard" placeholders) has no FaceGen shape.
+          if (p.toMap().value("modelPath").toString().isEmpty()) continue;
+          const auto editor_id = ss(p.toMap().value("record").toMap().value("editorId").toString());
+          all = all && !editor_id.empty() &&
+                std::any_of(info.shapes.begin(), info.shapes.end(), [&](const auto& s) { return text::iequals_ascii(s.first, editor_id); });
+        }
+        in.facegen_has_record_head_parts = all;
+      }
+    }
+  }
+  return in;
+}
+
+bool StudioController::facegen_expected(const QVariantMap& details) const {
+  const auto summary = details.value("summary").toMap();
+  if (details.contains("templateFlags")) {
+    if (!details.value("template").toMap().isEmpty() && details.value("templateFlags").toStringList().contains("Traits")) return false;
+  } else if (summary.value("usesTemplate").toBool()) {
+    return false;  // scan entry without details: templated unique NPCs take their traits from the template
+  }
+  if (!details.value("headParts").toList().isEmpty()) return true;
+  const auto race = summary.value("raceFormKey").toString().toLower();
+  return races_with_facegen_.isEmpty() || race.isEmpty() || races_with_facegen_.contains(race);
+}
+
+void StudioController::refresh_appearance_control() {
+  QElapsedTimer timer;
+  timer.start();
+  QVariantMap out;
+  if (snapshot_ && !npc_.isEmpty()) {
+    auto in = control_inputs(npc_);
+    // The facial analysis counts only if it examined this NPC's FaceGen (it may still be the previous one).
+    const auto geometry_path = npc_.value("faceGen").toMap().value("geometryPath").toString();
+    const auto compatibility = appearance_->face_compatibility();
+    const auto normalize = [](QString p) { return p.replace('/', '\\').toLower(); };
+    const auto analysed = compatibility.value("provenance").toMap().value("faceGenPath").toString();
+    bool numeric = false;
+    const double deviation = compatibility.value("deviation").toDouble(&numeric);
+    if (numeric && deviation >= 0.0 && !analysed.isEmpty() && normalize(analysed) == normalize(geometry_path)) {
+      in.regeneration_deviation = static_cast<float>(deviation);
+    }
+    out = control_report_map(appearance::analyze_appearance_control(in));
+    out["formKey"] = npc_.value("summary").toMap().value("formKey");
+    out["deviation"] = in.regeneration_deviation ? QVariant(*in.regeneration_deviation) : QVariant();
+  }
+  // faceGenChanged fires on every rebuild: notify only when the map itself changed.
+  auto previous = appearance_control_;
+  previous.remove("analysisUs");
+  if (previous == out) return;
+  out["analysisUs"] = static_cast<qint64>(timer.nsecsElapsed() / 1000);
+  appearance_control_ = out;
+  emit appearanceControlChanged();
+}
+
+// ------------------------------------------------------------------ profile-wide control map
+
+struct StudioController::AppearanceScan {
+  bool running = true;
+  QString stage = QStringLiteral("listing");  // listing, analysing, done, cancelled, failed
+  QElapsedTimer timer;
+  QStringList pending;  // NPCs with several record versions: their chain needs getNpc
+  QVariantList singles;  // NPCs with one version, analysed once every race is known
+  QSet<QString> races;   // races with a FaceGen file for some listed NPC
+  int listed = 0;
+  int analysed = 0;
+  int total = 0;
+  int rpc_calls = 0;
+  int errors = 0;
+  int since_emit = 0;
+  qint64 listing_ms = 0;
+  qint64 elapsed_ms = 0;
+  QMap<QString, int> counts;
+  QMap<QString, int> codes;
+  QVariantList rows;
+};
+
+QVariantMap StudioController::appearance_scan() const {
+  if (!scan_) return {};
+  const auto& s = *scan_;
+  QVariantMap counts, codes;
+  for (auto it = s.counts.begin(); it != s.counts.end(); ++it) counts.insert(it.key(), it.value());
+  for (auto it = s.codes.begin(); it != s.codes.end(); ++it) codes.insert(it.key(), it.value());
+  return {{"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
+          {"total", s.total},         {"pending", static_cast<int>(s.pending.size())},       {"rpcCalls", s.rpc_calls},
+          {"errors", s.errors},       {"listingMs", s.listing_ms},
+          {"elapsedMs", s.running ? s.timer.elapsed() : s.elapsed_ms},
+          {"counts", counts},         {"codes", codes},         {"rows", s.rows}};
+}
+
+void StudioController::scanAppearanceControl() {
+  if (phase_ != Phase::Ready || !snapshot_ || (scan_ && scan_->running)) return;
+  diag::record("studio", "appearance scan");
+  scan_ = std::make_shared<AppearanceScan>();
+  scan_->timer.start();
+  emit appearanceScanChanged();
+  scan_page(0);
+}
+
+void StudioController::cancelAppearanceScan() {
+  if (!scan_ || !scan_->running) return;
+  scan_->stage = QStringLiteral("cancelled");
+  scan_finish();
+}
+
+void StudioController::scan_page(int offset) {
+  auto scan = scan_;
+  ++scan->rpc_calls;
+  worker_->call(method::kSearchNpcs, Json{{"limit", 1000}, {"offset", offset}, {"kind", "unique"}}, 60s, this,
+                [this, scan, offset](const Json& r) {
+    if (scan != scan_ || !scan->running) return;
+    scan->total = r.value("total", 0);
+    const auto items = r.value("items", Json::array());
+    const auto ctx = ResourceContext::for_snapshot(snapshot_);
+    for (const auto& item : items) {
+      const auto summary = to_map(item);
+      const auto form_key = summary.value("formKey").toString();
+      ++scan->listed;
+      // FaceGen files are named after the origin plugin and the plugin-local FormID (as the worker's
+      // FaceGenFor); a race with any such file uses FaceGen.
+      const auto colon = form_key.indexOf(':');
+      const auto plugin = form_key.mid(colon + 1);
+      const auto id = form_key.left(colon).toUpper().rightJustified(8, '0');
+      const auto geometry = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\%1\\%2.nif").arg(plugin, id);
+      if (ctx && ctx->resolver && ctx->resolver->locate(ss(geometry))) scan->races.insert(summary.value("raceFormKey").toString().toLower());
+      if (summary.value("overrideCount").toInt() > 1) {
+        scan->pending << form_key;
+        continue;
+      }
+      // One record version: the chain is the origin alone.
+      const QVariantMap origin{{"plugin", plugin}, {"mod", providerOf(plugin)}, {"isOrigin", true}, {"isWinner", true}, {"changedFields", QVariantList{}}};
+      scan->singles << QVariantMap{{"summary", summary},
+                                   {"overrides", QVariantList{origin}},
+                                   {"faceGen", QVariantMap{{"geometryPath", geometry},
+                                                           {"tintPath", QStringLiteral("textures\\actors\\character\\facegendata\\facetint\\%1\\%2.dds").arg(plugin, id)}}}};
+    }
+    const int next = offset + static_cast<int>(items.size());
+    if (!items.empty() && next < scan->total) {
+      scan_page(next);
+      return;
+    }
+    races_with_facegen_ = scan->races;
+    for (const auto& single : std::as_const(scan->singles)) scan_record(single.toMap());
+    scan->singles.clear();
+    scan->listing_ms = scan->timer.elapsed();
+    scan->stage = QStringLiteral("analysing");
+    emit appearanceScanChanged();
+    scan_next();
+  }, [this, scan](int, const QString& message, const Json&) {
+    if (scan != scan_ || !scan->running) return;
+    log("error", tr("Análisis del perfil: %1").arg(message));
+    ++scan->errors;
+    scan->stage = QStringLiteral("failed");
+    scan_finish();
+  });
+}
+
+void StudioController::scan_next() {
+  auto scan = scan_;
+  if (!scan || !scan->running) return;
+  if (scan->pending.isEmpty()) {
+    scan->stage = QStringLiteral("done");
+    scan_finish();
+    return;
+  }
+  const auto form_key = scan->pending.takeFirst();
+  ++scan->rpc_calls;
+  worker_->call(method::kGetNpc, Json{{"formKey", ss(form_key)}}, 30s, this, [this, scan](const Json& r) {
+    if (scan != scan_ || !scan->running) return;
+    auto details = to_map(r);
+    QVariantList overrides;
+    for (const auto& o : details.value("overrides").toList()) {
+      auto entry = o.toMap();
+      entry["mod"] = providerOf(entry.value("plugin").toString());
+      overrides << entry;
+    }
+    details["overrides"] = overrides;
+    scan_record(details);
+    scan_next();
+  }, [this, scan, form_key](int, const QString& message, const Json&) {
+    if (scan != scan_ || !scan->running) return;
+    ++scan->errors;
+    log("warning", tr("Análisis del perfil: %1 no se pudo leer (%2)").arg(form_key, message));
+    scan_next();
+  });
+}
+
+void StudioController::scan_record(const QVariantMap& details) {
+  auto& scan = *scan_;
+  const auto report = appearance::analyze_appearance_control(control_inputs(details));
+  QString worst = QStringLiteral("ok");
+  QString message;
+  QStringList codes;
+  for (const auto& f : report.findings) {
+    ++scan.codes[qs(f.code)];
+    if (f.severity == "ok") continue;
+    codes << qs(f.code);
+    if (f.severity == "warning") {
+      worst = QStringLiteral("warning");
+      if (message.isEmpty()) message = qs(f.message);
+    } else if (worst == "ok") {
+      worst = QStringLiteral("info");
+    }
+  }
+  ++scan.analysed;
+  ++scan.counts[worst];
+  if (worst != "ok") {
+    const auto summary = details.value("summary").toMap();
+    QString facegen_mod;
+    for (const auto& c : report.components) {
+      if (c.key == "facegen") facegen_mod = qs(c.mod);
+    }
+    const auto name = summary.value("name").toString();
+    scan.rows << QVariantMap{{"formKey", summary.value("formKey")},
+                             {"name", name.isEmpty() ? summary.value("editorId").toString() : name},
+                             {"worst", worst},
+                             {"codes", codes},
+                             {"facePlugin", qs(report.face_plugin)},
+                             {"faceMod", qs(report.face_mod)},
+                             {"faceGenMod", facegen_mod},
+                             {"message", message}};
+  }
+  if (++scan.since_emit >= 250) {
+    scan.since_emit = 0;
+    emit appearanceScanChanged();
+  }
+}
+
+void StudioController::scan_finish() {
+  auto& scan = *scan_;
+  scan.running = false;
+  scan.elapsed_ms = scan.timer.elapsed();
+  // Warnings first, then notes; by name inside each group.
+  std::stable_sort(scan.rows.begin(), scan.rows.end(), [](const QVariant& a, const QVariant& b) {
+    const auto ma = a.toMap(), mb = b.toMap();
+    const bool wa = ma.value("worst").toString() == "warning", wb = mb.value("worst").toString() == "warning";
+    if (wa != wb) return wa;
+    return ma.value("name").toString().compare(mb.value("name").toString(), Qt::CaseInsensitive) < 0;
+  });
+  diag::record("studio", ("appearance scan " + scan.stage).toStdString());
+  log("info", tr("Análisis del perfil (%1): %2 NPC únicos, %3 con avisos, %4 con notas, %5 errores, %6 s")
+                  .arg(scan.stage).arg(scan.analysed).arg(scan.counts.value("warning")).arg(scan.counts.value("info"))
+                  .arg(scan.errors).arg(scan.elapsed_ms / 1000.0, 0, 'f', 1));
+  emit appearanceScanChanged();
 }
 
 void StudioController::searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type, bool smp_only) {

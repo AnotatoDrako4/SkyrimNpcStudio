@@ -58,6 +58,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/BodyCustomizer.qml
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
+    qml/charactercreator/AppearanceControlPanel.qml
     qml/charactercreator/CharacterCreator.qml
     qml/characterforge/AIGenerationPanel.qml
     qml/characterforge/ForgeAppearanceEditor.qml

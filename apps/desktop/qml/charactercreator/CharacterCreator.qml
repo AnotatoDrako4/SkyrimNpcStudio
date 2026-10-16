@@ -241,6 +241,7 @@ Item {
                     TabButton { text: qsTr("Pelo/Ojos") }
                     TabButton { text: qsTr("Cuerpo") }
                     TabButton { text: qsTr("Vestuario") }
+                    TabButton { objectName: "creatorOriginTab"; text: qsTr("Origen") }
                 }
 
                 StackLayout {
@@ -272,6 +273,11 @@ Item {
                     OutfitPanel {
                         studio: root.studio
                         onExportRequested: exportWizard.open()
+                    }
+
+                    // Pestaña 6: Origen (qué mod controla cada parte y conflictos de FaceGen)
+                    AppearanceControlPanel {
+                        studio: root.studio
                     }
                 }
             }
