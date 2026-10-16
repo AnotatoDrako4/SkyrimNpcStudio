@@ -91,7 +91,7 @@ Capturas: `out/local-review/forge-preview-debug4/forge-*.png` (no versionadas).
 |---|---|---|
 | Validación GLB/glTF (`engines/gltf`) | VERIFICADO EN WINDOWS |
 | Visor: carga, geometría visible, encuadre, frontal/lateral/posterior, restablecer, malla | VERIFICADO EN WINDOWS |
-| Órbita, zoom y desplazamiento con ratón | VERIFICADO EN WINDOWS (clic der: órbita, central: paneo, rueda: zoom) |
+| Órbita, zoom y desplazamiento con ratón | IMPLEMENTADO SIN VERIFICACIÓN con ratón físico. Según `OrbitCameraController.qml` 6.11.2: arrastrar con botón derecho o central orbita, Ctrl + arrastrar desplaza (no el botón central solo), rueda: zoom |
 | Selección por clic y caja delimitadora 3D | VERIFICADO EN WINDOWS (clic izq en modelo selecciona; clic en vacío limpia) |
 | Inspección multi-parte y ocultación jerárquica | VERIFICADO EN WINDOWS (`parts_set.glb`, 4 partes, ocultar padre oculta hijos) |
 | Errores visibles (truncado, escape de ruta) y reintento | VERIFICADO EN WINDOWS |
@@ -111,7 +111,7 @@ Capturas: `out/local-review/forge-preview-debug4/forge-*.png` (no versionadas).
 
 ### Cambios realizados
 
-1. **Selección por clic en View3D**: `ForgeViewport.qml` configura `TapHandler` con `acceptedButtons: Qt.LeftButton` y `OrbitCameraController` con `acceptedButtons: Qt.RightButton | Qt.MiddleButton; panEnabled: true`. Esto evita que el controlador de cámara capture los clics izquierdos y permite que `view.pick(x, y)` seleccione piezas en la escena o deseleccione al pulsar espacio vacío.
+1. **Selección por clic en View3D**: `ForgeViewport.qml` configura `TapHandler` con `acceptedButtons: Qt.LeftButton` y `OrbitCameraController` con `acceptedButtons: Qt.RightButton | Qt.MiddleButton; panEnabled: true`, de modo que `view.pick(x, y)` selecciona piezas con el botón izquierdo o deselecciona al pulsar espacio vacío. El desplazamiento sigue siendo Ctrl + arrastrar (manejador `ctrlDragHandler` del controlador de Qt).
 2. **Caja de selección 3D**: `selectionBox` con 12 aristas construidas con `#Cube` y `DefaultMaterial` `#f0b44c` sin iluminación, escaladas y posicionadas dinámicamente según los límites de la pieza seleccionada en espacio de escena.
 3. **Multi-parte y jerarquía**: fixture `tests/fixtures/models/parts_set.glb` con 4 partes (Body, Helmet hijo de Body, Shield hijo de Body, Sword en la raíz). `ForgeSceneViewModel` implementa `setPartVisible` y `showAllParts`; ocultar un nodo padre oculta automáticamente sus nodos descendientes (`hiddenBy`).
 4. **Despliegue autónomo en `dist`**: `apps/desktop/CMakeLists.txt` enlaza directamente `Qt6::Quick3DAssetUtils`; `scripts/package.ps1` despliega `Qt6Quick3DAssetUtils.dll`, `Qt6Quick3DAssetImport.dll` y el plugin `assetimporters/assimp.dll`. El script `smoke-test.ps1` soporta `-Binary` para validar el binario empaquetado.
@@ -126,6 +126,19 @@ Capturas: `out/local-review/forge-preview-debug4/forge-*.png` (no versionadas).
 | `smoke-test.ps1 -ForgePreview` (Debug) | PASSED: 6 modelos verificados con selección, caja 3D, visibilidad y rechazo de truncado |
 | `smoke-test.ps1 -Binary dist/... -ForgePreview` | PASSED: el paquete distribuible carga, valida y renderiza GLB de forma autónoma |
 | `scripts/local-review.ps1` (completo) | 6/6 pasos `passed` (build, dotnet-test, ctest, ctest-local, smoke, forge-preview) |
+
+### Corrección posterior (2026-10-14): clic sintético de la prueba automática
+
+La comprobación `--forge-preview` enviaba el clic con `QCoreApplication::sendEvent` y un
+`QMouseEvent` construido a mano. En Qt 6.11.2 el constructor de `QSinglePointEvent` no actualiza la
+posición de pulsación (solo para la rueda; comprobado en `qtbase/src/gui/kernel/qevent.cpp`), así
+que `TapHandler` medía un arrastre falso desde una posición antigua, superaba el umbral y cancelaba
+el toque: «a click on the model centre selects the part» fallaba. Con eventos de plataforma
+(`QTest::mouseClick` en `qmltestrunner`) el mismo `TapHandler` dentro de `View3D` funcionaba. La
+prueba usa ahora `QTest::mouseClick(QWindow*)` (enlaza `Qt6::Test`) y lee la caja de selección por la
+propiedad `selectionShown` de `forgeViewport` (los nodos 3D no son hijos `QObject` de la ventana).
+Resultado: `smoke-test.ps1 -ForgePreview` con los 6 archivos, 63 comprobaciones PASS y 0 FAIL
+(Body y Figure seleccionados con clic real, caja visible, clic en vacío deselecciona).
 
 ### Limitaciones vigentes
 
@@ -181,3 +194,14 @@ El primer smoke con ventana oculta falló: QML creó el workspace y cargó los d
 | `smoke-test.ps1 -ForgePreview ... -ShowWindow` | PASSED: QML y visor, Suzanne visible (8,4 %), selección y visibilidad |
 
 El script viaja embebido en el ejecutable: el paquete no depende del checkout, pero Blender debe instalarse por separado. Coste operativo: un proceso local de Blender por conversión y espacio temporal para el GLB; no se consumen APIs ni claves. Los fallos de arranque, versión, timeout, cancelación, informe y validación mantienen el modelo externo original seleccionado. Sigue pendiente comprobar manualmente el flujo completo desde los botones QML y probar el paquete `dist` con Blender instalado. CF-5 y CF-6 continúan pendientes.
+
+
+## Entrega 5 — regresiones de conversiones Blender desde Windows (CF-4.1)
+
+**Estado:** IMPLEMENTADO SIN VERIFICACIÓN EN WINDOWS (pendiente ejecución local tras integrar el PR).
+
+- `tools/blender/make_test_models.py`: nuevo modo explícito `bridge_sources`; genera una misma malla original de Blender como OBJ, FBX y BLEND en una carpeta temporal de la revisión. El modo por defecto conserva los modelos glTF anteriores.
+- `tests/app/test_forge_blender_bridge.cpp`: prueba opt-in `[forge][blender][local]` que convierte los tres formatos mediante `ForgeBlenderBridge`, comprueba el informe y valida/importa el GLB en una biblioteca `.sncf` con integridad SHA-256.
+- `scripts/local-review.ps1`: parámetro `-Blender` y nuevo paso `blender-bridge`; no se ejecutan pruebas Blender ni se presume éxito si no se indica su ruta.
+- **Validación pendiente:** `.\scripts\local-review.ps1 -Blender '<ruta real a blender.exe>'` en Windows y prueba visual desde QML/paquete `dist`.
+- **Alcance:** validación del bridge y persistencia de GLB; no genera NIF, FaceGen ni certifica funcionamiento en Skyrim.

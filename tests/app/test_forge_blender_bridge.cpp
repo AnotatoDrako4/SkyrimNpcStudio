@@ -85,6 +85,59 @@ TEST_CASE("Blender bridge converts an OBJ into a validated managed GLB", "[forge
   CHECK_FALSE(bridge.busy());
 }
 
+TEST_CASE("Blender bridge imports generated OBJ FBX and BLEND into managed GLB", "[forge][blender][local]") {
+  const auto executable = qEnvironmentVariable("SNS_LOCAL_BLENDER");
+  const auto folder = qEnvironmentVariable("SNS_LOCAL_BLENDER_FIXTURES");
+  if (executable.isEmpty() || !QFileInfo(executable).isExecutable() || folder.isEmpty())
+    SKIP("Set SNS_LOCAL_BLENDER and SNS_LOCAL_BLENDER_FIXTURES for the complete bridge regression");
+
+  char name[] = "sns_forge_asset_tests";
+  char* args[] = {name, nullptr};
+  int count = 1;
+  QCoreApplication app(count, args);
+  const fs::path fixture_dir(folder.toStdWString());
+
+  sns::test::TempDir temp;
+  const auto project = temp.path() / "BridgeFormats.sncf";
+  sns::creation::ForgeProjectStore::save(project, sns::creation::ForgeProjectStore::create("Bridge formats"));
+  for (const auto* extension : {"obj", "fbx", "blend"}) {
+    CAPTURE(extension);
+    const auto source = fixture_dir / (std::string("bridge_sample.") + extension);
+    REQUIRE(fs::is_regular_file(source));
+    sns::app::ForgeBlenderBridge bridge;
+    QEventLoop loop;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QString failure, sha;
+    QObject::connect(&watchdog, &QTimer::timeout, &loop, [&] {
+      failure = "Bridge fixture conversion timed out"; bridge.cancel(); loop.quit();
+    });
+    QObject::connect(&bridge, &sns::app::ForgeBlenderBridge::failed, &loop,
+                     [&](const QString& message) { failure = message; loop.quit(); });
+    QObject::connect(&bridge, &sns::app::ForgeBlenderBridge::completed, &loop,
+                     [&](const QString& glb, const QVariantMap& report) {
+      try {
+        if (report.value("sourceFormat").toString() != QString::fromLatin1(extension) ||
+            report.value("meshes").toInt() != 1)
+          throw std::runtime_error("The bridge report does not match the input fixture");
+        const auto imported = sns::app::forge_assets::import_model(qs(project), glb);
+        sha = imported.sha256;
+        if (sns::app::forge_assets::resolve_model(qs(project), imported.relative_path, sha).isEmpty())
+          throw std::runtime_error("Converted GLB was not stored and validated in .sncf");
+      } catch (const std::exception& error) { failure = QString::fromUtf8(error.what()); }
+      loop.quit();
+    });
+    bridge.convert(executable, qs(source));
+    watchdog.start(90000);
+    loop.exec();
+    watchdog.stop();
+    INFO(failure.toStdString());
+    REQUIRE(failure.isEmpty());
+    CHECK(sha.size() == 64);
+    CHECK_FALSE(bridge.busy());
+  }
+}
+
 TEST_CASE("Blender bridge cancellation reports failure and returns idle", "[forge][blender][local]") {
   const auto executable = qEnvironmentVariable("SNS_LOCAL_BLENDER");
   if (executable.isEmpty() || !QFileInfo(executable).isExecutable()) SKIP("Set SNS_LOCAL_BLENDER to run cancellation test");

@@ -33,6 +33,18 @@ desplazamiento (clic central y arrastrar), selección de partes (clic izquierdo)
 «Malla». Un GLB truncado o un glTF que apunta a `../` debe mostrar el error en el visor y no cargar
 nada. Verificado tanto en compilación de desarrollo como en el paquete `dist`.
 
+### Verificación integral opcional del Blender Bridge (CF-4.1)
+
+Para ejecutar automáticamente las conversiones reales **OBJ, FBX y BLEND → GLB → biblioteca .sncf** con la misma malla generada por Blender, ejecutar desde PowerShell en Windows:
+
+```powershell
+.\scripts\local-review.ps1 -Blender 'D:\Program Files\blender.exe'
+```
+
+El parámetro `-Blender` es opcional: si se omite, la revisión normal conserva su comportamiento y las pruebas dependientes de Blender pueden quedar omitidas. Con el parámetro presente, `local-review.ps1` genera `bridge_sample.obj`, `bridge_sample.fbx` y `bridge_sample.blend` bajo la carpeta aislada `out/local-review/<ejecución>/blender-inputs`. Ejecuta el binario `sns_forge_asset_tests.exe '[blender][local]'`, que verifica informes de conversión, GLB y almacenamiento administrado con SHA-256. **Si falla la generación o el test, el paso `blender-bridge` falla; no se declara como aprobado.**
+
+**Estado de este cambio:** `IMPLEMENTADO SIN VERIFICACIÓN EN WINDOWS` hasta ejecutar ese comando en el PC local. No equivale a probar botones QML ni el paquete `dist`.
+
 ### Blender Bridge (CF-4)
 
 Instalar Blender 4 o 5 y, en el panel Blender de Character Forge, usar «Detectar en PATH» o
