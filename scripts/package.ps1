@@ -119,6 +119,12 @@ try {
     dotnet publish (Join-Path $root 'services\BethesdaWorker\BethesdaWorker.csproj') -c Release -r win-x64 `
         --self-contained true -o (Join-Path $full 'worker') --nologo -v quiet
     if ($LASTEXITCODE) { throw "dotnet publish failed ($LASTEXITCODE)" }
+    # Symbols stay next to the package, not in it: dist\symbols\<commit> reads crash dumps of this build.
+    $symbols = Join-Path $root "dist\symbols\$(git -C $root rev-parse --short HEAD 2>$null)"
+    New-Item -ItemType Directory -Force $symbols | Out-Null
+    Get-ChildItem (Join-Path $full 'worker') -Filter *.pdb | Move-Item -Destination $symbols -Force
+    $studioPdb = Join-Path $root 'build\package\bin\SkyrimNpcStudio.pdb'
+    if (Test-Path $studioPdb) { Copy-Item $studioPdb $symbols -Force }
 
     Write-Host '[4/4] Documentacion y licencias...'
     foreach ($f in 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md') { Copy-Item (Join-Path $root $f) $full }
