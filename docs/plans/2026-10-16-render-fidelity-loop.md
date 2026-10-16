@@ -44,7 +44,7 @@ ejecución: el visor sigue siendo una aproximación (ver `docs/NIF_PIPELINE.md`)
 
 ## Comparación reproducible
 
-`outender-compare\<npc>-<toma>.png`: misma cámara (`-CaptureSet`, 1600×900) en tres etapas — antes,
+`out\render-compare\<npc>-<toma>.png`: misma cámara (`-CaptureSet`, 1600×900) en tres etapas — antes,
 SkinTint, SkinTint + `_msn` — para Ingrid, Lydia y Serana (cuerpo y rostro). Coste del horneado: Ingrid
 4,8 → 6,4 s, Lydia 3,0 → 5,2 s de carga.
 
