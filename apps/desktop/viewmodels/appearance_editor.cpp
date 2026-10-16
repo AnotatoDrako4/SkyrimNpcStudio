@@ -1041,8 +1041,24 @@ void AppearanceEditor::redo() {
 
 // ------------------------------------------------------------------------------------- donors and presets
 
+// A donor replaces morphs, presets, Head Parts, skin tone and tints at once, so it is refused wherever any
+// of those operations is blocked (e.g. a High Poly head whose TRI do not match its mesh).
+QString AppearanceEditor::donor_blocked_reason() const {
+  for (const auto& b : compatibility_.value("blocked").toList()) {
+    const auto m = b.toMap();
+    const auto op = m.value("op").toString();
+    if (op == QLatin1String("face-morphs") || op == QLatin1String("head-parts") || op == QLatin1String("skin-tone"))
+      return m.value("label").toString() + QStringLiteral(": ") + m.value("reason").toString();
+  }
+  return {};
+}
+
 void AppearanceEditor::applyDonor(const QString& donorFormKey, const QString& donorName) {
   if (donorFormKey.isEmpty() || !worker_ || !recipe_) return;
+  if (const auto reason = donor_blocked_reason(); !reason.isEmpty()) {
+    console_->append("warning", "appearance", tr("Aplicar un donante está bloqueado para %1 (%2).").arg(npc_label(), reason));
+    return;
+  }
   worker_->call(method::kGetFaceRecipe, Json{{"npcFormKey", ss(donorFormKey)}}, 30s, this,
                 [this, donorFormKey, donorName](const Json& json) {
                   face::FaceRecipe donor;
@@ -1052,7 +1068,7 @@ void AppearanceEditor::applyDonor(const QString& donorFormKey, const QString& do
                     console_->append("error", "appearance", qs(e.what()));
                     return;
                   }
-                  if (!recipe_) return;
+                  if (!recipe_ || !donor_blocked_reason().isEmpty()) return;  // the NPC may have changed meanwhile
                   if (donor.female != recipe_->female) {
                     console_->append("error", "appearance", tr("El donante es de otro sexo: sus piezas y morphs no son compatibles."));
                     return;

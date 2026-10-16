@@ -44,3 +44,24 @@ Estado de partida: PR #8 → #14 abiertos, sin fusionar; `main` en `78ea95c`.
 - **Regresión:** ctest 138, 0 fallos; .NET 105/105.
 - **Pendientes:** prueba en Skyrim (`PENDIENTE_DE_VALIDACION_SKYRIM`); revisión con ventana visible.
 - **Próxima tarea:** seguir la auditoría del Character Creator (controles sin efecto, textos de error).
+
+## Iteración 2
+
+- **Commit base:** `454520e` (PR #15). Misma rama.
+- **Problema 1 (crítico) — el donante saltaba la protección facial.** Evidencia (código):
+  `AppearanceEditor::applyDonor` no llamaba a `refuse_blocked`, a diferencia de sliders, peso y tono. En
+  una cabeza protegida (Serana: morphs, Head Parts y tono bloqueados) aplicar un donante reemplazaba
+  morphs, Head Parts y tono y regeneraba la cabeza: la deformación que la protección debe impedir.
+  - **Solución:** `donor_blocked_reason()` (bloqueo de `face-morphs`, `head-parts` o `skin-tone`);
+    `applyDonor` lo rechaza antes y después de leer el donante; los botones de donante se desactivan con
+    el motivo.
+  - **Pruebas:** `donor-export` ya no se salta las cabezas protegidas: Serana → «donor blocked …» y
+    «protected head unchanged after the refused donor», PASSED; Ingrid → donante aplicado y exportado,
+    PASSED.
+- **Problema 2 — pestaña «Donantes» del Character Creator vacía.** Evidencia (comprobación estática):
+  su lista usaba `studio.npcs`, que no existe. Ahora busca con `searchNpcs` y muestra `npcResults`.
+- **Problema 3 — texto engañoso.** Ambas vistas de donante decían que se aplica el «FaceGen» del otro
+  NPC; `applyDonor` regenera el FaceGen desde el registro del donante. Texto corregido.
+- **Regresión:** ctest 138, 0 fallos.
+- **Próxima tarea:** seguir la auditoría (operaciones disponibles que deberían bloquearse: presets
+  RaceMenu y Head Parts en cabezas protegidas).

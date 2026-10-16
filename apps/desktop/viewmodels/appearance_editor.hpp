@@ -83,6 +83,8 @@ class AppearanceEditor : public QObject {
   // Facial compatibility diagnosis (sns::face::diagnose_face_compatibility) with MO2 provenance:
   // code, label, allowed [{op, label}], blocked [{op, label, reason}], triMismatches, evidence, provenance.
   Q_PROPERTY(QVariantMap faceCompatibility READ face_compatibility NOTIFY faceGenChanged)
+  // Why a donor cannot be applied to this NPC (a blocked morph, Head Part or skin tone operation), or empty.
+  Q_PROPERTY(QString donorBlockedReason READ donor_blocked_reason NOTIFY faceGenChanged)
   Q_PROPERTY(bool exportable READ exportable NOTIFY faceGenChanged)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY appearanceChanged)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY appearanceChanged)
@@ -149,6 +151,7 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantMap face_compatibility() const { return compatibility_; }
   // An operation ("hair-color", "face-morphs", ...) the diagnosis blocks; false while unknown.
   [[nodiscard]] bool operation_blocked(const QString& op) const;
+  [[nodiscard]] QString donor_blocked_reason() const;
   [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
   [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
   [[nodiscard]] QString undo_text() const { return history_->undo_text(); }

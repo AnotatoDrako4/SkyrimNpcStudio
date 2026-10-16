@@ -1215,9 +1215,16 @@ struct Stress : std::enable_shared_from_this<Stress> {
       steps.push_back([self] {
         const auto donor = qEnvironmentVariable("SNS_STRESS_DONOR", QStringLiteral("013640:Skyrim.esm"));
         if (self->appearance()->operation_blocked(QStringLiteral("face-morphs")) || self->appearance()->operation_blocked(QStringLiteral("head-parts"))) {
-          self->log("donor: face edits blocked for this head; donor not applied");
+          // A donor rewrites morphs and Head Parts: on a protected head the editor must refuse it.
           self->head_part_skip = true;
-          self->step();
+          self->check(!self->appearance()->donor_blocked_reason().isEmpty(), "donor blocked for this head: " + self->appearance()->donor_blocked_reason());
+          self->log("applyDonor " + donor + " on a protected head (must be refused)");
+          self->appearance()->applyDonor(donor, QStringLiteral("donante"));
+          self->after(1500, [self] {
+            self->check(!self->appearance()->has_face_edits() && self->appearance()->face_source().isEmpty(),
+                        "protected head unchanged after the refused donor");
+            self->then_idle();
+          });
           return;
         }
         self->head_part_skip = false;
