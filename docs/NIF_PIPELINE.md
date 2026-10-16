@@ -58,6 +58,34 @@ Se listan en el panel de geometrías (cursiva) y en el inspector, pero empiezan 
 
 La cabeza usa la geometría `facegeom\<plugin de origen>\<FormID>.nif`. El tinte `facetint\…dds` se **compone** sobre la difusa (no la sustituye), con la fórmula del shader FaceTint reimplementada por Community Shaders: `(b² + 2·t·b·(1−b)) · 3.984375 · (detalle + (1/255, 0, 1/255))`, usando el mapa de detalle del slot 3. Un tinte neutro (0.5) y un detalle neutro (64/255) dejan la difusa igual. Sin tinte: aviso `FaceTintMissing`.
 
+### Piel del cuerpo (SkinTint) y coherencia con la cara
+
+Las formas con shader SkinTint (tipo 5; técnica `FacegenRGBTint` en Community Shaders, `ShaderCache.h`)
+aplican el tono de piel del NPC (QNAM) con la **misma mezcla** que la cara, no como multiplicación:
+`(b² + 2·t·b·(1−b)) · (1.01171875, 0.99609375, 1.01171875)` sobre los valores en gamma de la difusa
+(`GetFacegenRGBTintBaseColor`, `Lighting.hlsl`). `rendering::apply_skin_tint` compone una copia de la
+difusa en memoria (clave `…|skintint:r,g,b`, origen `composite` en el inspector) y el material ya no
+lleva el tono como `baseColor`. El NIF, las texturas del perfil y lo exportado no cambian.
+
+Defecto corregido el 2026-10-16: el visor multiplicaba la difusa por el tono (≈0.8), así que el cuerpo
+salía más oscuro que la cara y se veía un corte en el cuello. Medido en la captura de cuerpo entero
+(`-CaptureSet`, perfil real), luminancia pecho/mejilla antes → después: Ingrid 0,65 → 1,12; Lydia
+0,69 → 1,14; Serana 0,50 → 0,90 (la cara no cambia; la diferencia restante es de iluminación: el pecho
+mira a la luz). Prueba unitaria: `SkinTint applies the skin tone as a soft-light blend, not a multiply`.
+
+El pelo (HairTint, técnica `Hair`) sí multiplica: `lerp(1, TintColor, color de vértice.g)`; el visor
+multiplica por el tinte (y por el color de vértice completo si la malla lo trae).
+
+### Lo que sigue siendo aproximado frente a Skyrim
+
+- Iluminación: luz direccional + ambiente de Qt Quick 3D con rugosidad fija 0,8 y sin especular de
+  Skyrim, sin dispersión subsuperficial (`skin`) ni retroiluminación; un mismo color puede verse algo
+  distinto en zonas que miran a la luz y en las que no.
+- Mapas de normales en espacio de modelo (`_msn`): se usan las normales de vértice (aviso en la pieza).
+- Color: las texturas se muestran como sRGB y la mezcla se hace en gamma, como el modo sin iluminación
+  lineal del juego; con la iluminación lineal de Community Shaders el resultado final del juego varía.
+- Pelo: la modulación por el canal verde del color de vértice no se reproduce exactamente.
+
 ## Texturas
 
 - Se elige el **mip almacenado** más grande que cabe (2048 px color, 1024 px normales); sin mips, filtro de caja. `TexturesReduced` lo indica.

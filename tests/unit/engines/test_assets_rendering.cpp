@@ -231,6 +231,23 @@ TEST_CASE("FaceGen tint composition is neutral at 0.5 and keeps the base size", 
   CHECK_THROWS_AS(apply_face_tint(base, sns::textures::DdsImage{}, nullptr), sns::Error);
 }
 
+TEST_CASE("SkinTint applies the skin tone as a soft-light blend, not a multiply", "[scene][facegen]") {
+  using sns::rendering::apply_skin_tint;
+  const auto base = image(4, 4, {153, 153, 153, 255});  // 0.6
+  // Neutral tone (0.5) keeps the texture, times the shader's (1.0117, 0.9961, 1.0117) constant.
+  const auto neutral = apply_skin_tint(base, {0.5f, 0.5f, 0.5f});
+  CHECK(neutral.width == 4);
+  CHECK(std::abs(int(pixel(neutral, 5)[1]) - 152) <= 1);
+  // A typical QNAM (0.8): b^2 + 2*t*b*(1-b) = 0.36 + 0.384 = 0.744 -> 190 (green scale 0.99609375 -> 189),
+  // brighter than the base; the old material multiply gave 0.48 (122): the body ended darker than the face.
+  const auto qnam = apply_skin_tint(base, {0.8f, 0.8f, 0.8f});
+  CHECK(std::abs(int(pixel(qnam, 0)[1]) - 189) <= 1);
+  CHECK(pixel(qnam, 0)[1] > pixel(base, 0)[1]);
+  CHECK(pixel(apply_skin_tint(base, {0.0f, 0.0f, 0.0f}), 0)[1] < 100);  // black tone: b^2
+  CHECK(pixel(qnam, 0)[3] == 255);                                       // alpha untouched
+  CHECK_THROWS_AS(apply_skin_tint(sns::textures::DdsImage{}, {0.5f, 0.5f, 0.5f}), sns::Error);
+}
+
 TEST_CASE("Outfit items sharing a slot: the last one stays equipped", "[scene]") {
   CHECK(sns::rendering::resolve_equipped({1u << 16, (1u << 16) | (1u << 2), 1u << 4}) == std::vector<bool>{false, true, true});
   CHECK(sns::rendering::resolve_equipped({0, 0}) == std::vector<bool>{true, true});

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <unordered_set>
 
@@ -435,6 +436,31 @@ textures::DdsImage apply_face_tint(const textures::DdsImage& base, const texture
   return out;
 }
 
+textures::DdsImage apply_skin_tint(const textures::DdsImage& base, const Rgb& tint) {
+  if (base.format != textures::TextureFormat::RGBA8) throw Error(ErrorKind::InvalidArgument, "apply_skin_tint needs a decoded RGBA8 image");
+  if (base.width == 0 || base.height == 0 || base.data.size() != 4ull * base.width * base.height)
+    throw Error(ErrorKind::InvalidArgument, "apply_skin_tint got an empty or truncated image");
+  textures::DdsImage out = base;
+  auto* px = reinterpret_cast<std::uint8_t*>(out.data.data());
+  const float t[3] = {tint.r, tint.g, tint.b};
+  constexpr float scale[3] = {1.01171875f, 0.99609375f, 1.01171875f};
+  // One lookup table per channel: the result only depends on the 8-bit texel value.
+  std::uint8_t lut[3][256];
+  for (int c = 0; c < 3; ++c) {
+    for (int v = 0; v < 256; ++v) {
+      const float b = v / 255.0f;
+      const float result = (b * b + 2.0f * t[c] * b * (1.0f - b)) * scale[c];
+      lut[c][v] = static_cast<std::uint8_t>(std::clamp(result, 0.0f, 1.0f) * 255.0f + 0.5f);
+    }
+  }
+  const std::size_t texels = static_cast<std::size_t>(base.width) * base.height;
+  for (std::size_t i = 0; i < texels; ++i) {
+    auto* texel = px + i * 4;
+    for (int c = 0; c < 3; ++c) texel[c] = lut[c][texel[c]];
+  }
+  return out;
+}
+
 std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks) {
   std::vector<bool> equipped(slot_masks.size(), true);
   std::uint32_t taken = 0;
@@ -768,6 +794,31 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       scene.textures[key] = std::move(composite);
     }
     part.diffuse = key;
+  }
+
+  // ---- 3b. SkinTint composition (FacegenRGBTint) -----------------------------------------------
+  // The body's skin tone is a soft-light blend over its diffuse, like the face tint; drawing it as a
+  // material multiply darkened the body against the face (seam at the neck). Untextured shapes keep
+  // the plain tint color.
+  for (auto& part : scene.parts) {
+    if (part.shader_type != nif::kShaderSkinTint || !part.tint) continue;
+    const auto base = scene.textures.find(part.diffuse);
+    if (base == scene.textures.end()) continue;
+    char hex[32];
+    std::snprintf(hex, sizeof(hex), "%.4f,%.4f,%.4f", part.tint->r, part.tint->g, part.tint->b);
+    const auto key = part.diffuse + "|skintint:" + hex;
+    if (!scene.textures.contains(key)) {
+      auto composite = std::make_shared<textures::DdsImage>(apply_skin_tint(*base->second, *part.tint));
+      TextureInfo info = scene.texture_info[part.diffuse];
+      info.path = key;
+      info.location = "composite";
+      info.derived_from = part.diffuse + " + skin tone (QNAM) " + hex;
+      info.alpha = textures::measure_alpha(*composite);
+      scene.texture_info[key] = std::move(info);
+      scene.textures[key] = std::move(composite);
+    }
+    part.diffuse = key;
+    part.tint.reset();  // applied in the texture: a material multiply on top would tint twice
   }
 
   // ---- 4. alpha translation, measured on what really reaches the material ---------------------
