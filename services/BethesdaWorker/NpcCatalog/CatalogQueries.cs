@@ -294,7 +294,30 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
 
     private sealed record Chain(IReadOnlyList<OverrideEntry> Entries, IReadOnlyList<FieldConflict> Conflicts);
 
-    private Chain OverrideChain(string key)
+    private Chain OverrideChain(string key) => BuildChain(key, ChainRows(key));
+
+    /// <summary>
+    /// The NPC's chain with <paramref name="plugin"/> appended as the winning version, whose field
+    /// fingerprints are <paramref name="fingerprints"/> (an exported plugin that is not installed yet).
+    /// </summary>
+    public ProjectedChain ProjectChain(FormKey npc, string plugin, Dictionary<string, string> fingerprints)
+    {
+        var key = npc.ToString();
+        var rows = ChainRows(key);
+        var index = rows.Count == 0 ? 0 : rows[^1].Index + 1;
+        rows.Add((index, plugin, fingerprints));
+        var chain = BuildChain(key, rows);
+        return new ProjectedChain { Npc = key, Overrides = chain.Entries, Conflicts = chain.Conflicts };
+    }
+
+    /// <summary>Field fingerprints of the NPC's winning version in the catalog.</summary>
+    public Dictionary<string, string>? WinnerFingerprints(FormKey npc)
+    {
+        var rows = ChainRows(npc.ToString());
+        return rows.Count == 0 ? null : rows[^1].Fp;
+    }
+
+    private List<(int Index, string Plugin, Dictionary<string, string> Fp)> ChainRows(string key)
     {
         var rows = new List<(int Index, string Plugin, Dictionary<string, string> Fp)>();
         using (var cmd = _db.CreateCommand())
@@ -312,6 +335,11 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             }
         }
 
+        return rows;
+    }
+
+    private static Chain BuildChain(string key, IReadOnlyList<(int Index, string Plugin, Dictionary<string, string> Fp)> rows)
+    {
         var origin = key[(key.IndexOf(':', StringComparison.Ordinal) + 1)..];
         var entries = new List<OverrideEntry>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
@@ -319,6 +347,22 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             var changed = i == 0
                 ? []
                 : rows[i].Fp.Where(kv => rows[i - 1].Fp.GetValueOrDefault(kv.Key) != kv.Value).Select(kv => kv.Key).Order(StringComparer.Ordinal).ToList();
+            // A changed value identical to an earlier version's is a copy of it: the earliest version
+            // with that value introduced it (it differs from the one before it, or it is the origin).
+            var copied = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var field in changed)
+            {
+                var value = rows[i].Fp.GetValueOrDefault(field);
+                for (var k = 0; k < i - 1; k++)
+                {
+                    if (rows[k].Fp.GetValueOrDefault(field) == value)
+                    {
+                        copied[field] = rows[k].Plugin;
+                        break;
+                    }
+                }
+            }
+
             entries.Add(new OverrideEntry
             {
                 Plugin = rows[i].Plugin,
@@ -326,6 +370,7 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
                 IsOrigin = string.Equals(rows[i].Plugin, origin, StringComparison.OrdinalIgnoreCase),
                 IsWinner = i == rows.Count - 1,
                 ChangedFields = changed,
+                CopiedFrom = copied,
             });
         }
 

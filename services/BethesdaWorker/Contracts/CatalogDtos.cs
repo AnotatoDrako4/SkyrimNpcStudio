@@ -168,6 +168,12 @@ public sealed record OverrideEntry
 
     /// <summary>Tracked fields whose value differs from the previous entry of the chain.</summary>
     public required IReadOnlyList<string> ChangedFields { get; init; }
+
+    /// <summary>
+    /// Changed fields whose new value is identical to an earlier entry's (a patch forwarding another
+    /// mod's value): field -> plugin of the earliest entry with that value, i.e. the one that introduced it.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> CopiedFrom { get; init; } = new Dictionary<string, string>();
 }
 
 /// <summary>

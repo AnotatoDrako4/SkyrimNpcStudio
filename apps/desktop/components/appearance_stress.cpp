@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
@@ -1652,7 +1653,8 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->check(missing.isEmpty(), QStringLiteral("%1 parts described (missing: %2)").arg(parts.size()).arg(missing.join(", ")));
 
         // Record parts: the controller is a version of the chain, its mod is MO2's provider of that
-        // plugin, and no later version changed the part's fields again.
+        // plugin, and no later version changed the part's fields again (except to copy its value back,
+        // which the part shows as "via").
         const QHash<QString, QStringList> fields = {{"face-shape", {"FaceMorph", "FaceParts"}}, {"head-parts", {"HeadParts"}},
                                                     {"hair-color", {"HairColor"}}, {"outfit", {"DefaultOutfit", "SleepingOutfit", "WornArmor"}}};
         for (auto it = fields.begin(); it != fields.end(); ++it) {
@@ -1661,14 +1663,27 @@ struct Stress : std::enable_shared_from_this<Stress> {
           for (int i = 0; i < chain.size(); ++i) {
             if (chain[i].toMap().value("plugin").toString().compare(part.value("plugin").toString(), Qt::CaseInsensitive) == 0) at = i;
           }
+          // The last version that changed any of the fields is the controller, or only copies its values.
+          int last = 0;
+          for (int i = 1; i < chain.size(); ++i) {
+            for (const auto& f : chain[i].toMap().value("changedFields").toList()) {
+              if (it.value().contains(f.toString())) last = i;
+            }
+          }
           bool later_change = false;
-          for (int i = at + 1; at >= 0 && i < chain.size(); ++i) {
-            for (const auto& f : chain[i].toMap().value("changedFields").toList()) later_change |= it.value().contains(f.toString());
+          if (at >= 0 && last != at) {
+            const auto copied = chain[last].toMap().value("copiedFrom").toMap();
+            for (const auto& f : chain[last].toMap().value("changedFields").toList()) {
+              const bool copy_of_controller =
+                  copied.value(f.toString()).toString().compare(part.value("plugin").toString(), Qt::CaseInsensitive) == 0;
+              later_change |= it.value().contains(f.toString()) && !copy_of_controller;
+            }
           }
           self->check(at >= 0 && !later_change && part.value("mod").toString() == self->studio->providerOf(part.value("plugin").toString()),
-                      QStringLiteral("%1 controlled by %2 «%3» (version %4 of %5), overrides [%6]")
+                      QStringLiteral("%1 controlled by %2 «%3» (version %4 of %5)%7, overrides [%6]")
                           .arg(it.key(), part.value("plugin").toString(), part.value("mod").toString()).arg(at + 1).arg(chain.size())
-                          .arg(part.value("overridden").toStringList().join(", ")));
+                          .arg(part.value("overridden").toStringList().join(", "))
+                          .arg(part.value("via").toString().isEmpty() ? QString() : " via " + part.value("via").toString()));
         }
 
         // FaceGen files: the same source the facial analysis located, and every losing loose copy in MO2.
@@ -1776,9 +1791,10 @@ struct Stress : std::enable_shared_from_this<Stress> {
           QStringList codes;
           const auto code_map = scan.value("codes").toMap();
           for (auto it = code_map.begin(); it != code_map.end(); ++it) codes << it.key() + "=" + QString::number(it.value().toInt());
-          self->log(QStringLiteral("profile scan: %1 ms total, %2 ms listing, %3 worker calls, %4 us per NPC; codes %5")
+          self->log(QStringLiteral("profile scan: %1 ms total, %2 ms listing, %3 worker calls, %4 us per NPC; codes %5; %6 with «Usar el rostro de X»")
                         .arg(scan.value("elapsedMs").toLongLong()).arg(scan.value("listingMs").toLongLong()).arg(scan.value("rpcCalls").toInt())
-                        .arg(analysed > 0 ? scan.value("elapsedMs").toLongLong() * 1000 / analysed : 0).arg(codes.join(", ")));
+                        .arg(analysed > 0 ? scan.value("elapsedMs").toLongLong() * 1000 / analysed : 0).arg(codes.join(", "))
+                        .arg(scan.value("resolutions").toInt()));
           QFile out(QDir(self->work_dir).filePath("appearance-scan.json"));
           if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(scan)).toJson());
           // Up to three flagged NPCs to open: one per warning code first, then notes.
@@ -1856,6 +1872,233 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->step();
         });
       });
+    } else if (name == "face-resolution") {
+      // «Usar el rostro de X» on the real profile (read-only): the loaded NPC must be a FaceGenRecordMismatch
+      // whose FaceGen mod has a version of the record (AI Overhaul over NITHI on the test profile). The
+      // button prepares the Easy Mod plan, the patch goes to a work folder, and the checks re-read it:
+      // the worker with Mutagen (verification + chain with the patch last), here the TES4 header, the
+      // manifest and the control map projected with the patch loaded last.
+      auto res = std::make_shared<QVariantMap>();
+      auto facegen_hash = std::make_shared<QByteArray>();
+      // Main.qml and the Character Creator each have an assistant; the button opens the creator's one.
+      auto wizard = [self]() -> QObject* {
+        QObject* any = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (!QByteArray(o->metaObject()->className()).startsWith("ExportWizardDialog_QMLTYPE")) continue;
+          if (o->property("visible").toBool()) return o;
+          if (!any) any = o;
+        }
+        return any;
+      };
+      auto read_facegen = [self]() -> QByteArray {
+        const auto path = self->studio->npc().value("faceGen").toMap().value("geometryPath").toString().toStdString();
+        const auto ctx = ResourceContext::for_snapshot(self->studio->snapshot());
+        const auto bytes = ctx && ctx->resolver ? ctx->resolver->read(path) : std::nullopt;
+        return bytes ? QCryptographicHash::hash(QByteArray::fromStdString(*bytes), QCryptographicHash::Sha256).toHex() : QByteArray();
+      };
+      steps.push_back([self, res, facegen_hash, read_facegen] {
+        const auto map = self->studio->appearance_control();
+        QStringList codes;
+        for (const auto& f : map.value("findings").toList()) codes << f.toMap().value("code").toString();
+        self->check(map.value("formKey").toString() == self->primary_npc, "control map belongs to " + self->primary_npc);
+        if (!codes.contains("FaceGenRecordMismatch")) {
+          // Nothing to resolve (run it with --npc on an AI Overhaul/NITHI NPC such as 01334E:Skyrim.esm).
+          self->check(!map.contains("resolution"), "no mismatch (" + codes.join(", ") + "): no resolution offered");
+          self->steps.clear();
+          self->step();
+          return;
+        }
+        self->log("before: " + codes.join(", "));
+        *res = map.value("resolution").toMap();
+        self->check(!res->isEmpty(), "the map offers a resolution: " + res->value("label").toString());
+        if (res->isEmpty()) { self->steps.clear(); self->step(); return; }
+        QString facegen_mod;
+        for (const auto& c : map.value("components").toList()) {
+          if (c.toMap().value("key").toString() == "facegen") facegen_mod = c.toMap().value("mod").toString();
+        }
+        const auto source = res->value("sourcePlugin").toString();
+        const auto winner = self->studio->npc().value("summary").toMap().value("winningPlugin").toString();
+        QStringList chain;
+        for (const auto& o : self->studio->npc().value("overrides").toList()) chain << o.toMap().value("plugin").toString();
+        self->check(res->value("sourceMod").toString() == facegen_mod && self->studio->providerOf(source) == facegen_mod,
+                    QStringLiteral("source %1 «%2» provides the effective FaceGen «%3»").arg(source, res->value("sourceMod").toString(), facegen_mod));
+        self->check(chain.contains(source, Qt::CaseInsensitive) && res->value("winnerPlugin").toString().compare(winner, Qt::CaseInsensitive) == 0,
+                    QStringLiteral("source in the chain [%1], winner %2").arg(chain.join(" > "), winner));
+        const auto fields = res->value("fields").toStringList();
+        bool known = !fields.isEmpty();
+        for (const auto& f : fields) {
+          known = known && std::find(appearance::kResolutionFields.begin(), appearance::kResolutionFields.end(), f.toStdString()) !=
+                               appearance::kResolutionFields.end();
+        }
+        self->check(known, "fields to copy: " + fields.join(", "));
+        self->check(res->value("loadAfter").toStringList() == QStringList{source, res->value("winnerPlugin").toString()},
+                    "loads after: " + res->value("loadAfter").toStringList().join(", "));
+        *facegen_hash = read_facegen();
+        self->check(!facegen_hash->isEmpty(), "effective FaceGen read: sha256 " + QString::fromLatin1(facegen_hash->left(16)));
+        self->step();
+      });
+      // Hair Color Safe Mode keeps its own export: with a pending hair edit the resolution cannot be created.
+      steps.push_back([self, hair] { hair(QColor("#8B5A2B")); self->then_idle(); });
+      steps.push_back([self] {
+        self->check(self->studio->prepareFaceResolution(), "prepareFaceResolution");
+        const auto plan = self->appearance()->easy_mod_plan();
+        bool edits_blocked = false;
+        for (const auto& c : plan.value("checks").toList()) {
+          edits_blocked |= c.toMap().value("key").toString() == "edits" && c.toMap().value("state").toString() == "blocked";
+        }
+        self->check(plan.value("mode").toString() == "face-resolution" && !plan.value("canExport").toBool() && edits_blocked,
+                    "with a pending hair edit the resolution is blocked (" + plan.value("mode").toString() + ")");
+        self->appearance()->clearFaceResolution();
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
+      // The button in «Origen» prepares the plan and opens the assistant.
+      steps.push_back([self, res, wizard] {
+        QObject* tabs = nullptr;
+        QObject* button = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("creatorRightTabs")) tabs = o;
+          if (o->objectName() == QLatin1String("faceResolutionButton")) button = o;
+        }
+        self->check(tabs && button, "«Origen» resolution button found");
+        if (!tabs || !button) { self->step(); return; }
+        tabs->setProperty("currentIndex", 5);
+        self->after(400, [self, res, wizard, button] {
+          self->check(button->property("visible").toBool() && button->property("text").toString() == res->value("label").toString(),
+                      "button: " + button->property("text").toString());
+          QMetaObject::invokeMethod(button, "clicked");
+          self->after(500, [self, wizard] {
+            auto* w = wizard();
+            self->check(w && w->property("visible").toBool(), "the button opens the assistant");
+            const auto plan = self->appearance()->easy_mod_plan();
+            self->check(plan.value("mode").toString() == "face-resolution" && plan.value("canExport").toBool(),
+                        "plan: " + plan.value("summary").toString());
+            for (const auto& c : plan.value("checks").toList()) {
+              const auto m = c.toMap();
+              self->log(QStringLiteral("  check %1 %2: %3").arg(m.value("state").toString(), m.value("key").toString(), m.value("label").toString()));
+            }
+            if (!w) { self->step(); return; }
+            self->check(w->property("plan").toMap().value("mode").toString() == "face-resolution", "the assistant shows the same plan");
+            const auto size = QStringLiteral("resolution-%1x%2").arg(self->window->width()).arg(self->window->height());
+            std::vector<std::function<void()>> pages;
+            for (int page = 0; page < 4; ++page) {
+              pages.push_back([w, page] { w->setProperty("step", page); });
+              pages.push_back([self, w, page, size] { self->check_wizard_layout(w, page, size); });
+            }
+            self->chain(std::move(pages), 400, [self] { self->step(); });
+          });
+        });
+      });
+      const auto dir = QDir(work_dir).filePath(QStringLiteral("face-resolution-%1").arg(QDateTime::currentMSecsSinceEpoch()));
+      steps.push_back([self, res, facegen_hash, read_facegen, wizard, dir] {
+        const auto plugin = self->appearance()->easy_mod_plan().value("suggestedPluginName").toString();
+        self->log("face resolution export " + plugin + " to " + dir);
+        QDir().mkpath(dir);
+        self->appearance()->exportFaceResolution(plugin, dir, true, true, QStringLiteral("SNS Tester"), {});
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, res, facegen_hash, read_facegen, wizard, plugin] {
+          if (self->appearance()->exporting()) { self->after(100, *wait); return; }
+          const auto r = self->appearance()->last_export();
+          self->check(r.value("success").toBool(), "export: " + r.value("message").toString());
+          QStringList files;
+          for (const auto& f : r.value("files").toList()) files << f.toMap().value("path").toString();
+          self->check(files == QStringList{plugin}, "mod files: [" + files.join(", ") + "] (only the plugin, no FaceGen)");
+          const auto masters = r.value("masters").toStringList();
+          for (const auto& p : res->value("loadAfter").toStringList()) self->check(masters.contains(p, Qt::CaseInsensitive), "master " + p);
+          // Safe patch: exactly the resolution's fields differ from the winner, each copied from the source.
+          QStringList changed, reasons;
+          for (const auto& d : r.value("semanticDiff").toList()) {
+            for (const auto& c : d.toMap().value("changes").toList()) {
+              changed << c.toMap().value("field").toString();
+              reasons << c.toMap().value("reason").toString();
+            }
+          }
+          auto wanted = res->value("fields").toStringList();
+          changed.sort();
+          wanted.sort();
+          self->check(changed == wanted, "semantic diff [" + changed.join(", ") + "] == resolution fields");
+          const auto copied_prefix = "Copiado de " + res->value("sourcePlugin").toString();
+          self->check(!reasons.isEmpty() && std::all_of(reasons.begin(), reasons.end(), [&](const QString& s) { return s.startsWith(copied_prefix); }),
+                      "every change says where it was copied from");
+          // Re-read by the worker with Mutagen: the chain with the patch loaded last.
+          const auto chain = r.value("projectedChain").toMap();
+          const auto overrides = chain.value("overrides").toList();
+          const auto last = overrides.isEmpty() ? QVariantMap{} : overrides.back().toMap();
+          auto last_changed = last.value("changedFields").toStringList();
+          last_changed.sort();
+          bool all_copied = !last_changed.isEmpty();
+          for (const auto& f : last_changed) {
+            all_copied = all_copied && last.value("copiedFrom").toMap().value(f).toString() == res->value("sourcePlugin").toString();
+          }
+          self->check(last.value("plugin").toString() == plugin && last.value("isWinner").toBool() && last_changed == wanted && all_copied,
+                      QStringLiteral("re-read chain ends with %1: changed [%2], all copied from the source: %3")
+                          .arg(last.value("plugin").toString(), last_changed.join(", ")).arg(all_copied));
+          // The control map with the patch loaded last: record and FaceGen from the same mod.
+          const auto after = r.value("projectedControl").toMap();
+          QStringList codes;
+          for (const auto& f : after.value("findings").toList()) {
+            codes << f.toMap().value("severity").toString() + ":" + f.toMap().value("code").toString();
+          }
+          self->check(!codes.contains("warning:FaceGenRecordMismatch") && codes.contains("ok:FaceSourcesConsistent") &&
+                          after.value("faceMod").toString() == res->value("sourceMod").toString() &&
+                          after.value("faceVia").toString() == plugin && !after.contains("resolution"),
+                      QStringLiteral("after the patch: face %1 «%2» via %3; %4")
+                          .arg(after.value("facePlugin").toString(), after.value("faceMod").toString(), after.value("faceVia").toString(), codes.join(", ")));
+          // TES4 header of the written plugin, read here (not through Mutagen): ESL flag and masters.
+          QFile esp(r.value("pluginPath").toString());
+          QStringList header_masters;
+          quint32 flags = 0;
+          if (esp.open(QIODevice::ReadOnly)) {
+            const auto bytes = esp.read(1 << 16);
+            if (bytes.size() >= 24 && bytes.startsWith("TES4")) {
+              quint32 size = 0;
+              std::memcpy(&size, bytes.constData() + 4, 4);
+              std::memcpy(&flags, bytes.constData() + 8, 4);
+              const qsizetype end = std::min<qsizetype>(24 + static_cast<qsizetype>(size), bytes.size());
+              for (qsizetype at = 24; at + 6 <= end;) {
+                quint16 len = 0;
+                std::memcpy(&len, bytes.constData() + at + 4, 2);
+                if (bytes.mid(at, 4) == "MAST" && len > 0) header_masters << QString::fromUtf8(bytes.mid(at + 6, len - 1));
+                at += 6 + len;
+              }
+            }
+          }
+          self->check(header_masters == masters && (flags & 0x200) != 0,
+                      QStringLiteral("TES4: masters [%1], ESL %2").arg(header_masters.join(", ")).arg((flags & 0x200) != 0));
+          // Manifest and README.
+          QFile manifest_file(QDir(r.value("modDirectory").toString()).filePath("manifest.json"));
+          const auto manifest = manifest_file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(manifest_file.readAll()).object() : QJsonObject{};
+          QStringList load_after;
+          for (const auto& p : manifest.value("loadAfter").toArray()) load_after << p.toString();
+          const auto face = manifest.value("faces").toArray().first().toObject();
+          self->check(load_after.size() == 2 && face.value("faceGenMode").toString() == "source-facegen" &&
+                          face.value("effectiveFaceGenMod").toString() == res->value("sourceMod").toString() &&
+                          manifest.value("inGameVerified") == QJsonValue(false) && manifest.value("readyForGame") == QJsonValue(false) &&
+                          manifest.value("dependencyMode").toString() == "dependent",
+                      "manifest: loadAfter [" + load_after.join(", ") + "], faceGenMode " + face.value("faceGenMode").toString());
+          self->check(r.value("readyForGame") == QVariant(false) && r.value("inGameVerified") == QVariant(false), "not claimed ready for the game");
+          QFile readme(QDir(r.value("modDirectory").toString()).filePath("README.md"));
+          self->check(readme.open(QIODevice::ReadOnly) && QString::fromUtf8(readme.readAll()).contains("Debe cargarse después de"), "README: load order note");
+          self->check(QFile::exists(r.value("zipPath").toString()), "ZIP written: " + r.value("zipPath").toString());
+          // FaceGen Integrity Guard: the profile's FaceGen is untouched.
+          self->check(read_facegen() == *facegen_hash, "the profile's FaceGen is byte-identical after the export");
+          QFile out(QDir(self->work_dir).filePath("face-resolution.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(r)).toJson());
+          auto* w = wizard();
+          if (!w) { self->step(); return; }
+          w->setProperty("modResult", r);
+          w->setProperty("step", 4);
+          self->after(400, [self, w] {
+            self->check_wizard_layout(w, 4, QStringLiteral("resolution-%1x%2").arg(self->window->width()).arg(self->window->height()));
+            QMetaObject::invokeMethod(w, "close");
+            self->after(200, [self] {
+              self->check(self->appearance()->easy_mod_plan().value("mode").toString() != "face-resolution", "closing the assistant clears the resolution");
+              self->step();
+            });
+          });
+        };
+        self->after(100, *wait);
+      });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {
         hair(QColor("#E6C280"));
@@ -1883,7 +2126,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "appearance-scan", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "appearance-scan", "face-resolution", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

@@ -63,11 +63,13 @@ internal static partial class NpcSafePatch
                 : FaceFields;
         }
 
+        // Subrecord -> property for every face field (HCLF and NAM6 for a minimal change; the face fields
+        // of FacePatchBuilder.SourceFaceFields for a face copied from another version).
         var allowed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in only)
         {
-            if (field == "HCLF") allowed.Add("HairColor");
-            else if (field == "NAM6") allowed.Add("Height");
+            if (field == "TINT") allowed.Add("TintLayers");
+            else if (Known.FirstOrDefault(k => k.Value.Subrecord == field).Key is { } property && FaceFields.Contains(property)) allowed.Add(property);
         }
 
         return allowed;

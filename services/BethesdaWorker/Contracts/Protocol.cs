@@ -12,7 +12,7 @@ public static class Protocol
     public const int Major = 1;
 
     /// <summary>Additive changes (new optional fields, new methods) bump the minor version.</summary>
-    public const int Minor = 3;
+    public const int Minor = 4;
 }
 
 public static class Methods

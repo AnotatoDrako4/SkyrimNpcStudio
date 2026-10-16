@@ -10,7 +10,7 @@ namespace SkyrimNpcStudio.Worker.NpcCatalog;
 internal static class RecordExtractor
 {
     /// <summary>Bump whenever extraction output changes, so cached plugin rows are rebuilt.</summary>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>
     /// Localized names live in separate .STRINGS files (loose or in BSAs). When they cannot be read
@@ -215,7 +215,32 @@ internal static class RecordExtractor
             Items = npc.Items?.Select(i => new ItemCount(i.Item.Item.FormKey.ToString(), i.Item.Count)).ToArray() ?? [],
         };
 
-        var fingerprints = new Dictionary<string, string>
+        return new NpcRow(
+            FormKey: npc.FormKey.ToString(),
+            EditorId: npc.EditorID,
+            Name: name,
+            Race: npc.Race.FormKeyNullable?.ToString(),
+            Female: flags.HasFlag(NpcConfiguration.Flag.Female),
+            Unique: flags.HasFlag(NpcConfiguration.Flag.Unique),
+            Preset: flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset),
+            Template: npc.Template.FormKeyNullable?.ToString(),
+            TemplateFlags: (int)config.TemplateFlags,
+            DefaultOutfit: npc.DefaultOutfit.FormKeyNullable?.ToString(),
+            SleepingOutfit: npc.SleepingOutfit.FormKeyNullable?.ToString(),
+            Factions: npc.Factions.Select(f => (f.Faction.FormKey.ToString(), (int)f.Rank)).ToArray(),
+            Data: data,
+            Fingerprints: Fingerprints(npc, name));
+    }
+
+    /// <summary>
+    /// Fingerprint of every tracked field (VisualFields + OtherTrackedFields), as stored in the catalog.
+    /// <paramref name="name"/> is the name as the game shows it (localized string tables resolved).
+    /// </summary>
+    internal static Dictionary<string, string> Fingerprints(INpcGetter npc, string? name)
+    {
+        var config = npc.Configuration;
+        var flags = config.Flags;
+        return new Dictionary<string, string>
         {
             ["Race"] = Fingerprint.Of(npc.Race.FormKey),
             ["Sex"] = Fingerprint.Of(flags.HasFlag(NpcConfiguration.Flag.Female)),
@@ -246,22 +271,6 @@ internal static class RecordExtractor
             ["AIData"] = Fingerprint.Of(npc.AIData),
             ["Scripts"] = Fingerprint.Of(npc.VirtualMachineAdapter),
         };
-
-        return new NpcRow(
-            FormKey: npc.FormKey.ToString(),
-            EditorId: npc.EditorID,
-            Name: name,
-            Race: npc.Race.FormKeyNullable?.ToString(),
-            Female: flags.HasFlag(NpcConfiguration.Flag.Female),
-            Unique: flags.HasFlag(NpcConfiguration.Flag.Unique),
-            Preset: flags.HasFlag(NpcConfiguration.Flag.IsCharGenFacePreset),
-            Template: npc.Template.FormKeyNullable?.ToString(),
-            TemplateFlags: (int)config.TemplateFlags,
-            DefaultOutfit: npc.DefaultOutfit.FormKeyNullable?.ToString(),
-            SleepingOutfit: npc.SleepingOutfit.FormKeyNullable?.ToString(),
-            Factions: npc.Factions.Select(f => (f.Faction.FormKey.ToString(), (int)f.Rank)).ToArray(),
-            Data: data,
-            Fingerprints: fingerprints);
     }
 
     private static ArmorRow ExtractArmor(IArmorGetter armor, NameReader names)

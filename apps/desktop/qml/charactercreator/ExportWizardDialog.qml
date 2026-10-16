@@ -35,6 +35,9 @@ Dialog {
         }
         var prov = compat.provenance || {}
         add(prov.winningPlugin || summary.winningPlugin, prov.pluginProvider)
+        // A face resolution loads after the plugin it copies from and the winner (declared masters).
+        var after = plan.loadAfter || []
+        for (var k = 0; k < after.length; ++k) add(after[k], studio.providerOf(after[k]))
         var outfitChange = (plan.changes || []).some(function (c) { return c.key === "outfit" })
         if (outfitChange) {
             var pieces = studio.outfit.pieces || []
@@ -71,13 +74,19 @@ Dialog {
         failure = ""
         failureIssues = []
         waitingResult = false
-        if (pluginName.text.length === 0)
+        if (root.plan.mode === "face-resolution")
+            pluginName.text = root.plan.suggestedPluginName
+        else if (pluginName.text.length === 0)
             pluginName.text = root.studio.outfit.suggestedPluginName.length > 0 ? root.studio.outfit.suggestedPluginName : "SNS_NpcMod.esp"
         if (outputDir.text.length === 0)
             outputDir.text = prefs.lastDirectory.length > 0 ? prefs.lastDirectory : root.studio.outfit.defaultExportDirectory
         if (author.text.length === 0) author.text = prefs.author
     }
-    onClosed: if (root.studio.scene.original) root.studio.scene.original = false
+    onClosed: {
+        if (root.studio.scene.original) root.studio.scene.original = false
+        // The resolution was chosen for this session of the assistant; the editors' plan comes back.
+        if (!root.busy) root.studio.appearance.clearFaceResolution()
+    }
 
     Connections {
         target: root.studio.appearance
@@ -130,6 +139,8 @@ Dialog {
             root.studio.appearance.exportFaceOverhaul(name, dir, esl.checked, zip.checked, author.text, description.text)
         else if (root.plan.mode === "complete-overhaul")
             root.studio.appearance.exportCompleteOverhaul(name, dir, esl.checked, zip.checked, author.text, description.text)
+        else if (root.plan.mode === "face-resolution")
+            root.studio.appearance.exportFaceResolution(name, dir, esl.checked, zip.checked, author.text, description.text)
         else
             root.waitingResult = false
     }
@@ -276,6 +287,15 @@ Dialog {
                         onClicked: root.studio.scene.original = !root.studio.scene.original
                     }
                     Text {
+                        visible: root.plan.mode === "face-resolution"
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        color: Theme.textDim
+                        font.pixelSize: Theme.small
+                        text: qsTr("El parche no cambia la cabeza: el visor ya muestra el FaceGen que carga el juego, y el parche hace que el "
+                                   + "registro diga lo mismo que ese FaceGen.")
+                    }
+                    Text {
                         visible: root.studio.appearance.faceGen.kind === "hair-safe"
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
@@ -392,6 +412,16 @@ Dialog {
                         KeyValue { label: qsTr("Plugin"); value: root.modResult ? (root.modResult.pluginPath || "") : ""; mono: true }
                         KeyValue { label: qsTr("ZIP"); value: root.modResult && root.modResult.zipPath ? root.modResult.zipPath : qsTr("(no solicitado)"); mono: true }
                         KeyValue { label: qsTr("Masters"); value: root.modResult ? (root.modResult.masters || []).join(", ") : "" }
+                        Text {
+                            readonly property var projected: root.modResult ? (root.modResult.projectedControl || null) : null
+                            visible: projected !== null && projected.facePlugin !== undefined
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: Theme.ok
+                            font.pixelSize: Theme.small
+                            text: projected ? qsTr("Mapa de control con el parche al final: datos faciales de %1 (mod «%2»), copiados por el parche; ningún desajuste de FaceGen.")
+                                                  .arg(projected.facePlugin).arg(projected.faceMod) : ""
+                        }
                         Text {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap

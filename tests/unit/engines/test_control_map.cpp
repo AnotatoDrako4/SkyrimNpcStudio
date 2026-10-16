@@ -350,3 +350,189 @@ TEST_CASE("Control map: an empty chain still describes the face files", "[appear
   CHECK_FALSE(finding(r, "FaceGenRecordMismatch"));
   CHECK_FALSE(finding(r, "FaceSourcesConsistent"));
 }
+
+// ---------------------------------------------------------------- copies and assisted resolution
+
+namespace {
+
+OverrideLink copy_link(std::string plugin, std::string mod, std::vector<std::string> changed, const std::string& from) {
+  auto l = link(std::move(plugin), std::move(mod), changed);
+  for (const auto& f : changed) l.copied_from[f] = from;
+  return l;
+}
+
+// Shape of the 28 Riften NPCs on the test profile: NITHI sets the face and ships the loose FaceGen,
+// AI Overhaul (later in load order, made from another copy of the record) sets the face fields again.
+ControlInputs aio_over_nithi() {
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}),
+                    link("NITHI NPC Enhancement - Riften.esp", "NITHI NPC Enhancement - Riften",
+                         {"HeadParts", "FaceMorph", "FaceParts", "TintLayers", "TextureLighting", "HairColor"}),
+                    link("AI Overhaul.esp", "AI Overhaul 1.8", {"FaceMorph", "FaceParts", "TintLayers", "TextureLighting", "Spells"})});
+  in.facegen = loose("NITHI NPC Enhancement - Riften", {"NITHI NPC Enhancement - Riften"});
+  in.facetint = loose("NITHI NPC Enhancement - Riften", {"NITHI NPC Enhancement - Riften"});
+  in.lost_fields = {"FaceMorph", "FaceParts", "TintLayers", "TextureLighting"};
+  return in;
+}
+
+}  // namespace
+
+TEST_CASE("Control map: a copied value belongs to the version that introduced it", "[appearance][controlmap]") {
+  // A patch forwards the vanilla face over a mod that changed it: the face is vanilla's, carried by the patch.
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("Face.esp", "Face Mod", {"FaceMorph", "HeadParts"}),
+                    copy_link("Forward.esp", "Forward Patch", {"FaceMorph", "HeadParts"}, "Skyrim.esm")});
+  in.facegen = bsa("<Game Data>");
+  in.facetint = bsa("<Game Data>");
+  const auto r = analyze_appearance_control(in);
+  REQUIRE(component(r, "face-shape"));
+  CHECK(component(r, "face-shape")->plugin == "Skyrim.esm");
+  CHECK(component(r, "face-shape")->via == "Forward.esp");
+  CHECK(component(r, "face-shape")->overridden == std::vector<std::string>{"Face.esp (Face Mod)"});
+  CHECK(r.face_plugin == "Skyrim.esm");
+  CHECK(r.face_via == "Forward.esp");
+  CHECK(field_controller(in.chain, "HeadParts") == 0);
+  CHECK(finding(r, "FaceSourcesConsistent"));
+  CHECK_FALSE(has_warning(r));
+
+  // A copy that names a plugin that is not earlier in the chain stays with the version that wrote it.
+  in.chain.back().copied_from["FaceMorph"] = "Missing.esp";
+  CHECK(field_controller(in.chain, "FaceMorph") == 2);
+  // Without copies nothing changes: the last version that changed the field controls it.
+  in.chain.back().copied_from.clear();
+  const auto plain = analyze_appearance_control(in);
+  CHECK(component(plain, "face-shape")->plugin == "Forward.esp");
+  CHECK(component(plain, "face-shape")->via.empty());
+  CHECK(plain.face_via.empty());
+}
+
+TEST_CASE("Control map: AI Overhaul over NITHI offers to use NITHI's face", "[appearance][controlmap][resolution]") {
+  const auto in = aio_over_nithi();
+  const auto r = analyze_appearance_control(in);
+  const auto* f = finding(r, "FaceGenRecordMismatch");
+  REQUIRE(f);
+  REQUIRE(r.resolution);
+  const auto& res = *r.resolution;
+  CHECK(res.source_plugin == "NITHI NPC Enhancement - Riften.esp");
+  CHECK(res.source_mod == "NITHI NPC Enhancement - Riften");
+  CHECK(res.winner_plugin == "AI Overhaul.esp");
+  CHECK(res.winner_mod == "AI Overhaul 1.8");
+  // Only the face fields whose value differs from NITHI's: HeadParts and HairColor already are NITHI's.
+  CHECK(res.fields == std::vector<std::string>{"FaceMorph", "FaceParts", "TintLayers", "TextureLighting"});
+  CHECK(res.load_after == std::vector<std::string>{"NITHI NPC Enhancement - Riften.esp", "AI Overhaul.esp"});
+  CHECK(res.label == "Usar el rostro de «NITHI NPC Enhancement - Riften.esp»");
+  CHECK(res.detail.find("No copia ni regenera FaceGen") != std::string::npos);
+  CHECK(f->suggestion.find(res.label) != std::string::npos);
+
+  SECTION("Weight is copied only when it differs") {
+    auto heavier = in;
+    heavier.chain.back().changed_fields.push_back("Weight");
+    const auto w = analyze_appearance_control(heavier);
+    REQUIRE(w.resolution);
+    CHECK(w.resolution->fields.back() == "Weight");
+  }
+  SECTION("an outfit patch after AI Overhaul is the record the resolution overrides") {
+    auto outfit = in;
+    outfit.chain.back().is_winner = false;
+    outfit.chain.push_back(link("Outfits.esp", "Outfit Patch", {"DefaultOutfit"}));
+    outfit.chain.back().is_winner = true;
+    const auto o = analyze_appearance_control(outfit);
+    REQUIRE(o.resolution);
+    CHECK(o.resolution->winner_plugin == "Outfits.esp");
+    CHECK(o.resolution->load_after == std::vector<std::string>{"NITHI NPC Enhancement - Riften.esp", "Outfits.esp"});
+    CHECK(o.resolution->fields.size() == 4);
+  }
+}
+
+TEST_CASE("Control map: after the resolution patch the record and the FaceGen are consistent", "[appearance][controlmap][resolution]") {
+  // What the control map sees once the patch loads last: a version that copies NITHI's face fields.
+  auto in = aio_over_nithi();
+  const auto before = analyze_appearance_control(in);
+  REQUIRE(before.resolution);
+  in.chain.back().is_winner = false;
+  in.chain.push_back(copy_link("SNS_FaceFix.esp", "SNS_FaceFix", before.resolution->fields, before.resolution->source_plugin));
+  in.chain.back().is_winner = true;
+  const auto after = analyze_appearance_control(in);
+
+  CHECK_FALSE(has_warning(after));
+  CHECK_FALSE(finding(after, "FaceGenRecordMismatch"));
+  CHECK_FALSE(after.resolution);
+  REQUIRE(finding(after, "FaceSourcesConsistent"));
+  CHECK(after.face_plugin == "NITHI NPC Enhancement - Riften.esp");
+  CHECK(after.face_mod == "NITHI NPC Enhancement - Riften");
+  CHECK(after.face_via == "SNS_FaceFix.esp");
+  REQUIRE(component(after, "face-shape"));
+  CHECK(component(after, "face-shape")->plugin == "NITHI NPC Enhancement - Riften.esp");
+  CHECK(component(after, "face-shape")->via == "SNS_FaceFix.esp");
+  // AI Overhaul's face edits no longer show: replaced by the mod whose FaceGen the game uses.
+  const auto& lost = component(after, "face-shape")->overridden;
+  CHECK(std::find(lost.begin(), lost.end(), "AI Overhaul.esp (AI Overhaul 1.8)") != lost.end());
+  REQUIRE(finding(after, "FaceReplaced"));
+  CHECK(finding(after, "FaceReplaced")->severity == "info");
+  CHECK_FALSE(finding(after, "LostFaceEdits"));
+  // Parts the patch did not copy keep their controller.
+  CHECK(component(after, "head-parts")->plugin == "NITHI NPC Enhancement - Riften.esp");
+  CHECK(component(after, "head-parts")->via.empty());
+}
+
+TEST_CASE("Control map: no resolution when copying a face cannot make record and FaceGen agree", "[appearance][controlmap][resolution]") {
+  SECTION("the FaceGen's mod has no version of the record") {
+    ControlInputs in;
+    in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("Face.esp", "Face Mod", {"FaceMorph"})});
+    in.facegen = loose("Other Replacer", {"Other Replacer"});
+    const auto r = analyze_appearance_control(in);
+    CHECK(finding(r, "FaceGenRecordMismatch"));
+    CHECK_FALSE(r.resolution);
+  }
+  SECTION("the winner changed race or sex: never copied") {
+    auto in = aio_over_nithi();
+    in.chain.back().changed_fields.push_back("Race");
+    CHECK_FALSE(analyze_appearance_control(in).resolution);
+    in = aio_over_nithi();
+    in.chain.back().changed_fields.push_back("Sex");
+    CHECK_FALSE(analyze_appearance_control(in).resolution);
+  }
+  SECTION("the FaceGen's mod is the winner") {
+    // Its record keeps the face of the earlier version: nothing to copy onto it.
+    ControlInputs in;
+    in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("Face.esp", "Face Mod", {"FaceMorph"}),
+                      link("Replacer.esp", "Replacer", {"DefaultOutfit"})});
+    in.facegen = loose("Replacer", {"Replacer"});
+    const auto r = analyze_appearance_control(in);
+    CHECK(finding(r, "FaceGenRecordMismatch"));
+    CHECK_FALSE(r.resolution);
+  }
+  SECTION("not a mismatch") {
+    ControlInputs in;
+    in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("Face.esp", "Face Mod", {"FaceMorph"})});
+    in.facegen = loose("Face Mod", {"Face Mod"});
+    CHECK_FALSE(analyze_appearance_control(in).resolution);
+    auto measured = aio_over_nithi();
+    measured.regeneration_deviation = 0.01f;  // the FaceGen is what the record produces: nothing to fix
+    const auto m = analyze_appearance_control(measured);
+    CHECK(finding(m, "FaceGenFromOtherModMatches"));
+    CHECK_FALSE(m.resolution);
+  }
+}
+
+TEST_CASE("Control map: a replacer that writes a vanilla value keeps it as its own", "[appearance][controlmap]") {
+  // Found on the full test profile: a replacer with its own FaceGen whose record keeps vanilla morphs
+  // after a face mod changed them. Its FaceGen was built from those values: a full replacement, not a copy.
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("NITHI.esp", "NITHI", {"FaceMorph", "HeadParts"}),
+                    copy_link("Replacer.esp", "Replacer", {"FaceMorph"}, "Skyrim.esm")});
+  in.chain.back().changed_fields.push_back("HeadParts");
+  in.facegen = loose("Replacer", {"NITHI", "Replacer"});
+  in.facetint = loose("Replacer", {"NITHI", "Replacer"});
+  in.lost_fields = {"FaceMorph", "HeadParts"};
+  const auto r = analyze_appearance_control(in);
+  CHECK(r.face_plugin == "Replacer.esp");
+  CHECK(r.face_via.empty());
+  CHECK(component(r, "face-shape")->plugin == "Replacer.esp");
+  CHECK(field_controller(in.chain, "FaceMorph", "Replacer") == 2);
+  CHECK(field_controller(in.chain, "FaceMorph") == 0);
+  CHECK(finding(r, "FaceReplaced"));
+  CHECK_FALSE(finding(r, "LostFaceEdits"));
+  CHECK(finding(r, "FaceSourcesConsistent"));
+  CHECK_FALSE(has_warning(r));
+}

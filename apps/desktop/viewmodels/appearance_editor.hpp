@@ -19,6 +19,7 @@
 #include "mo2_snapshot.hpp"
 #include "worker_client.hpp"
 #include "sns/appearance/appearance_draft.hpp"
+#include "sns/appearance/control_map.hpp"
 #include "sns/face/face_recipe.hpp"
 #include "sns/face/facegen.hpp"
 #include "sns/rendering/scene.hpp"
@@ -191,6 +192,18 @@ class AppearanceEditor : public QObject {
                                       const QString& author = {}, const QString& description = {});
   Q_INVOKABLE void exportCompleteOverhaul(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true,
                                           const QString& author = {}, const QString& description = {});
+  // «Usar el rostro de X» (StudioController::prepareFaceResolution): the Easy Mod Creator plans and exports
+  // that patch until it is cleared (or another NPC is selected). The export copies X's face fields onto
+  // the winning record (worker FaceAssignment.copyFaceFrom), writes no FaceGen, and is verified against
+  // the control map projected with the plugin loaded last.
+  void set_face_resolution(const appearance::FaceResolution& resolution);
+  Q_INVOKABLE void clearFaceResolution();
+  Q_INVOKABLE void exportFaceResolution(const QString& pluginName, const QString& outputDir, bool eslFlag, bool createZip = true,
+                                        const QString& author = {}, const QString& description = {});
+  // Control map of the selected NPC for a projected override chain ({overrides, conflicts}) in which
+  // `plugin` is the winner; set by the studio, which owns the profile facts the map needs.
+  using ControlProjector = std::function<QVariantMap(const QVariantMap& chain, const QString& plugin)>;
+  void set_control_projector(ControlProjector projector) { control_projector_ = std::move(projector); }
 
  signals:
   void targetChanged();
@@ -273,6 +286,9 @@ class AppearanceEditor : public QObject {
   QVariantList presets_list_;
   bool exporting_ = false;
   QVariantMap last_export_;
+  std::optional<appearance::FaceResolution> resolution_;
+  std::string resolution_npc_;
+  ControlProjector control_projector_;
   mutable std::optional<std::vector<face::MorphExtension>> extensions_cache_;
   mutable SnapshotPtr extensions_snapshot_;
 };

@@ -149,3 +149,76 @@ TEST_CASE("Easy Mod Creator: mode and state names", "[appearance][easymod]") {
   CHECK(to_string(EasyModState::Blocked) == "blocked");
   CHECK(to_string(EasyModState::Waiting) == "waiting");
 }
+
+namespace {
+
+FaceResolution riften_resolution() {
+  FaceResolution r;
+  r.source_plugin = "NITHI NPC Enhancement - Riften.esp";
+  r.source_mod = "NITHI NPC Enhancement - Riften";
+  r.winner_plugin = "AI Overhaul.esp";
+  r.winner_mod = "AI Overhaul 1.8";
+  r.fields = {"FaceMorph", "FaceParts", "TintLayers"};
+  r.load_after = {r.source_plugin, r.winner_plugin};
+  r.label = "Usar el rostro de «NITHI NPC Enhancement - Riften.esp»";
+  r.detail = "Crea un parche";
+  return r;
+}
+
+}  // namespace
+
+TEST_CASE("Easy Mod Creator: a face resolution is its own minimal export", "[appearance][easymod][resolution]") {
+  auto in = loaded();
+  in.face_resolution = riften_resolution();
+  in.provenance_conflict = "El ESP ganador y el FaceGen vienen de mods distintos";
+  const auto plan = plan_easy_mod(in);
+  CHECK(plan.mode == EasyModMode::FaceResolution);
+  CHECK(to_string(plan.mode) == "face-resolution");
+  CHECK(plan.can_export);
+  REQUIRE(find(plan.changes, "face-resolution"));
+  CHECK(find(plan.changes, "face-resolution")->label == "Usar el rostro de «NITHI NPC Enhancement - Riften.esp»");
+  REQUIRE(find(plan.changes, "fields"));
+  CHECK(find(plan.changes, "fields")->label == "Campos copiados: FaceMorph, FaceParts, TintLayers");
+  REQUIRE(find(plan.checks, "facegen"));
+  CHECK(find(plan.checks, "facegen")->label.find("NITHI NPC Enhancement - Riften") != std::string::npos);
+  REQUIRE(find(plan.checks, "load-order"));
+  CHECK(find(plan.checks, "load-order")->label == "Se carga después de NITHI NPC Enhancement - Riften.esp y AI Overhaul.esp");
+  CHECK(find(plan.checks, "skyrim"));
+  // The conflict it resolves is not reported as a warning of its own export.
+  CHECK_FALSE(find(plan.checks, "provenance"));
+  CHECK(plan.summary.find("sin FaceGen") != std::string::npos);
+}
+
+TEST_CASE("Easy Mod Creator: a face resolution never mixes with editor changes", "[appearance][easymod][resolution]") {
+  auto in = loaded();
+  in.face_resolution = riften_resolution();
+  SECTION("a hair color edit keeps its Hair Color Safe Mode export") {
+    in.face_kind = FaceBuildKind::HairColorSafe;
+    const auto plan = plan_easy_mod(in);
+    CHECK(plan.mode == EasyModMode::FaceResolution);
+    CHECK_FALSE(plan.can_export);
+    REQUIRE(find(plan.checks, "edits"));
+    CHECK(find(plan.checks, "edits")->state == EasyModState::Blocked);
+    CHECK(find(plan.checks, "edits")->detail.find("Hair Color Safe Mode") != std::string::npos);
+  }
+  SECTION("height or outfit edits") {
+    in.height_changed = true;
+    CHECK_FALSE(plan_easy_mod(in).can_export);
+    in.height_changed = false;
+    in.outfit_changed = true;
+    CHECK_FALSE(plan_easy_mod(in).can_export);
+  }
+  SECTION("while the FaceGen is analysed") {
+    in.face_kind = FaceBuildKind::WaitForAnalysis;
+    const auto plan = plan_easy_mod(in);
+    CHECK_FALSE(plan.can_export);
+    CHECK(find(plan.checks, "analysis")->state == EasyModState::Waiting);
+  }
+  SECTION("a protected head keeps its blocks and says why the patch is not one of them") {
+    in.blocked_operations = {"face-morphs", "head-parts"};
+    const auto plan = plan_easy_mod(in);
+    CHECK(plan.can_export);
+    REQUIRE(find(plan.checks, "high-poly"));
+    CHECK(find(plan.checks, "high-poly")->detail.find("no edita ni regenera") != std::string::npos);
+  }
+}

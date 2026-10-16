@@ -26,7 +26,8 @@ internal sealed record BuiltPatch(
     string PluginPath, IReadOnlyList<ModKey> Masters, bool EslFlagged,
     IReadOnlyList<ExportedRecord> Records, IReadOnlyList<BuiltAssignment> Assignments, IReadOnlyList<Issue> Issues,
     IReadOnlyList<BuiltGeneratedAsset>? Generated = null, IReadOnlyList<BuiltFace>? Faces = null,
-    IReadOnlyList<BuiltStandaloneOutfit>? StandaloneOutfits = null, IReadOnlyList<NpcSemanticDiff>? SemanticDiffs = null);
+    IReadOnlyList<BuiltStandaloneOutfit>? StandaloneOutfits = null, IReadOnlyList<NpcSemanticDiff>? SemanticDiffs = null,
+    IReadOnlyList<ProjectedChain>? ProjectedChains = null, IReadOnlyList<string>? LoadAfter = null);
 
 /// <summary>
 /// Mode A (Outfit Patch): one new OTFT per NPC plus a minimal NPC override that only changes the

@@ -42,11 +42,44 @@ bool contains(const std::vector<std::string>& list, const std::string& value) {
   return std::find(list.begin(), list.end(), value) != list.end();
 }
 
-// Index of the version that set the winning value of `field`: the last one whose value differs from
-// the version before it; the origin (index 0) when no override changed it.
-std::size_t controller_of(const std::vector<OverrideLink>& chain, const std::string& field) {
+// Index of the version that introduced the value `field` has at version `at`: the last one up to `at`
+// whose value differs from the version before it (the origin when none did); a change that is a copy
+// of an earlier version's value belongs to that version.
+std::size_t introducer(const std::vector<OverrideLink>& chain, std::size_t at, const std::string& field) {
+  for (std::size_t i = at + 1; i-- > 1;) {
+    if (!contains(chain[i].changed_fields, field)) continue;
+    const auto copy = chain[i].copied_from.find(field);
+    if (copy == chain[i].copied_from.end()) return i;
+    for (std::size_t j = i; j-- > 0;) {
+      if (chain[j].plugin == copy->second) return j;
+    }
+    return i;  // the named plugin is not earlier in the chain: keep the version that wrote it
+  }
+  return 0;
+}
+
+// Index of the last version that changed `field` (the origin when none did), copy or not.
+std::size_t writer_of(const std::vector<OverrideLink>& chain, const std::string& field) {
   for (std::size_t i = chain.size(); i-- > 1;) {
     if (contains(chain[i].changed_fields, field)) return i;
+  }
+  return 0;
+}
+
+// The version a field's value is attributed to: the one that introduced it, except that a value the
+// mod of the effective FaceGen writes itself is that mod's, even if an earlier version had it too (a
+// replacer whose record keeps some vanilla values built its FaceGen from them).
+std::size_t controller_of(const std::vector<OverrideLink>& chain, const std::string& field, const std::string& facegen_mod) {
+  if (chain.empty()) return 0;
+  const auto writer = writer_of(chain, field);
+  if (!facegen_mod.empty() && chain[writer].mod == facegen_mod) return writer;
+  return introducer(chain, chain.size() - 1, field);
+}
+
+// Last version that changed any of `fields` (the origin when none did): the one that carries the value.
+std::size_t last_writer(const std::vector<OverrideLink>& chain, const std::vector<std::string>& fields) {
+  for (std::size_t i = chain.size(); i-- > 1;) {
+    if (std::any_of(fields.begin(), fields.end(), [&](const std::string& f) { return contains(chain[i].changed_fields, f); })) return i;
   }
   return 0;
 }
@@ -55,34 +88,79 @@ std::string link_label(const OverrideLink& link) { return link.plugin + " (" + l
 
 std::string quoted(const std::string& s) { return "«" + s + "»"; }
 
+// «Usar el rostro de X»: X is the last version of the chain provided by the mod of the effective FaceGen.
+// Offered when X is not the winner, race and sex already agree with X (they are never copied), and at
+// least one face field of the winner differs from X's.
+std::optional<FaceResolution> plan_resolution(const ControlInputs& in) {
+  const auto& chain = in.chain;
+  if (chain.size() < 2 || !in.facegen.found || in.facegen.winner_mod.empty()) return std::nullopt;
+  std::size_t source = chain.size();
+  for (std::size_t i = chain.size(); i-- > 0;) {
+    if (chain[i].mod == in.facegen.winner_mod) { source = i; break; }
+  }
+  const std::size_t winner = chain.size() - 1;
+  if (source >= winner) return std::nullopt;
+  const auto same_value = [&](const std::string& f) { return introducer(chain, source, f) == introducer(chain, winner, f); };
+  if (!same_value("Race") || !same_value("Sex")) return std::nullopt;
+  FaceResolution r;
+  for (const auto& f : kResolutionFields) {
+    if (!same_value(f)) r.fields.push_back(f);
+  }
+  if (r.fields.empty()) return std::nullopt;
+  r.source_plugin = chain[source].plugin;
+  r.source_mod = chain[source].mod;
+  r.winner_plugin = chain[winner].plugin;
+  r.winner_mod = chain[winner].mod;
+  r.load_after = {r.source_plugin, r.winner_plugin};
+  r.label = "Usar el rostro de " + quoted(r.source_plugin);
+  std::string fields;
+  for (const auto& f : r.fields) fields += (fields.empty() ? "" : ", ") + f;
+  r.detail = "Crea un parche que copia de " + quoted(r.source_plugin) + " solo los campos faciales (" + fields + ") sobre el registro de " +
+             quoted(r.winner_plugin) + ", que conserva todo lo demás, y se carga después de ambos. No copia ni regenera FaceGen: el de " +
+             quoted(r.source_mod) + " ya es el que usa el juego.";
+  return r;
+}
+
 }  // namespace
+
+std::size_t field_controller(const std::vector<OverrideLink>& chain, const std::string& field, const std::string& facegen_mod) {
+  return controller_of(chain, field, facegen_mod);
+}
 
 ControlReport analyze_appearance_control(const ControlInputs& in) {
   ControlReport report;
   const auto& chain = in.chain;
+  const std::string facegen_mod = in.facegen.found ? in.facegen.winner_mod : std::string();
 
   // ---- record parts
   if (!chain.empty()) {
     for (const auto& group : record_groups()) {
       std::size_t controller = 0;
-      for (const auto& f : group.fields) controller = std::max(controller, controller_of(chain, f));
-      ComponentControl c{group.key, group.label, chain[controller].plugin, chain[controller].mod, "record", {}};
-      for (std::size_t i = 0; i < controller; ++i) {
-        const bool changed = i == 0 || std::any_of(group.fields.begin(), group.fields.end(),
-                                                   [&](const std::string& f) { return contains(chain[i].changed_fields, f); });
-        if (changed) c.overridden.push_back(link_label(chain[i]));
+      for (const auto& f : group.fields) controller = std::max(controller, controller_of(chain, f, facegen_mod));
+      ComponentControl c{group.key, group.label, chain[controller].plugin, chain[controller].mod, "record", {}, {}};
+      const auto carrier = last_writer(chain, group.fields);
+      if (carrier != controller) c.via = chain[carrier].plugin;
+      // Every other version that set these fields lost: the earlier ones and, when the value is a copy,
+      // the ones between the original and the copy (only copies of the controller's value are not lost).
+      for (std::size_t i = 0; i < chain.size(); ++i) {
+        if (i == controller) continue;
+        const bool changed = std::any_of(group.fields.begin(), group.fields.end(), [&](const std::string& f) {
+          return contains(chain[i].changed_fields, f) && chain[i].copied_from.count(f) == 0;
+        });
+        if ((i == 0 && i < controller) || changed) c.overridden.push_back(link_label(chain[i]));
       }
       report.components.push_back(std::move(c));
     }
     std::size_t face = 0;
-    for (const auto& f : geometry_fields()) face = std::max(face, controller_of(chain, f));
+    for (const auto& f : geometry_fields()) face = std::max(face, controller_of(chain, f, facegen_mod));
     report.face_plugin = chain[face].plugin;
     report.face_mod = chain[face].mod;
+    if (const auto carrier = last_writer(chain, geometry_fields()); carrier != face) report.face_via = chain[carrier].plugin;
   }
 
   // ---- face files
   auto file_component = [&](const char* key, const char* label, const AssetSource& a) {
-    ComponentControl c{key, label, {}, a.found ? a.winner_mod : std::string(), a.found ? a.kind : std::string("missing"), {}};
+    ComponentControl c{key, label, {}, a.found ? a.winner_mod : std::string(), a.found ? a.kind : std::string("missing"), {}, {}};
     for (const auto& m : a.loose_mods) {
       if (m != a.winner_mod) c.overridden.push_back(m);
     }
@@ -115,7 +193,7 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
     // present in the FaceGen: the head the game shows has the record's pieces.
     std::vector<std::string> foreign;
     for (const auto& f : geometry_fields()) {
-      if (chain[controller_of(chain, f)].mod != in.facegen.winner_mod) foreign.push_back(f);
+      if (chain[controller_of(chain, f, facegen_mod)].mod != in.facegen.winner_mod) foreign.push_back(f);
     }
     const bool head_parts_only = foreign == std::vector<std::string>{"HeadParts"} && in.facegen_has_record_head_parts.value_or(false);
     if (facegen_matches_record) {
@@ -138,8 +216,13 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
               "Si una pieza se ve distinta en el juego (misma pieza con otra malla), exporta el rostro con el estudio.");
     } else {
       std::string suggestion;
+      report.resolution = plan_resolution(in);
       const auto facegen_plugin = std::find_if(chain.begin(), chain.end(), [&](const OverrideLink& l) { return l.mod == in.facegen.winner_mod; });
-      if (facegen_plugin != chain.end()) {
+      if (report.resolution) {
+        suggestion = quoted(report.resolution->source_plugin) + " (de " + quoted(in.facegen.winner_mod) + ") trae los datos faciales de ese FaceGen, pero los anula " +
+                     quoted(report.face_plugin) + ": usa el botón " + report.resolution->label +
+                     " (un parche que copia solo sus campos faciales y conserva el resto del registro ganador) o cárgalo después.";
+      } else if (facegen_plugin != chain.end()) {
         suggestion = quoted(facegen_plugin->plugin) + " (de " + quoted(in.facegen.winner_mod) + ") trae sus propios datos faciales, pero los anula " +
                      quoted(report.face_plugin) + ": cárgalo después (o usa un parche que copie sus campos faciales) para que registro y FaceGen sean del mismo mod.";
       } else if (contains(in.facegen.loose_mods, report.face_mod)) {
@@ -151,6 +234,7 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
       }
       finding("warning", "FaceGenRecordMismatch",
               "Los datos faciales del registro los fija " + quoted(report.face_plugin) + " (" + report.face_mod +
+                  (report.face_via.empty() ? std::string() : ", copiados por " + quoted(report.face_via)) +
                   ") y la geometría FaceGen la aporta " + quoted(in.facegen.winner_mod) + deviation_text + ".",
               "Si no se hicieron juntos, la cabeza del juego no corresponde al registro: cara oscura, cuello de otro tono o un rostro distinto al del editor.",
               suggestion);
@@ -184,7 +268,7 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
   std::string lost, replaced;
   for (const auto& f : in.lost_fields) {
     if (!contains(face_fields(), f)) continue;
-    const bool by_facegen_mod = !chain.empty() && in.facegen.found && chain[controller_of(chain, f)].mod == in.facegen.winner_mod;
+    const bool by_facegen_mod = !chain.empty() && in.facegen.found && chain[controller_of(chain, f, facegen_mod)].mod == in.facegen.winner_mod;
     auto& list = by_facegen_mod ? replaced : lost;
     list += (list.empty() ? "" : ", ") + f;
   }
