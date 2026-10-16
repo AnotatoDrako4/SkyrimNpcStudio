@@ -471,7 +471,8 @@ ScrollView {
                             ToolButton {
                                 text: "🎨"
                                 implicitHeight: 26
-                                implicitWidth: 26
+                                // At least 26 px, wider when the glyph needs it (the style elides a clipped label).
+                                implicitWidth: Math.max(26, implicitContentWidth + leftPadding + rightPadding)
                                 onClicked: {
                                     materialDialog.targetPieceFormKey = modelData.formKey
                                     materialDialog.targetPieceName = modelData.name
@@ -488,7 +489,8 @@ ScrollView {
                             ToolButton {
                                 text: "✕"
                                 implicitHeight: 26
-                                implicitWidth: 26
+                                // At least 26 px, wider when the glyph needs it (the style elides a clipped label).
+                                implicitWidth: Math.max(26, implicitContentWidth + leftPadding + rightPadding)
                                 onClicked: root.outfit.removePiece(modelData.formKey)
                                 ToolTip.visible: hovered
                                 ToolTip.text: qsTr("Quitar pieza del atuendo")

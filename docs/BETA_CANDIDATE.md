@@ -16,6 +16,9 @@ figura en el PR que la propone, porque cambiaría al escribirlo aquí.
 | Modo B — rostro (Hair Color Safe Mode, sliders, tono, Head Parts, donante, altura, peso) | VERIFICADO EN WINDOWS | Serana, Lydia, Ingrid, Aslfur; FaceGen = vista previa / = ganador salvo HairTint |
 | Modo C — rostro + atuendo | VERIFICADO EN WINDOWS | Lydia, Shady Sam, Serana; diff `DefaultOutfit, HairColor` |
 | NPC Safe Patch Engine (campos pedidos, máscara conservadora) | VERIFICADO EN WINDOWS | .NET 105/105; `UnauthorizedNpcChange` con 14 tipos de cambio ajeno |
+| Protección facial: donante, presets RaceMenu y proyectos no reemplazan una cabeza protegida | VERIFICADO EN WINDOWS (arnés) | Serana y Lydia: `donor-export`, `preset-export`, `project-blocked-face` (PR #15) |
+| Prioridad del FaceGen en MO2 (`installAbove` en manifiesto, README y asistente) | VERIFICADO EN WINDOWS | Lydia, Shady Sam, Serana (PR #15) |
+| Paneles del Character Creator a 1100×700 | VERIFICADO EN WINDOWS (arnés) | `creator-layout` (PR #15) |
 | Easy Mod Creator (5 pasos, dependencias, bloqueos) | VERIFICADO EN WINDOWS (arnés) | 1100×700 – 1920×1080 medidos; revisión con la ventana visible PENDIENTE |
 | Estabilidad (cambio rápido de NPC, deshacer/rehacer, proyectos) | VERIFICADO EN WINDOWS | Debug y ASan sin informes; GPU con ventana visible PENDIENTE |
 | Character Forge: proyectos `.sncf`, visor GLB/glTF, selección, puente Blender | VERIFICADO EN WINDOWS | `-ForgePreview` 63/0 con ventana visible; Blender 5.2.2 18 aserciones |

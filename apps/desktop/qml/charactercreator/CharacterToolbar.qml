@@ -91,9 +91,9 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
-        // Indicador si hay donante activo
+        // Origin of the current face (a donor or a preset); it follows undo/redo and reset.
         Rectangle {
-            visible: Boolean(root.studio.appearance.donorFormKey && root.studio.appearance.donorFormKey.length > 0)
+            visible: root.studio.appearance.faceSource.length > 0
             implicitHeight: 24
             implicitWidth: donorRow.implicitWidth + 12
             radius: 12
@@ -105,12 +105,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: 4
                 Text {
-                    text: qsTr("Donante:")
-                    color: "#A9CCE3"
-                    font.pixelSize: 10
-                }
-                Text {
-                    text: (root.studio.appearance.donorName || root.studio.appearance.donorFormKey) ?? ""
+                    text: root.studio.appearance.faceSource
                     color: "#FFFFFF"
                     font.bold: true
                     font.pixelSize: 10

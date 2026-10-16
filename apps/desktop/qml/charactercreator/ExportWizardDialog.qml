@@ -308,6 +308,22 @@ Dialog {
                                         return "\n     " + d.plugin + (d.provider.length > 0 ? qsTr("  (mod de MO2: %1)").arg(d.provider) : "")
                                     }).join("")
                         }
+                        Text {
+                            // Only modes B and C write a FaceGen; mode A leaves the head to the winning mod.
+                            readonly property var prov: root.compat.provenance || ({})
+                            readonly property var competitors: prov.faceGenCompetitors || []
+                            readonly property bool writesFaceGen: root.plan.mode === "face-overhaul" || root.plan.mode === "complete-overhaul"
+                            visible: writesFaceGen && (competitors.length > 0 || !!(prov.faceGen && prov.faceGen.kind === "BSA"))
+                            width: checksColumn.width
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.small
+                            color: competitors.length > 0 ? Theme.warn : Theme.textDim
+                            text: competitors.length > 0
+                                  ? qsTr("⚠ Prioridad en MO2: instala este mod por encima de %1. También tienen el FaceGen de este NPC; si alguno queda por encima, Skyrim usará su cabeza con este plugin (cara oscura o distinta). El estudio no cambia las prioridades.")
+                                        .arg(competitors.map(function (m) { return "«" + m + "»" }).join(", "))
+                                  : qsTr("El FaceGen actual está dentro de un BSA (%1): el archivo suelto de este mod siempre lo sustituye, sea cual sea su prioridad.")
+                                        .arg(prov.faceGen ? (prov.faceGen.archiveProvider || prov.faceGen.provider || "") : "")
+                        }
                         Repeater {
                             model: root.plan.checks || []
                             delegate: Text {

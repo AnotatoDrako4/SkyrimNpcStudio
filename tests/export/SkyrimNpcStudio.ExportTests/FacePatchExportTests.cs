@@ -284,6 +284,7 @@ public sealed class FacePatchExportTests : IDisposable
                     [
                         new GeneratedAsset { SourcePath = nif, DataPath = expectedFaceGen.GeometryPath, Sha256 = Sha256Of(nif), Kind = "facegen-geometry" },
                     ],
+                    FaceGen = new FaceGenProvenance { Mode = "hair-color-safe", InstallAbove = ["Helen Lydia Replacer", "NITHI Whiterun"] },
                 },
             ],
         };
@@ -293,6 +294,13 @@ public sealed class FacePatchExportTests : IDisposable
         using var manifest = JsonDocument.Parse(File.ReadAllText(response.ManifestPath));
         var changed = manifest.RootElement.GetProperty("faces")[0].GetProperty("changedFields").EnumerateArray().Select(e => e.GetString()).ToList();
         Assert.Equal(["HCLF"], changed);
+        // The mods that also carry Lydia's FaceGen: named in the manifest, the README and the pending checks.
+        var above = manifest.RootElement.GetProperty("faces")[0].GetProperty("installAbove").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Equal(["Helen Lydia Replacer", "NITHI Whiterun"], above);
+        var readme = File.ReadAllText(Path.Combine(response.ModDirectory, "README.md"));
+        Assert.Contains("Prioridad en MO2", readme, StringComparison.Ordinal);
+        Assert.Contains("«NITHI Whiterun»", readme, StringComparison.Ordinal);
+        Assert.Contains(response.PendingVerification, p => p.Contains("por encima de «Helen Lydia Replacer»", StringComparison.Ordinal));
         Assert.True(File.Exists(Path.Combine(response.ModDirectory, expectedFaceGen.GeometryPath)));
         Assert.False(File.Exists(Path.Combine(response.ModDirectory, expectedFaceGen.TintPath)));
 

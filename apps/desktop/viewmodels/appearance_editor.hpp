@@ -83,6 +83,8 @@ class AppearanceEditor : public QObject {
   // Facial compatibility diagnosis (sns::face::diagnose_face_compatibility) with MO2 provenance:
   // code, label, allowed [{op, label}], blocked [{op, label, reason}], triMismatches, evidence, provenance.
   Q_PROPERTY(QVariantMap faceCompatibility READ face_compatibility NOTIFY faceGenChanged)
+  // Why a donor cannot be applied to this NPC (a blocked morph, Head Part or skin tone operation), or empty.
+  Q_PROPERTY(QString donorBlockedReason READ donor_blocked_reason NOTIFY faceGenChanged)
   Q_PROPERTY(bool exportable READ exportable NOTIFY faceGenChanged)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY appearanceChanged)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY appearanceChanged)
@@ -90,6 +92,9 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QString redoText READ redo_text NOTIFY appearanceChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY appearanceChanged)
   Q_PROPERTY(bool hasFaceEdits READ has_face_edits NOTIFY appearanceChanged)
+  // Where the current face comes from ("Donante: …", a project preset name, or empty). Part of the face
+  // state, so undo/redo and reset restore it with the face.
+  Q_PROPERTY(QString faceSource READ face_source NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList presetsList READ presets_list NOTIFY presetsChanged)
   Q_PROPERTY(bool exporting READ exporting NOTIFY exportingChanged)
   Q_PROPERTY(QVariantMap lastExport READ last_export NOTIFY exportingChanged)
@@ -146,12 +151,14 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantMap face_compatibility() const { return compatibility_; }
   // An operation ("hair-color", "face-morphs", ...) the diagnosis blocks; false while unknown.
   [[nodiscard]] bool operation_blocked(const QString& op) const;
+  [[nodiscard]] QString donor_blocked_reason() const;
   [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
   [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
   [[nodiscard]] QString undo_text() const { return history_->undo_text(); }
   [[nodiscard]] QString redo_text() const { return history_->redo_text(); }
   [[nodiscard]] bool dirty() const { return draft_.is_face_dirty() || draft_.is_height_dirty(); }
   [[nodiscard]] bool has_face_edits() const { return draft_.is_face_dirty(); }
+  [[nodiscard]] QString face_source() const { return QString::fromStdString(draft_.face().source); }
   [[nodiscard]] QVariantList presets_list() const { return presets_list_; }
   [[nodiscard]] bool exporting() const { return exporting_; }
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
@@ -208,6 +215,9 @@ class AppearanceEditor : public QObject {
   void edit(appearance::FaceState next, const QString& description, const QString& merge_key = {});
   // True (and the reason written to the console) when the compatibility diagnosis blocks `op`.
   bool refuse_blocked(const QString& op);
+  // After the analysis: fields of the draft that differ from the record in a blocked operation (a face
+  // restored from a project before the blocks were known) go back to the record.
+  void enforce_face_blocks();
   void request_recipe(bool initial);
   void on_recipe(const Json& json, bool initial, int serial);
   void analyse_existing_facegen();

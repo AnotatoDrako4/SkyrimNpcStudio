@@ -53,13 +53,19 @@ Item {
         return "🛡️"
     }
 
+    // Mod filter: every plugin that defines or overrides armors, labelled with its MO2 mod.
+    readonly property var modOptions: [{ text: qsTr("Todos los mods"), value: "" }].concat(
+        (root.studio.armorPlugins || []).map(function (p) {
+            return { text: (p.mod && p.mod.length > 0 ? p.mod + " — " : "") + p.plugin + " (" + p.armors + ")", value: p.plugin }
+        }))
+
     function search() {
-        studio.searchArmors(searchField.text, slotBox.currentValue, pluginField.text, root.activeTypeFilter, smpCheck.checked)
+        studio.searchArmors(searchField.text, slotBox.currentValue, modBox.currentValue || "", root.activeTypeFilter, smpCheck.checked)
     }
 
     function resetFilters() {
         searchField.text = ""
-        pluginField.text = ""
+        modBox.currentIndex = 0
         root.activeTypeFilter = ""
         slotBox.currentIndex = 0
         smpCheck.checked = false
@@ -156,6 +162,30 @@ Item {
                 }
             }
 
+            // Fila 1b: mod de origen (ESP/ESM/ESL y su mod de MO2)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Text {
+                    text: qsTr("Mod:")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.small
+                }
+                ComboBox {
+                    id: modBox
+                    objectName: "armorModFilter"
+                    Layout.fillWidth: true
+                    textRole: "text"
+                    valueRole: "value"
+                    model: root.modOptions
+                    font.pixelSize: Theme.small
+                    enabled: root.studio.phase === StudioController.Ready
+                    onActivated: root.search()
+                    ToolTip.visible: hovered && currentIndex > 0
+                    ToolTip.text: currentText
+                }
+            }
+
             // Fila 2: Chips de tipo rápido y SMP
             RowLayout {
                 Layout.fillWidth: true
@@ -241,7 +271,7 @@ Item {
                     text: root.showAdvancedFilters ? "⚙ ▴" : "⚙ ▾"
                     implicitHeight: 24
                     onClicked: root.showAdvancedFilters = !root.showAdvancedFilters
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Filtros avanzados (biped slot, mod origen)")
+                    ToolTip.visible: hovered; ToolTip.text: qsTr("Filtros avanzados (biped slot)")
                 }
             }
 
@@ -285,29 +315,10 @@ Item {
                             }
                         }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Text {
-                                text: qsTr("Mod:")
-                                color: Theme.textDim
-                                font.pixelSize: Theme.small
-                            }
-
-                            TextField {
-                                id: pluginField
-                                Layout.fillWidth: true
-                                placeholderText: qsTr("Filtrar por plugin/mod (p. ej. Crimson.esp)")
-                                font.pixelSize: Theme.small
-                                onTextChanged: debounce.restart()
-                            }
-
-                            Button {
-                                text: qsTr("Limpiar")
-                                implicitHeight: 26
-                                onClicked: root.resetFilters()
-                            }
+                        Button {
+                            text: qsTr("Limpiar filtros")
+                            implicitHeight: 26
+                            onClicked: root.resetFilters()
                         }
                     }
                 }

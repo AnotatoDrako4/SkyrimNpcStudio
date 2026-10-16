@@ -22,7 +22,8 @@ Item {
         // PANEL IZQUIERDO: BIBLIOTECA
         // ==========================================
         Rectangle {
-            SplitView.preferredWidth: 380
+            // Gives way on narrow windows so the three panels fit the 1100 px minimum window (280 + 380 + 420).
+            SplitView.preferredWidth: Math.max(280, Math.min(380, root.width - 420 - 380 - 16))
             SplitView.minimumWidth: 280
             SplitView.maximumWidth: 500
             color: Theme.panel
@@ -67,8 +68,17 @@ Item {
                                 font.pixelSize: 12
                             }
                             Text {
-                                text: qsTr("Transfiere el rostro, FaceGen y HeadParts de cualquier NPC instalado al personaje actual:")
+                                // applyDonor copies the donor's record values; the FaceGen is rebuilt, never copied.
+                                text: qsTr("Aplica el rostro de otro NPC instalado (morphs, Head Parts, tono y tintes de su registro). El FaceGen se regenera a partir de esos datos; no se copia el del donante.")
                                 color: Theme.textDim
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                visible: root.studio.appearance.donorBlockedReason.length > 0
+                                text: qsTr("No disponible para este NPC — %1").arg(root.studio.appearance.donorBlockedReason)
+                                color: Theme.warn
                                 font.pixelSize: 11
                                 wrapMode: Text.WordWrap
                                 Layout.fillWidth: true
@@ -78,29 +88,41 @@ Item {
                                 id: donorFilter
                                 Layout.fillWidth: true
                                 placeholderText: qsTr("Buscar NPC donante…")
+                                onTextChanged: donorDebounce.restart()
+                                onAccepted: root.studio.searchNpcs(text, "", "", "")
                             }
+                            Timer { id: donorDebounce; interval: 250; onTriggered: root.studio.searchNpcs(donorFilter.text, "", "", "") }
 
                             ListView {
                                 id: donorList
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 clip: true
-                                model: root.studio.npcs
+                                // The NPC search results (shared with the NPC list); it never had its own model.
+                                model: root.studio.npcResults
                                 delegate: Rectangle {
+                                    id: donorRow
+                                    required property string formKey
+                                    required property string name
+                                    required property string editorId
                                     width: donorList.width
                                     height: 38
                                     color: donorMouse.containsMouse ? Theme.selection : "transparent"
                                     border.color: Theme.border
                                     border.width: 1
                                     radius: 3
-                                    visible: donorFilter.text.length === 0 || (modelData.name && modelData.name.toLowerCase().includes(donorFilter.text.toLowerCase()))
 
+                                    MouseArea {
+                                        id: donorMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                    }
                                     RowLayout {
                                         anchors.fill: parent
                                         anchors.margins: 6
                                         spacing: 6
                                         Text {
-                                            text: modelData.name || modelData.formKey
+                                            text: donorRow.name || donorRow.editorId || donorRow.formKey
                                             color: Theme.text
                                             font.pixelSize: 11
                                             elide: Text.ElideRight
@@ -109,13 +131,9 @@ Item {
                                         Button {
                                             text: qsTr("Usar Rostro")
                                             implicitHeight: 24
-                                            onClicked: root.studio.appearance.applyDonor(modelData.formKey, modelData.name)
+                                            enabled: root.studio.appearance.donorBlockedReason.length === 0
+                                            onClicked: root.studio.appearance.applyDonor(donorRow.formKey, donorRow.name || donorRow.editorId)
                                         }
-                                    }
-                                    MouseArea {
-                                        id: donorMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
                                     }
                                 }
                             }
@@ -130,7 +148,7 @@ Item {
         // ==========================================
         ColumnLayout {
             SplitView.fillWidth: true
-            SplitView.minimumWidth: 400
+            SplitView.minimumWidth: 380
             spacing: 0
 
             CharacterToolbar {
@@ -203,8 +221,10 @@ Item {
         // PANEL DERECHO: PERSONALIZACIÓN
         // ==========================================
         Rectangle {
+            objectName: "creatorRightPanel"
             SplitView.preferredWidth: 420
-            SplitView.minimumWidth: 320
+            // The customizer pages are laid out for 420 px; narrower, their rows spilled out of the window.
+            SplitView.minimumWidth: 420
             SplitView.maximumWidth: 600
             color: Theme.panel
 
@@ -214,6 +234,7 @@ Item {
 
                 TabBar {
                     id: rightTabs
+                    objectName: "creatorRightTabs"
                     Layout.fillWidth: true
                     TabButton { text: qsTr("Presets") }
                     TabButton { text: qsTr("Rostro") }

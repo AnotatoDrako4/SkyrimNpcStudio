@@ -174,6 +174,12 @@ public sealed record FaceGenProvenance
     public IReadOnlyList<string> DerivedFrom { get; init; } = [];
     public int CustomMorphs { get; init; }
     public int SculptTargets { get; init; }
+
+    /// <summary>
+    /// MO2 mods with loose FaceGen/FaceTint files of this NPC, ascending priority. The exported mod must be
+    /// installed above all of them in MO2, or the game shows their head with the new record.
+    /// </summary>
+    public IReadOnlyList<string> InstallAbove { get; init; } = [];
 }
 
 public sealed record FaceAssignment

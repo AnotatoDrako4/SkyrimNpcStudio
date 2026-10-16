@@ -18,6 +18,7 @@
 #include <QStandardPaths>
 #include <QThreadPool>
 #include <QUrl>
+#include <algorithm>
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
 #include "sns/core/error.hpp"
@@ -380,9 +381,20 @@ void StudioController::cancel() {
 
 void StudioController::refresh_plugin_counts() {
   worker_->call(method::kListPlugins, nullptr, 30s, this, [this](const Json& r) {
+    QList<QVariantMap> armor_plugins;
     for (const auto& p : r.value("plugins", Json::array())) {
-      plugin_counts_[qs(p.value("fileName", "")).toLower()] = to_map(p);
+      const auto file = qs(p.value("fileName", ""));
+      plugin_counts_[file.toLower()] = to_map(p);
+      const int armors = p.value("armorRecords", 0);
+      if (armors > 0) armor_plugins << QVariantMap{{"plugin", file}, {"mod", providerOf(file)}, {"armors", armors}};
     }
+    std::sort(armor_plugins.begin(), armor_plugins.end(), [](const QVariantMap& a, const QVariantMap& b) {
+      const int byMod = QString::compare(a.value("mod").toString(), b.value("mod").toString(), Qt::CaseInsensitive);
+      return byMod != 0 ? byMod < 0 : QString::compare(a.value("plugin").toString(), b.value("plugin").toString(), Qt::CaseInsensitive) < 0;
+    });
+    armor_plugins_.clear();
+    for (const auto& m : armor_plugins) armor_plugins_ << m;
+    emit armorPluginsChanged();
   }, nullptr);
 }
 

@@ -178,7 +178,7 @@ ScrollView {
         }
 
         Text {
-            text: qsTr("Aplica la apariencia facial, FaceGen y Head Parts de otro NPC o replacer instalado en tu perfil.")
+            text: qsTr("Aplica el rostro de otro NPC o replacer instalado (morphs, Head Parts, tono y tintes de su registro). El FaceGen se regenera; no se copia el del donante.")
             color: Theme.textDim
             font.pixelSize: 11
             wrapMode: Text.WordWrap
@@ -219,9 +219,12 @@ ScrollView {
                     spacing: 8
 
                     ColumnLayout {
+                        // Long names/plugins elide instead of pushing the button out of the panel.
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         spacing: 2
                         Text {
+                            Layout.fillWidth: true
                             text: model.name || model.editorId || model.formKey
                             color: Theme.text
                             font.bold: true
@@ -229,6 +232,7 @@ ScrollView {
                             elide: Text.ElideRight
                         }
                         Text {
+                            Layout.fillWidth: true
                             text: (model.race || "") + " · " + (model.sex || "") + " · " + (model.winningPlugin || "")
                             color: Theme.textDim
                             font.pixelSize: 10
@@ -238,6 +242,9 @@ ScrollView {
 
                     Button {
                         text: qsTr("Usar como Donante")
+                        enabled: root.studio.appearance.donorBlockedReason.length === 0
+                        ToolTip.visible: hovered && !enabled
+                        ToolTip.text: root.studio.appearance.donorBlockedReason
                         onClicked: {
                             root.studio.appearance.applyDonor(model.formKey, model.name || model.editorId)
                         }

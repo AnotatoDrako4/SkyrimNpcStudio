@@ -337,6 +337,35 @@ struct Stress : std::enable_shared_from_this<Stress> {
 
   // The assistant page on screen: inside the window, no text elided or spilling sideways out of the
   // assistant, buttons wide enough for their label. Saves the page as wizard-<size>-<page>.png.
+  // Visible descendants of `container` whose text spills sideways out of it, buttons too narrow for their
+  // label (the style elides it) and, with `elided_fails`, any elided text (panels elide long names on
+  // purpose, so they pass false).
+  static QStringList layout_problems(QQuickItem* container, bool elided_fails, int* inspected) {
+    QStringList problems;
+    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+      for (auto* child : item->childItems()) {
+        if (!child->isVisible() || child->width() <= 0) continue;
+        const QByteArray cls = child->metaObject()->className();
+        const QRectF r = child->mapRectToItem(container, QRectF(0, 0, child->width(), child->height()));
+        const QString text = child->property("text").toString().left(40);
+        if (elided_fails && child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
+        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > container->width() + 1)
+          problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - container->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
+        // Buttons with a label (custom-content buttons such as color swatches have none to elide).
+        if (!text.isEmpty() && child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
+          const qreal need = child->property("implicitContentWidth").toReal() + child->property("leftPadding").toReal() +
+                             child->property("rightPadding").toReal();
+          if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
+        }
+        if (inspected) ++*inspected;
+        visit(child);
+      }
+    };
+    visit(container);
+    problems.removeDuplicates();
+    return problems;
+  }
+
   void check_wizard_layout(QObject* wizard, int page, const QString& size) {
     const QString where = QStringLiteral("%1 page %2").arg(size).arg(page + 1);
     // Grab first: a hidden window lays out (polishes) only when it renders, so measuring before the
@@ -349,29 +378,8 @@ struct Stress : std::enable_shared_from_this<Stress> {
               .arg(where).arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height()));
     auto* content = qvariant_cast<QQuickItem*>(wizard->property("contentItem"));
     if (!content) { check(false, where + ": assistant content item"); return; }
-    QStringList problems;
     int inspected = 0;
-    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
-      for (auto* child : item->childItems()) {
-        if (!child->isVisible() || child->width() <= 0) continue;
-        const QByteArray cls = child->metaObject()->className();
-        const QRectF r = child->mapRectToItem(content, QRectF(0, 0, child->width(), child->height()));
-        const QString text = child->property("text").toString().left(40);
-        if (child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
-        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > content->width() + 1)
-          problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - content->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
-        // Buttons: label + paddings wider than the button means the style elides it.
-        if (child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
-          const qreal need = child->property("implicitContentWidth").toReal() + child->property("leftPadding").toReal() +
-                             child->property("rightPadding").toReal();
-          if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
-        }
-        ++inspected;
-        visit(child);
-      }
-    };
-    visit(content);
-    problems.removeDuplicates();
+    const auto problems = layout_problems(content, true, &inspected);
     check(problems.isEmpty(), QStringLiteral("%1: %2 items in %3 px, layout %4").arg(where).arg(inspected).arg(content->width()).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
     const auto file = QDir(work_dir).filePath(QStringLiteral("wizard-%1-%2.png").arg(size).arg(page + 1));
     check(shot.save(file), "capture " + file);
@@ -706,14 +714,19 @@ struct Stress : std::enable_shared_from_this<Stress> {
           QFile tint(QDir(mod_dir).filePath(qs(text::data_path_key(recipe->facegen_tint_path)).replace('\\', '/')));
           self->check(!tint.exists(), "no FaceTint exported for a hair color edit");
           QFile manifest(QDir(mod_dir).filePath("manifest.json"));
-          QStringList changed;
+          QStringList changed, above;
           if (manifest.open(QIODevice::ReadOnly)) {
             const auto faces = QJsonDocument::fromJson(manifest.readAll()).object().value("faces").toArray();
             for (const auto& f : faces) {
               for (const auto& field : f.toObject().value("changedFields").toArray()) changed << field.toString();
+              for (const auto& mod : f.toObject().value("installAbove").toArray()) above << mod.toString();
             }
           }
           self->check(changed == QStringList{"HCLF"}, "record fields changed by the plugin: " + changed.join(", ") + " (expected HCLF)");
+          // The mod must win over every MO2 mod with this NPC's loose FaceGen/FaceTint (archives never compete).
+          const auto competitors = self->appearance()->face_compatibility().value("provenance").toMap().value("faceGenCompetitors").toStringList();
+          self->check(above == competitors, "manifest installAbove = MO2 mods with the NPC's loose FaceGen: [" + above.join(", ") + "] (diagnosis: [" +
+                                                competitors.join(", ") + "])");
           self->step();
         };
         self->after(100, *wait);
@@ -1158,6 +1171,19 @@ struct Stress : std::enable_shared_from_this<Stress> {
           }
         }
         self->check(count > 0, QStringLiteral("RaceMenu presets in the profile: %1").arg(count));
+        if (!self->appearance()->donor_blocked_reason().isEmpty()) {
+          // Protected head: every preset must be refused and applying one must change nothing.
+          self->check(pick.isEmpty(), "no preset is exportable on a protected head");
+          self->head_part_skip = true;
+          if (!self->appearance()->presets_list().isEmpty()) {
+            self->appearance()->applyJslotPreset(self->appearance()->presets_list().front().toMap().value("diskPath").toString());
+          }
+          self->after(800, [self] {
+            self->check(!self->appearance()->has_face_edits(), "protected head unchanged after a refused preset");
+            self->then_idle();
+          });
+          return;
+        }
         if (pick.isEmpty()) {
           self->log("no preset is exportable for this NPC: nothing applied");
           self->head_part_skip = true;
@@ -1210,9 +1236,16 @@ struct Stress : std::enable_shared_from_this<Stress> {
       steps.push_back([self] {
         const auto donor = qEnvironmentVariable("SNS_STRESS_DONOR", QStringLiteral("013640:Skyrim.esm"));
         if (self->appearance()->operation_blocked(QStringLiteral("face-morphs")) || self->appearance()->operation_blocked(QStringLiteral("head-parts"))) {
-          self->log("donor: face edits blocked for this head; donor not applied");
+          // A donor rewrites morphs and Head Parts: on a protected head the editor must refuse it.
           self->head_part_skip = true;
-          self->step();
+          self->check(!self->appearance()->donor_blocked_reason().isEmpty(), "donor blocked for this head: " + self->appearance()->donor_blocked_reason());
+          self->log("applyDonor " + donor + " on a protected head (must be refused)");
+          self->appearance()->applyDonor(donor, QStringLiteral("donante"));
+          self->after(1500, [self] {
+            self->check(!self->appearance()->has_face_edits() && self->appearance()->face_source().isEmpty(),
+                        "protected head unchanged after the refused donor");
+            self->then_idle();
+          });
           return;
         }
         self->head_part_skip = false;
@@ -1220,10 +1253,20 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->appearance()->applyDonor(donor, QStringLiteral("donante"));
         self->after(500, [self] { self->then_idle(); });
       });
+      steps.push_back([self] {
+        // The toolbar shows where the face comes from; regression: it read properties that did not exist.
+        if (!self->head_part_skip) self->check(self->appearance()->face_source() == QStringLiteral("Donante: donante"), "face source shown: " + self->appearance()->face_source());
+        self->step();
+      });
       const auto dir = QDir(work_dir).filePath(QStringLiteral("donor-%1").arg(QDateTime::currentMSecsSinceEpoch()));
       steps.push_back([self, dir] {
         if (self->head_part_skip) { self->step(); return; }
         self->export_face_and_check(dir, QStringLiteral("SNS_Donor.esp"), {});
+      });
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        self->check(self->appearance()->face_source().isEmpty(), "reset clears the face source: '" + self->appearance()->face_source() + "'");
+        self->step();
       });
     } else if (name == "body-export") {
       // Body tab: height alone is a minimal export (NAM6 only, no FaceGen); weight changes the head
@@ -1440,6 +1483,129 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->then_idle();
       });
       steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+    } else if (name == "project-blocked-face") {
+      // A face saved in a project with an edit that is blocked for this head (an older project, or one
+      // made before a replacer was installed): loading it must keep the allowed edit (hair color) and
+      // put the blocked field (weight, a morph operation) back to the record.
+      const QColor color("#7D3C98");
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self, hair, color] { hair(color); self->then_idle(); });
+      steps.push_back([self] {
+        if (!self->appearance()->operation_blocked(QStringLiteral("face-morphs"))) {
+          self->log("face morphs allowed on this head: scenario needs a protected head");
+          self->head_part_skip = true;
+          self->step();
+          return;
+        }
+        self->head_part_skip = false;
+        auto config = self->appearance()->face_config_for_project();
+        self->check(config.has_value(), "project face available for the hair edit");
+        if (!config) { self->step(); return; }
+        config->weight = config->weight > 50.0f ? config->weight - 30.0f : config->weight + 30.0f;
+        self->appearance()->queue_saved_face(self->primary_npc.toStdString(), config);
+        self->log("reload the NPC with a saved face whose weight is blocked for this head");
+        self->studio->selectNpc(self->second_npc);
+        self->then_idle();
+      });
+      steps.push_back([self] {
+        if (self->head_part_skip) { self->step(); return; }
+        self->studio->selectNpc(self->primary_npc);
+        self->then_idle();
+      });
+      steps.push_back([self, color] {
+        if (self->head_part_skip) { self->step(); return; }
+        const auto plan = self->appearance()->easy_mod_plan();
+        QStringList keys;
+        for (const auto& c : plan.value("changes").toList()) keys << c.toMap().value("key").toString();
+        self->check(keys == QStringList{"hair"}, "blocked weight reverted, hair color kept: changes [" + keys.join(", ") + "]");
+        self->check(self->appearance()->hair_color().name() == color.name(), "hair color from the project: " + self->appearance()->hair_color().name());
+        self->appearance()->resetFace();
+        self->then_idle();
+      });
+    } else if (name == "creator-layout") {
+      // Character Creator right panel at the current window size: every tab must keep its texts inside
+      // the panel and full labels on its buttons and tabs. One capture per tab.
+      steps.push_back([self] {
+        QQuickItem* panel = nullptr;
+        QObject* tabs = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("creatorRightPanel")) panel = qobject_cast<QQuickItem*>(o);
+          if (o->objectName() == QLatin1String("creatorRightTabs")) tabs = o;
+        }
+        self->check(panel && tabs, "Character Creator right panel found");
+        if (!panel || !tabs) { self->step(); return; }
+        const auto size = QStringLiteral("%1x%2").arg(self->window->width()).arg(self->window->height());
+        // The viewport's floating toolbar stays inside the viewport (it used to spill over the panels).
+        for (auto* o : self->window->findChildren<QQuickItem*>()) {
+          if (o->objectName() != QLatin1String("viewportToolbar") || !o->isVisible() || !o->parentItem()) continue;
+          self->window->grabWindow();
+          const QRectF r = o->mapRectToItem(o->parentItem(), QRectF(0, 0, o->width(), o->height()));
+          self->check(r.left() >= -0.5 && r.right() <= o->parentItem()->width() + 0.5,
+                      QStringLiteral("%1 viewport toolbar inside the viewport (%2..%3 of %4 px)").arg(size).arg(int(r.left())).arg(int(r.right())).arg(int(o->parentItem()->width())));
+          break;
+        }
+        const QStringList names = {"presets", "rostro", "pelo-ojos", "cuerpo", "vestuario"};
+        std::vector<std::function<void()>> actions;
+        for (int i = 0; i < names.size(); ++i) {
+          actions.push_back([tabs, i] { tabs->setProperty("currentIndex", i); });
+          actions.push_back([self, panel, size, name = names[i]] {
+            const QImage shot = self->window->grabWindow();  // lays the page out (hidden window)
+            int inspected = 0;
+            const auto problems = layout_problems(panel, false, &inspected);
+            self->check(problems.isEmpty(), QStringLiteral("%1 %2: %3 items in %4 px, layout %5")
+                                                .arg(size, name).arg(inspected).arg(panel->width()).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+            shot.save(QDir(self->work_dir).filePath(QStringLiteral("creator-%1-%2.png").arg(size, name)));
+          });
+        }
+        self->chain(std::move(actions), 400, [self] { self->then_idle(); });
+      });
+    } else if (name == "armor-mod-filter") {
+      // Outfit catalog filtered by mod: the plugin list comes from the index, the selector shows it, and
+      // choosing a plugin returns exactly the armors that plugin defines or overrides.
+      auto search = [](const std::shared_ptr<Stress>& self, const QString& plugin, std::function<void()> next) {
+        auto done = std::make_shared<QMetaObject::Connection>();
+        *done = QObject::connect(self->studio, &StudioController::armorResultsChanged, self->studio, [done, next] {
+          QObject::disconnect(*done);
+          next();
+        });
+        self->studio->searchArmors({}, 0, plugin);
+      };
+      auto all_total = std::make_shared<int>(0);
+      steps.push_back([self, search, all_total] {
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, search, all_total] {
+          if (self->studio->armor_plugins().isEmpty()) { self->after(200, *wait); return; }
+          search(self, {}, [self, all_total] { *all_total = self->studio->armor_total(); self->step(); });
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self, search, all_total] {
+        const auto plugins = self->studio->armor_plugins();
+        self->check(!plugins.isEmpty(), QStringLiteral("%1 plugin(s) with armors listed for the mod filter").arg(plugins.size()));
+        QObject* box = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("armorModFilter")) { box = o; break; }
+        }
+        self->check(box && box->property("count").toInt() == plugins.size() + 1, "catalog selector lists every plugin plus 'Todos los mods'");
+        // A plugin with several armors, preferring the outfit mod of the test NPCs.
+        QVariantMap pick = plugins.front().toMap();
+        for (const auto& p : plugins) {
+          const auto m = p.toMap();
+          if (m.value("plugin").toString().contains(QLatin1String("Runes of Roots"), Qt::CaseInsensitive)) { pick = m; break; }
+          if (m.value("armors").toInt() > pick.value("armors").toInt() && m.value("armors").toInt() < 200) pick = m;
+        }
+        const auto plugin = pick.value("plugin").toString();
+        const int expected = pick.value("armors").toInt();
+        self->log("filter by " + plugin + " (" + pick.value("mod").toString() + ")");
+        search(self, plugin, [self, search, plugin, expected, all_total] {
+          self->check(self->studio->armor_total() == expected,
+                      QStringLiteral("%1: %2 armor(s) (index says %3)").arg(plugin).arg(self->studio->armor_total()).arg(expected));
+          search(self, {}, [self, all_total] {
+            self->check(self->studio->armor_total() == *all_total, QStringLiteral("'Todos los mods' back to %1 armor(s)").arg(*all_total));
+            self->step();
+          });
+        });
+      });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {
         hair(QColor("#E6C280"));
@@ -1467,7 +1633,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

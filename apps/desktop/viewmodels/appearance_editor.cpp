@@ -152,6 +152,20 @@ int setting_ms(const char* key, int fallback) {
   return ok ? std::clamp(value, 0, 5000) : fallback;
 }
 
+// MO2 mods (and overwrite) with loose FaceGen/FaceTint files of this NPC, ascending priority: an
+// exported FaceGen must be installed above all of them, or the game shows their head with the new
+// record. Archives never compete (a loose file always wins over a BSA), nor does the game's Data.
+std::vector<std::string> facegen_competitors(const mo2::VirtualFileSystem& vfs, const face::FaceRecipe& recipe) {
+  std::vector<std::string> mods;
+  for (const auto* path : {&recipe.facegen_mesh_path, &recipe.facegen_tint_path}) {
+    for (const auto i : vfs.providers_of(*path)) {
+      const auto& p = vfs.providers()[i];
+      if (p.kind != mo2::ProviderKind::GameData && std::find(mods.begin(), mods.end(), p.name) == mods.end()) mods.push_back(p.name);
+    }
+  }
+  return mods;
+}
+
 }  // namespace
 
 AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot,
@@ -414,6 +428,9 @@ void AppearanceEditor::analyse_existing_facegen() {
       provenance["faceGen"] = mesh_at;
       provenance["faceTint"] = where(ctx->resolver->locate(recipe.facegen_tint_path));
       provenance["faceGenPath"] = qs(recipe.facegen_mesh_path);
+      QStringList competitors;
+      for (const auto& m : facegen_competitors(ctx->snapshot->vfs, recipe)) competitors << qs(m);
+      provenance["faceGenCompetitors"] = competitors;
       const auto facegen_mod = mesh_at.value("kind").toString() == "suelto" ? mesh_at.value("provider").toString()
                                                                              : mesh_at.value("archiveProvider").toString();
       const auto plugin_mod = provenance.value("pluginProvider").toString();
@@ -461,6 +478,7 @@ void AppearanceEditor::analyse_existing_facegen() {
       self->compatibility_ = result->compatibility;
       diag::record("facegen", ("compatibility " + ss(result->compatibility.value("code").toString())).c_str());
       self->draft_.set_baseline_geometry_mode(ss(result->mode));
+      self->enforce_face_blocks();
       emit self->appearanceChanged();
       emit self->faceGenChanged();
       self->schedule_build();
@@ -867,6 +885,30 @@ void AppearanceEditor::edit(appearance::FaceState next, const QString& descripti
   history_->push(appearance::make_set_face(draft_, std::move(next), ss(description), ss(merge_key)));
 }
 
+void AppearanceEditor::enforce_face_blocks() {
+  if (!draft_.face_loaded()) return;
+  const auto& base = draft_.face_baseline();
+  auto face = draft_.face();
+  QStringList reverted;
+  const auto revert = [&](const char* op, bool differs, auto&& restore) {
+    if (!differs || !operation_blocked(QString::fromLatin1(op))) return;
+    restore();
+    reverted << operation_label(op);
+  };
+  auto& v = face.values;
+  const auto& b = base.values;
+  revert("face-morphs", v.sliders != b.sliders || v.presets != b.presets || v.weight != b.weight || v.custom_morphs != b.custom_morphs || v.sculpt != b.sculpt,
+         [&] { v.sliders = b.sliders; v.presets = b.presets; v.weight = b.weight; v.custom_morphs = b.custom_morphs; v.sculpt = b.sculpt; });
+  revert("head-parts", face.head_parts != base.head_parts || face.head_texture != base.head_texture,
+         [&] { face.head_parts = base.head_parts; face.head_texture = base.head_texture; });
+  revert("skin-tone", v.skin_tone != b.skin_tone || v.tints != b.tints, [&] { v.skin_tone = b.skin_tone; v.tints = b.tints; });
+  if (reverted.isEmpty()) return;
+  draft_.set_face(std::move(face));
+  console_->append("warning", "appearance",
+                   tr("El rostro cargado para %1 tenía cambios bloqueados para esta cabeza (%2): se restauran los del registro; "
+                      "el resto (p. ej. el color de cabello) se conserva.").arg(npc_label(), reverted.join(", ")));
+}
+
 bool AppearanceEditor::refuse_blocked(const QString& op) {
   for (const auto& b : compatibility_.value("blocked").toList()) {
     const auto m = b.toMap();
@@ -1024,8 +1066,24 @@ void AppearanceEditor::redo() {
 
 // ------------------------------------------------------------------------------------- donors and presets
 
+// A donor replaces morphs, presets, Head Parts, skin tone and tints at once, so it is refused wherever any
+// of those operations is blocked (e.g. a High Poly head whose TRI do not match its mesh).
+QString AppearanceEditor::donor_blocked_reason() const {
+  for (const auto& b : compatibility_.value("blocked").toList()) {
+    const auto m = b.toMap();
+    const auto op = m.value("op").toString();
+    if (op == QLatin1String("face-morphs") || op == QLatin1String("head-parts") || op == QLatin1String("skin-tone"))
+      return m.value("label").toString() + QStringLiteral(": ") + m.value("reason").toString();
+  }
+  return {};
+}
+
 void AppearanceEditor::applyDonor(const QString& donorFormKey, const QString& donorName) {
   if (donorFormKey.isEmpty() || !worker_ || !recipe_) return;
+  if (const auto reason = donor_blocked_reason(); !reason.isEmpty()) {
+    console_->append("warning", "appearance", tr("Aplicar un donante está bloqueado para %1 (%2).").arg(npc_label(), reason));
+    return;
+  }
   worker_->call(method::kGetFaceRecipe, Json{{"npcFormKey", ss(donorFormKey)}}, 30s, this,
                 [this, donorFormKey, donorName](const Json& json) {
                   face::FaceRecipe donor;
@@ -1035,7 +1093,7 @@ void AppearanceEditor::applyDonor(const QString& donorFormKey, const QString& do
                     console_->append("error", "appearance", qs(e.what()));
                     return;
                   }
-                  if (!recipe_) return;
+                  if (!recipe_ || !donor_blocked_reason().isEmpty()) return;  // the NPC may have changed meanwhile
                   if (donor.female != recipe_->female) {
                     console_->append("error", "appearance", tr("El donante es de otro sexo: sus piezas y morphs no son compatibles."));
                     return;
@@ -1084,6 +1142,16 @@ QVariantMap AppearanceEditor::jslot_compatibility(const QString& file_path, std:
     finding("blocking", "NpcNotLoaded", tr("Selecciona un NPC y espera a que se lea su rostro."));
     result["findings"] = findings;
     result["verdict"] = "blocking";
+    return result;
+  }
+  // A preset rewrites morphs, Head Parts and tints like a donor: never on a protected head (a High Poly
+  // head whose TRI do not match its mesh would be replaced by a regenerated one).
+  if (const auto reason = donor_blocked_reason(); !reason.isEmpty()) {
+    finding("blocking", "FaceProtected", tr("Los presets no se pueden aplicar a este NPC (%1).").arg(reason));
+    result["findings"] = findings;
+    result["verdict"] = "blocking";
+    result["compatible"] = false;
+    result["exportable"] = false;
     return result;
   }
   // Plugins the preset needs that are not active in the profile.
@@ -1342,6 +1410,10 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                    {"derivedFrom", derived},
                    {"customMorphs", v.custom_morphs.size()},
                    {"sculptTargets", v.sculpt.size()}}}};
+    // A generated FaceGen only shows in game if this mod wins over every mod with the NPC's loose FaceGen.
+    if (!assets.empty()) {
+      if (const auto ctx = context()) face_part["faceGen"]["installAbove"] = facegen_competitors(ctx->snapshot->vfs, *recipe_);
+    }
     // Minimal change: for a hair color and/or height edit the worker writes only these record fields
     // on the winning record and rejects the export if any other face field differs from it.
     if (hair_only || !face_edit) {
