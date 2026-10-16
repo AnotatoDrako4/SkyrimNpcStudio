@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QtQuick3D/QQuick3DGeometry>
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
@@ -29,6 +30,7 @@
 
 #include "viewmodels/studio_controller.hpp"
 #include "sns/core/text.hpp"
+#include "sns/rendering/scene.hpp"
 #include "sns/face/facegen.hpp"
 
 namespace sns::app {
@@ -228,6 +230,32 @@ struct Stress : std::enable_shared_from_this<Stress> {
                         std::abs(tint.blue() - expected.blue()) <= 1;
       check(same, QStringLiteral("viewport tint of %1 is %2 (expected %3)")
                       .arg(row.value("shape").toString(), tint.name(), expected.name()));
+      // Hair with vertex colors: every vertex carries lerp(1, linear tint, green), as Skyrim's Hair shader.
+      if (row.value("hairVertexTint").toBool()) {
+        auto* g = row.value("geometry").value<QQuick3DGeometry*>();
+        if (!g) { check(false, "hair geometry for " + row.value("shape").toString()); continue; }
+        auto linear = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+        const float lt[3] = {linear(tint.redF()), linear(tint.greenF()), linear(tint.blueF())};
+        const auto data = g->vertexData();
+        const auto* f = reinterpret_cast<const float*>(data.constData());
+        const std::size_t count = static_cast<std::size_t>(data.size()) / sizeof(float) / rendering::kFloatsPerVertex;
+        std::size_t off_segment = 0, full = 0, untinted = 0;
+        for (std::size_t v = 0; v < count; ++v) {
+          const float* c = f + v * rendering::kFloatsPerVertex + rendering::kColorOffset;
+          // Shared green weight from the channel with the largest tint delta.
+          int k = 0;
+          for (int i = 1; i < 3; ++i) if (std::abs(lt[i] - 1) > std::abs(lt[k] - 1)) k = i;
+          const float w = std::abs(lt[k] - 1) < 1e-4f ? 1.0f : (c[k] - 1) / (lt[k] - 1);
+          bool on = w > -0.01f && w < 1.01f;
+          for (int i = 0; i < 3; ++i) on = on && std::abs(c[i] - (1 + w * (lt[i] - 1))) < 0.01f;
+          off_segment += on ? 0 : 1;
+          full += w > 0.99f ? 1 : 0;
+          untinted += w < 0.01f ? 1 : 0;
+        }
+        check(count > 0 && off_segment == 0 && full > 0,
+              QStringLiteral("%1 vertex tint: %2 vertices, %3 fully tinted, %4 untinted (green 0), %5 off lerp(1, tint, green)")
+                  .arg(row.value("shape").toString()).arg(count).arg(full).arg(untinted).arg(off_segment));
+      }
     }
     // Preview == export: the regenerated FaceGen bytes shown by the viewport carry the CK hair tint.
     const auto preview = appearance()->preview();
