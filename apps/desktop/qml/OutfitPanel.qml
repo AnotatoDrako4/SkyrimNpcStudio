@@ -565,8 +565,12 @@ ScrollView {
                             tone: root.outfit.compatibilityReport.badge === "verified" ? Theme.ok
                                   : root.outfit.compatibilityReport.badge === "warning" ? Theme.warn : Theme.error
                         }
-                        Item { Layout.fillWidth: true }
                         Text {
+                            // Long body names elide instead of widening the panel.
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
                             text: (root.outfit.compatibilityReport.body?.name ?? "Vanilla")
                                   + (root.outfit.compatibilityReport.body?.physicsEnabled ? qsTr(" · Físicas detectadas") : "")
                             color: Theme.accent

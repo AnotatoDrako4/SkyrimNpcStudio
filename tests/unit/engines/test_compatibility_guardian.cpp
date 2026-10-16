@@ -111,6 +111,9 @@ TEST_CASE("CompatibilityGuardian: Draft evaluation", "[compatibility]") {
     REQUIRE(report.badge == HealthBadge::Verified);
     REQUIRE(report.can_export);
     REQUIRE(report.error_count() == 0);
+    // A preliminary check: the summary must not claim in-game compatibility.
+    CHECK(report.summary.find("100%") == std::string::npos);
+    CHECK(report.summary.find("Skyrim") != std::string::npos);  // it points to the in-game test instead
   }
 
   SECTION("Blocks a material edit whose Skyrim resources are not generated") {

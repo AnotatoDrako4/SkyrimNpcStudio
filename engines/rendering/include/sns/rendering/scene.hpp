@@ -280,6 +280,12 @@ nif::Skeleton pose_skeleton(const nif::Skeleton& base, std::string_view pose_nam
 textures::DdsImage apply_face_tint(const textures::DdsImage& base, const textures::DdsImage& tint,
                                    const textures::DdsImage* detail);
 
+// SkinTint shapes (shader type 5, technique FacegenRGBTint) apply the NPC's skin tone (QNAM) the same
+// way, not as a multiply: result = (base^2 + 2*tint*base*(1-base)) * (1.01171875, 0.99609375, 1.01171875),
+// in the texture's gamma space (Community Shaders, Lighting.hlsl GetFacegenRGBTintBaseColor). A tint of
+// 0.5 keeps the texture (times that constant). Output has the base's size.
+textures::DdsImage apply_skin_tint(const textures::DdsImage& base, const Rgb& tint);
+
 // Skyrim equips outfit items in order and an item unequips whatever shares its slots, so with
 // overlapping pieces the LAST one stays. Returns, per piece, whether it remains equipped.
 std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks);
