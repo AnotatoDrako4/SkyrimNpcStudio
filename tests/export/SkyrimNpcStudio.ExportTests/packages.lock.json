@@ -115,19 +115,10 @@
           "Noggog.CSharpExt": "4.3.0"
         }
       },
-      "MessagePack": {
-        "type": "Transitive",
-        "resolved": "2.5.302",
-        "contentHash": "5DZsKli4dMEpm/glcMAheuO8/IesfaTskbfsuvgnQwWFKS5FN7Z6yNx+5F+UW94E+9N2qt8Zs63/XVzpLsElgA==",
-        "dependencies": {
-          "MessagePack.Annotations": "2.5.302",
-          "Microsoft.NET.StringTools": "17.6.3"
-        }
-      },
       "MessagePack.Annotations": {
         "type": "Transitive",
-        "resolved": "2.5.302",
-        "contentHash": "PTHQHbMJzx1VtUUCpnvPavD7o5X9s2dAJ4uQHAP2kBCwJKICpPTZq0qxzbB4/6iJJiIxem8zlxyfldGAx1SjSQ=="
+        "resolved": "2.5.305",
+        "contentHash": "hNIdrxc3BFjI7UYKLTOryKsG2Z7b8yk33pZUpgs8haWebuiVHX+jxjy5/+r5a7TscD964rqtQbABQjeMd53Pig=="
       },
       "Microsoft.ApplicationInsights": {
         "type": "Transitive",
@@ -463,6 +454,16 @@
         "type": "Project",
         "dependencies": {
           "Mutagen.Bethesda.Skyrim": "[0.54.4, )"
+        }
+      },
+      "MessagePack": {
+        "type": "CentralTransitive",
+        "requested": "[2.5.305, )",
+        "resolved": "2.5.305",
+        "contentHash": "oDs+yCq8oQmIIExX22lSuSYrT4peQcoZEAfsS/lxFAzk4vP+oqNZ5c4JY7TyiB9LIBu3TfC2NQyC60InRXJz7A==",
+        "dependencies": {
+          "MessagePack.Annotations": "2.5.305",
+          "Microsoft.NET.StringTools": "17.6.3"
         }
       },
       "Microsoft.Data.Sqlite": {

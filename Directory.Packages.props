@@ -3,13 +3,20 @@
        (listed, stable, license checked) on 2026-10-11. See docs/ADR/0003-dependencies.md. -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    <!-- On so the transitive MessagePack below can be pinned; it only affects packages listed here. -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <!-- GPL-3.0-only. Plugin (ESP/ESM/ESL) reading and writing. -->
     <PackageVersion Include="Mutagen.Bethesda.Skyrim" Version="0.54.4" />
     <!-- MIT. JSON-RPC 2.0 over the named pipe (LSP-style Content-Length framing). -->
     <PackageVersion Include="StreamJsonRpc" Version="2.25.29" />
+    <!-- MIT. Transitive through StreamJsonRpc 2.25.29 (latest stable), which asks for 2.5.302:
+         GHSA-qhrr-8q5h-9q3h (NU1902, moderate, published 2026-10-15) is fixed in 2.5.303.
+         Pinned to 2.5.305 (2026-09-23), the newest of the same 2.5 line that is older than two weeks
+         (ADR 0003; verified on nuget.org 2026-10-16). Drop this pin once StreamJsonRpc depends on a
+         fixed version. -->
+    <PackageVersion Include="MessagePack" Version="2.5.305" />
     <!-- MIT. NPC/record index cache. -->
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <!-- Tests -->
