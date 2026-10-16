@@ -1163,6 +1163,19 @@ struct Stress : std::enable_shared_from_this<Stress> {
           }
         }
         self->check(count > 0, QStringLiteral("RaceMenu presets in the profile: %1").arg(count));
+        if (!self->appearance()->donor_blocked_reason().isEmpty()) {
+          // Protected head: every preset must be refused and applying one must change nothing.
+          self->check(pick.isEmpty(), "no preset is exportable on a protected head");
+          self->head_part_skip = true;
+          if (!self->appearance()->presets_list().isEmpty()) {
+            self->appearance()->applyJslotPreset(self->appearance()->presets_list().front().toMap().value("diskPath").toString());
+          }
+          self->after(800, [self] {
+            self->check(!self->appearance()->has_face_edits(), "protected head unchanged after a refused preset");
+            self->then_idle();
+          });
+          return;
+        }
         if (pick.isEmpty()) {
           self->log("no preset is exportable for this NPC: nothing applied");
           self->head_part_skip = true;

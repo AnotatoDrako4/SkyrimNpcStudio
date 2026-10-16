@@ -1119,6 +1119,16 @@ QVariantMap AppearanceEditor::jslot_compatibility(const QString& file_path, std:
     result["verdict"] = "blocking";
     return result;
   }
+  // A preset rewrites morphs, Head Parts and tints like a donor: never on a protected head (a High Poly
+  // head whose TRI do not match its mesh would be replaced by a regenerated one).
+  if (const auto reason = donor_blocked_reason(); !reason.isEmpty()) {
+    finding("blocking", "FaceProtected", tr("Los presets no se pueden aplicar a este NPC (%1).").arg(reason));
+    result["findings"] = findings;
+    result["verdict"] = "blocking";
+    result["compatible"] = false;
+    result["exportable"] = false;
+    return result;
+  }
   // Plugins the preset needs that are not active in the profile.
   QStringList missing;
   if (const auto snap = snapshot_()) {

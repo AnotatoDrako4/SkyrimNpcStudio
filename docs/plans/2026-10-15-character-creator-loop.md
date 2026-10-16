@@ -63,5 +63,15 @@ Estado de partida: PR #8 → #14 abiertos, sin fusionar; `main` en `78ea95c`.
 - **Problema 3 — texto engañoso.** Ambas vistas de donante decían que se aplica el «FaceGen» del otro
   NPC; `applyDonor` regenera el FaceGen desde el registro del donante. Texto corregido.
 - **Regresión:** ctest 138, 0 fallos.
-- **Próxima tarea:** seguir la auditoría (operaciones disponibles que deberían bloquearse: presets
-  RaceMenu y Head Parts en cabezas protegidas).
+- **Problema 4 (crítico) — los presets RaceMenu saltaban la protección facial.** Reproducción (binario
+  previo, `preset-export` sobre Serana): el preset «Carrot» salía `exportable-with-warnings`, se aplicó y
+  se exportó con diff `HeadParts, FaceMorph, FaceParts, TextureLighting, TintLayers` y FaceGen regenerado:
+  la cabeza de Priscilla habría sido sustituida en el juego. El arnés lo daba por bueno.
+  - **Solución:** `jslot_compatibility` devuelve `blocking` (`FaceProtected`) en cabezas con morphs,
+    Head Parts o tono bloqueados; `applyJslotPreset` no aplica nada. El escenario `preset-export` exige
+    en cabezas protegidas que ningún preset sea exportable y que el rostro no cambie.
+  - **Pruebas:** Serana → todos `blocking`, rostro intacto, PASSED; Ingrid → Carrot aplicado y exportado
+    (diff solo de rostro), PASSED. `setHeadPart`, sliders, peso, tono y tintes ya comprobaban los bloqueos.
+- **Regresión:** ctest 138, 0 fallos.
+- **Pendiente detectado:** abrir un proyecto `.snps` creado antes de estos bloqueos podría cargar
+  ediciones de morphs en una cabeza protegida (revisar en la próxima iteración).
