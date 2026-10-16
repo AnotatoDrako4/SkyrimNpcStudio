@@ -61,12 +61,12 @@ cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (65) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación (unit + export) |
-| C++ (115) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, validador glTF, informes de fallos y dependencias de compilación |
+| .NET (105) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación (unit + export) |
+| C++ (138) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, validador glTF, informes de fallos y dependencias de compilación |
 | Locales `[local]` (4) | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2 (8.686 NPCs, 8.297 armaduras, 414 plugins, Lydia); se omiten si no están definidas |
 | UI & Forge 3D | `.\scripts\smoke-test.ps1` / `.\scripts\local-review.ps1` | verificación de carga QML completa, renderizado nativo, captura gráfica y suite `-ForgePreview` con 6 modelos GLB/glTF |
 
-La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all`; incluye 18 escenarios de Lydia, cambios rápidos de cabello, cambio de NPC, rechazo de material no exportable, vestuario, guardado/reapertura y exportación. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
+La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all` (32 escenarios): cambios rápidos de cabello, Hair Color Safe Mode, Easy Mod Creator (modos A/B/C y tamaños de ventana), Head Parts, sliders, tono de piel, donante, altura y peso, deshacer/rehacer exacto, cambio rápido de NPC, ciclo de proyecto, rechazo de material no exportable y exportación con reapertura. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
 
 ## Primer caso de uso: el atuendo de Lydia
 
