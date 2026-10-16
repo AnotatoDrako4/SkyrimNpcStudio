@@ -226,7 +226,8 @@ DiagnosticReport CompatibilityGuardian::evaluate(
   } else {
     report.badge = HealthBadge::Verified;
     report.can_export = true;
-    report.summary = "Verificado: 100% Compatible con Skyrim SE/AE.";
+    // Preliminary check (no inventory of the winning body meshes): never a claim of in-game compatibility.
+    report.summary = "Sin errores en la comprobación preliminar. No sustituye la prueba dentro de Skyrim.";
   }
 
   return report;
