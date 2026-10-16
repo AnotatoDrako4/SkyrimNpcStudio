@@ -139,6 +139,11 @@ struct RenderPart {
   std::string parent_node;
   nif::Transform to_root;
   bool model_space_normals = false;
+  // _msn path waiting to be baked into a tangent-space map, with the bind-pose (pre-skinning) frame of
+  // every vertex: T, B, N, 9 floats each, in the shape's space. Cleared once baked.
+  std::string msn_source;
+  std::vector<float> msn_frames;
+  float msn_agreement = 0.0f;  // mean dot(vertex normal, _msn normal at its UV); 0 = not measured
   bool tangents_swapped = false;
   std::size_t vertex_count = 0;
   std::size_t bone_count = 0;
@@ -285,6 +290,20 @@ textures::DdsImage apply_face_tint(const textures::DdsImage& base, const texture
 // in the texture's gamma space (Community Shaders, Lighting.hlsl GetFacegenRGBTintBaseColor). A tint of
 // 0.5 keeps the texture (times that constant). Output has the base's size.
 textures::DdsImage apply_skin_tint(const textures::DdsImage& base, const Rgb& tint);
+
+// Model-space normal maps (_msn, shader flag Model_Space_Normals). Skyrim decodes n = rgb.xzy * 2 - 1 in the
+// shape's space and, on skinned meshes, rotates it with the blended bone matrix (Community Shaders,
+// Lighting.hlsl). Qt's normalMap is tangent-space, so the map is baked per mesh: for every texel covered by a
+// triangle, n_ts = inverse([T B N]) * n with T, B, N interpolated (and normalized) from the bind-pose frames
+// (`frames`: 9 floats per vertex). Qt lights with its skinned frame, R [T B N] n_ts = R n, which is Skyrim's
+// result. `uvs`: 2 floats per vertex, as the material samples them. Texels outside every triangle are filled
+// from covered neighbours (`dilate` passes, against seams), then flat (0, 0, 1).
+textures::DdsImage bake_model_space_normals(const textures::DdsImage& msn, const std::vector<float>& uvs,
+                                            const std::vector<float>& frames, const std::vector<std::uint32_t>& indices,
+                                            int dilate = 4);
+// Mean dot product between every vertex normal (from `frames`) and the _msn normal at its UV: close to 1
+// when the map belongs to the mesh; low values mean another space or convention (not used then).
+float model_space_normal_agreement(const textures::DdsImage& msn, const std::vector<float>& uvs, const std::vector<float>& frames);
 
 // Skyrim equips outfit items in order and an item unequips whatever shares its slots, so with
 // overlapping pieces the LAST one stays. Returns, per piece, whether it remains equipped.
