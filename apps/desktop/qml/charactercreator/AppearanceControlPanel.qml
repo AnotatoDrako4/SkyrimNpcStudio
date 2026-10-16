@@ -12,8 +12,29 @@ ScrollView {
     required property StudioController studio
     readonly property var map: studio.appearanceControl
     readonly property bool hasMap: (map.components || []).length > 0
+    readonly property var scan: studio.appearanceScan
+    property int scanRowsShown: 50
     contentWidth: availableWidth
     clip: true
+
+    function scanStatus() {
+        const s = root.scan
+        if (s.stage === undefined) return qsTr("Revisa el FaceGen y el registro de cada NPC único (sin la medición facial).")
+        if (s.stage === "listing") return qsTr("Listando NPC… %1").arg(s.listed)
+        if (s.stage === "analysing")
+            return qsTr("Analizados %1 de %2 (quedan %3 con varias versiones)").arg(s.analysed).arg(s.total).arg(s.pending)
+        const counts = s.counts || {}
+        const head = s.stage === "done" ? qsTr("Terminado") : s.stage === "cancelled" ? qsTr("Cancelado") : qsTr("Falló")
+        return qsTr("%1: %2 NPC en %3 s — %4 con avisos, %5 con notas%6").arg(head).arg(s.analysed)
+            .arg((s.elapsedMs / 1000).toFixed(1)).arg(counts.warning || 0).arg(counts.info || 0)
+            .arg(s.errors > 0 ? qsTr(", %1 errores").arg(s.errors) : "")
+    }
+    function scanCodes() {
+        const codes = root.scan.codes || {}
+        return Object.keys(codes).filter(k => k !== "FaceSourcesConsistent" && k !== "FaceGenFromOtherModMatches")
+            .sort((a, b) => codes[b] - codes[a]).map(k => k + " " + codes[k]).join(" · ")
+    }
+    onScanChanged: if (scan.stage === "listing") scanRowsShown = 50
 
     function severityText(severity) {
         return severity === "warning" ? qsTr("Aviso") : severity === "info" ? qsTr("Nota") : qsTr("Correcto")
@@ -192,6 +213,93 @@ ScrollView {
                     wrapMode: Text.WrapAnywhere
                 }
             }
+        }
+
+        // ---- every unique NPC of the profile
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.topMargin: 6
+            text: qsTr("Todo el perfil")
+            color: Theme.accent
+            font.bold: true
+            font.pixelSize: 12
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            Button {
+                objectName: "appearanceScanButton"
+                text: root.scan.running ? qsTr("Cancelar") : qsTr("Analizar NPC únicos")
+                enabled: root.studio.phase === StudioController.Ready
+                onClicked: root.scan.running ? root.studio.cancelAppearanceScan() : root.studio.scanAppearanceControl()
+            }
+            Text {
+                objectName: "appearanceScanStatus"
+                Layout.fillWidth: true
+                text: root.scanStatus()
+                color: Theme.textDim
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            visible: root.scanCodes().length > 0
+            text: root.scanCodes()
+            color: Theme.textMuted
+            font.pixelSize: 10
+            wrapMode: Text.WordWrap
+        }
+        Repeater {
+            model: (root.scan.rows || []).slice(0, root.scanRowsShown)
+            delegate: Rectangle {
+                required property var modelData
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                implicitHeight: rowColumn.implicitHeight + 8
+                color: rowArea.containsMouse ? Theme.panelAlt : Theme.panel
+                radius: 3
+                ColumnLayout {
+                    id: rowColumn
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    spacing: 1
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.severityText(modelData.worst) + " · " + modelData.name + "  [" + modelData.formKey + "]"
+                        color: root.severityColor(modelData.worst)
+                        font.pixelSize: 11
+                        wrapMode: Text.WrapAnywhere
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("datos faciales «%1» · FaceGen «%2» · %3").arg(modelData.faceMod).arg(modelData.faceGenMod || qsTr("ninguno"))
+                                  .arg(modelData.codes.join(", "))
+                        color: Theme.textDim
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAnywhere
+                    }
+                }
+                MouseArea {
+                    id: rowArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.studio.selectNpc(modelData.formKey)
+                }
+            }
+        }
+        Button {
+            Layout.leftMargin: 8
+            visible: (root.scan.rows || []).length > root.scanRowsShown
+            text: qsTr("Mostrar más (%1 restantes)").arg((root.scan.rows || []).length - root.scanRowsShown)
+            flat: true
+            onClicked: root.scanRowsShown += 50
         }
 
         Text {

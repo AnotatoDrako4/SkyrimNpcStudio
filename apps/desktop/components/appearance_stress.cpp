@@ -28,6 +28,7 @@
 #include <windows.h>
 #include <psapi.h>
 
+#include "viewmodels/resource_context.hpp"
 #include "viewmodels/studio_controller.hpp"
 #include "sns/core/text.hpp"
 #include "sns/rendering/scene.hpp"
@@ -1690,6 +1691,22 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->check(!map.value("deviation").isValid(), "no deviation when the analysis could not compare");
         }
 
+        // Evidence for the head-part check: the record's head parts against the FaceGen shape names.
+        if (const auto ctx = ResourceContext::for_snapshot(self->studio->snapshot()); ctx && ctx->resolver) {
+          if (const auto bytes = ctx->resolver->read(geometry_path.toStdString())) {
+            const auto info = sns::face::inspect_facegen(*bytes);
+            QStringList shapes, head_parts, absent;
+            for (const auto& [shape, vertices] : info.shapes) shapes << QString::fromStdString(shape);
+            for (const auto& p : npc.value("headParts").toList()) {
+              const auto id = p.toMap().value("record").toMap().value("editorId").toString();
+              const bool mesh = !p.toMap().value("modelPath").toString().isEmpty();
+              head_parts << (id.isEmpty() ? p.toMap().value("record").toMap().value("formKey").toString() + "(no EditorID)" : id) + (mesh ? "" : "(no mesh)");
+              if (mesh && (id.isEmpty() || !shapes.contains(id, Qt::CaseInsensitive))) absent << head_parts.back();
+            }
+            self->log("  head parts [" + head_parts.join(", ") + "], FaceGen shapes [" + shapes.join(", ") + "], absent [" + absent.join(", ") + "]");
+          }
+        }
+
         // Findings agree with the facts they state.
         QStringList codes;
         for (const auto& f : map.value("findings").toList()) {
@@ -1735,6 +1752,110 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->step();
         });
       });
+    } else if (name == "appearance-scan") {
+      // Control map of every unique NPC of the real profile: totals add up, flagged NPCs keep their
+      // findings when opened one by one (where the facial measurement may only downgrade a mismatch),
+      // and the «Origen» tab lists them.
+      auto flagged = std::make_shared<QVariantList>();
+      steps.push_back([self, flagged] {
+        self->studio->scanAppearanceControl();
+        auto wait = std::make_shared<std::function<void()>>();
+        auto started = std::make_shared<QElapsedTimer>();
+        started->start();
+        *wait = [self, wait, started, flagged] {
+          const auto scan = self->studio->appearance_scan();
+          if (scan.value("running").toBool() && started->elapsed() < 20 * 60 * 1000) { self->after(500, *wait); return; }
+          const auto counts = scan.value("counts").toMap();
+          const int warnings = counts.value("warning").toInt(), infos = counts.value("info").toInt(), oks = counts.value("ok").toInt();
+          const int analysed = scan.value("analysed").toInt();
+          self->check(scan.value("stage").toString() == "done", "profile scan finished: " + scan.value("stage").toString());
+          self->check(analysed + scan.value("errors").toInt() == scan.value("total").toInt() && scan.value("listed").toInt() == scan.value("total").toInt(),
+                      QStringLiteral("%1 unique NPCs listed, %2 analysed, %3 errors").arg(scan.value("total").toInt()).arg(analysed).arg(scan.value("errors").toInt()));
+          self->check(warnings + infos + oks == analysed && scan.value("rows").toList().size() == warnings + infos,
+                      QStringLiteral("%1 with warnings, %2 with notes, %3 ok; %4 rows").arg(warnings).arg(infos).arg(oks).arg(scan.value("rows").toList().size()));
+          QStringList codes;
+          const auto code_map = scan.value("codes").toMap();
+          for (auto it = code_map.begin(); it != code_map.end(); ++it) codes << it.key() + "=" + QString::number(it.value().toInt());
+          self->log(QStringLiteral("profile scan: %1 ms total, %2 ms listing, %3 worker calls, %4 us per NPC; codes %5")
+                        .arg(scan.value("elapsedMs").toLongLong()).arg(scan.value("listingMs").toLongLong()).arg(scan.value("rpcCalls").toInt())
+                        .arg(analysed > 0 ? scan.value("elapsedMs").toLongLong() * 1000 / analysed : 0).arg(codes.join(", ")));
+          QFile out(QDir(self->work_dir).filePath("appearance-scan.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(scan)).toJson());
+          // Up to three flagged NPCs to open: one per warning code first, then notes.
+          QStringList seen;
+          for (const auto& r : scan.value("rows").toList()) {
+            const auto row = r.toMap();
+            const auto first = row.value("codes").toStringList().value(0);
+            if (flagged->size() >= 3 || seen.contains(first)) continue;
+            seen << first;
+            *flagged << row;
+          }
+          self->step();
+        };
+        self->after(500, *wait);
+      });
+      for (int i = 0; i < 3; ++i) {
+        steps.push_back([self, flagged, i] {
+          if (i >= flagged->size()) { self->step(); return; }
+          const auto form_key = flagged->at(i).toMap().value("formKey").toString();
+          self->studio->selectNpc(form_key);
+          // Not when_idle(): the face editor never loads NPCs it cannot edit (template traits), so wait
+          // for this NPC's control map and for its facial analysis, if any, to finish.
+          auto wait = std::make_shared<std::function<void()>>();
+          auto started = std::make_shared<QElapsedTimer>();
+          started->start();
+          *wait = [self, wait, started, form_key] {
+            const bool mine = self->studio->appearance_control().value("formKey").toString() == form_key;
+            const bool settling = self->studio->npc_loading() || self->appearance()->loading() || self->appearance()->analysing();
+            if ((!mine || settling || started->elapsed() < 1500) && started->elapsed() < 60000) { self->after(200, *wait); return; }
+            self->step();
+          };
+          self->after(200, *wait);
+        });
+        steps.push_back([self, flagged, i] {
+          if (i >= flagged->size()) { self->step(); return; }
+          const auto row = flagged->at(i).toMap();
+          const auto map = self->studio->appearance_control();
+          QStringList now;
+          for (const auto& f : map.value("findings").toList()) now << f.toMap().value("code").toString();
+          QStringList missing;
+          for (const auto& c : row.value("codes").toStringList()) {
+            const bool downgraded = c == "FaceGenRecordMismatch" && now.contains("FaceGenFromOtherModMatches");
+            if (!now.contains(c) && !downgraded) missing << c;
+          }
+          self->check(map.value("formKey") == row.value("formKey") && missing.isEmpty(),
+                      QStringLiteral("%1 %2: scan [%3], opened [%4] (deviation %5)")
+                          .arg(row.value("formKey").toString(), row.value("name").toString(), row.value("codes").toStringList().join(", "), now.join(", "))
+                          .arg(map.value("deviation").isValid() ? QString::number(map.value("deviation").toDouble(), 'f', 3) : QStringLiteral("n/a")));
+          self->step();
+        });
+      }
+      steps.push_back([self] {
+        self->studio->selectNpc(self->primary_npc);
+        self->then_idle();
+      });
+      steps.push_back([self] {
+        QObject* tabs = nullptr;
+        QQuickItem* panel = nullptr;
+        QObject* status = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("creatorRightTabs")) tabs = o;
+          if (o->objectName() == QLatin1String("appearanceControlPanel")) panel = qobject_cast<QQuickItem*>(o);
+          if (o->objectName() == QLatin1String("appearanceScanStatus")) status = o;
+        }
+        self->check(tabs && panel && status, "«Origen» scan section found");
+        if (!tabs || !panel || !status) { self->step(); return; }
+        tabs->setProperty("currentIndex", 5);
+        self->after(400, [self, panel, status] {
+          const QImage shot = self->window->grabWindow();
+          int inspected = 0;
+          const auto problems = layout_problems(panel, false, &inspected);
+          self->check(status->property("text").toString().startsWith(QStringLiteral("Terminado")), "scan status: " + status->property("text").toString());
+          self->check(problems.isEmpty(), QStringLiteral("«Origen» with the scan: %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+          shot.save(QDir(self->work_dir).filePath("appearance-scan.png"));
+          self->step();
+        });
+      });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {
         hair(QColor("#E6C280"));
@@ -1762,7 +1883,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "appearance-scan", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

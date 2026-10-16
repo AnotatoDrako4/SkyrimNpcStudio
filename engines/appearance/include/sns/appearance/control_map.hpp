@@ -39,6 +39,12 @@ struct ControlInputs {
   std::optional<float> regeneration_deviation;
   // Tracked fields a non-winning version changed whose value did not survive (worker "lost edits").
   std::vector<std::string> lost_fields;
+  // False when the NPC is not expected to have a FaceGen of its own: it takes its traits from a template,
+  // or its race never uses FaceGen (creatures). A missing FaceGen is then normal, not a warning.
+  bool facegen_expected = true;
+  // Whether every head part of the record has a shape of the same name in the effective FaceGen (shapes
+  // are named after the head part EditorIDs); unset when not checked.
+  std::optional<bool> facegen_has_record_head_parts;
 };
 
 struct ComponentControl {

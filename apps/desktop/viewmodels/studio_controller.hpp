@@ -11,6 +11,7 @@
 #include "edit_history.hpp"
 #include "mo2_snapshot.hpp"
 #include "sns/appearance/appearance_draft.hpp"
+#include "sns/appearance/control_map.hpp"
 #include "outfit_editor.hpp"
 #include "appearance_editor.hpp"
 #include "variant_list_model.hpp"
@@ -57,6 +58,11 @@ class StudioController : public QObject {
   // plugin/mod controls each part, what it overrides, and whether record and FaceGen fit together.
   // {facePlugin, faceMod, worst, deviation, analysisUs, components: [...], findings: [...]}.
   Q_PROPERTY(QVariantMap appearanceControl READ appearance_control NOTIFY appearanceControlChanged)
+  // The same map for every unique NPC of the profile (without the facial measurement, which needs a
+  // FaceGen regeneration per NPC): {running, stage, listed, analysed, total, rpcCalls, errors,
+  // elapsedMs, counts: {warning, info, ok}, codes: {code: n}, rows: [{formKey, name, worst, codes,
+  // facePlugin, faceMod, faceGenMod, message}]} — rows only for NPCs with notes or warnings.
+  Q_PROPERTY(QVariantMap appearanceScan READ appearance_scan NOTIFY appearanceScanChanged)
 
  public:
   enum class Phase { Idle, Scanning, Indexing, Ready, Error };
@@ -92,6 +98,7 @@ class StudioController : public QObject {
   [[nodiscard]] QVariantMap npc() const { return npc_; }
   [[nodiscard]] bool npc_loading() const { return npc_loading_; }
   [[nodiscard]] QVariantMap appearance_control() const { return appearance_control_; }
+  [[nodiscard]] QVariantMap appearance_scan() const;
   [[nodiscard]] SnapshotPtr snapshot() const { return snapshot_; }
 
   Q_INVOKABLE void discoverInstances();
@@ -110,6 +117,8 @@ class StudioController : public QObject {
 
   Q_INVOKABLE void searchNpcs(const QString& text, const QString& sex, const QString& kind, const QString& plugin);
   Q_INVOKABLE void selectNpc(const QString& form_key);
+  Q_INVOKABLE void scanAppearanceControl();
+  Q_INVOKABLE void cancelAppearanceScan();
   Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type = {}, bool smp_only = false);
   Q_INVOKABLE void filterMods(const QString& text, bool enabled_only);
   Q_INVOKABLE QVariantMap modDetails(const QString& mod_name) const;
@@ -129,6 +138,7 @@ class StudioController : public QObject {
   void armorPluginsChanged();
   void npcChanged();
   void appearanceControlChanged();
+  void appearanceScanChanged();
   // selectNpc could not load the NPC (unknown FormKey, worker error); the message says why.
   void npcLoadFailed(const QString& message);
   void loaded();
@@ -143,6 +153,17 @@ class StudioController : public QObject {
   QVariantMap npc_row(const QVariantMap& item) const;
   // Recomputes appearance_control_ from npc_, the profile VFS and the facial analysis.
   void refresh_appearance_control();
+  // Control map inputs from getNpc details (overrides with "mod", conflicts, faceGen paths), without the
+  // facial measurement.
+  [[nodiscard]] appearance::ControlInputs control_inputs(const QVariantMap& details) const;
+  // Whether the NPC should have a FaceGen of its own: not with template traits, nor for a race that no
+  // unique NPC of the profile has a FaceGen for (known after a profile scan; creatures).
+  [[nodiscard]] bool facegen_expected(const QVariantMap& details) const;
+  struct AppearanceScan;
+  void scan_page(int offset);
+  void scan_next();
+  void scan_record(const QVariantMap& details);
+  void scan_finish();
 
   WorkerClient* worker_;
   ConsoleModel* console_;
@@ -175,6 +196,8 @@ class StudioController : public QObject {
   QVariantMap summary_;
   QVariantMap npc_;
   QVariantMap appearance_control_;
+  std::shared_ptr<AppearanceScan> scan_;
+  QSet<QString> races_with_facegen_;  // race FormKeys (lower-case) with a FaceGen file for some unique NPC
   bool npc_loading_ = false;
   QString pending_npc_;
   SnapshotPtr snapshot_;

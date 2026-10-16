@@ -189,6 +189,32 @@ TEST_CASE("Control map: a translated copy of the plugin keeps the original mod's
   CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
 }
 
+TEST_CASE("Control map: a head-parts-only change whose pieces are all in the FaceGen is a note", "[appearance][controlmap]") {
+  // Shape of Aeri on the test profile: USSEP (translated) changes HeadParts only; FaceGen from the game BSA.
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("unofficial skyrim special edition patch.esp", "USSEP Spanish", {"HeadParts"})});
+  in.facegen = bsa("<Game Data>");
+  in.facetint = bsa("<Game Data>");
+  in.facegen_has_record_head_parts = true;
+  const auto r = analyze_appearance_control(in);
+  CHECK_FALSE(finding(r, "FaceGenRecordMismatch"));
+  REQUIRE(finding(r, "FaceGenHasRecordHeadParts"));
+  CHECK_FALSE(has_warning(r));
+
+  SECTION("a piece missing from the FaceGen keeps the warning") {
+    in.facegen_has_record_head_parts = false;
+    CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
+  }
+  SECTION("unchecked keeps the warning") {
+    in.facegen_has_record_head_parts.reset();
+    CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
+  }
+  SECTION("morphs from the other mod keep the warning even with every piece present") {
+    in.chain[1].changed_fields = {"HeadParts", "FaceMorph"};
+    CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
+  }
+}
+
 TEST_CASE("Control map: different mods whose FaceGen matches the record by measurement are fine", "[appearance][controlmap]") {
   ControlInputs in;
   in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("USSEP.esp", "USSEP", {"FaceParts"})});
@@ -221,6 +247,14 @@ TEST_CASE("Control map: missing FaceGen and missing FaceTint", "[appearance][con
   CHECK(component(r, "facegen")->kind == "missing");
   CHECK(component(r, "facegen")->mod.empty());
   CHECK_FALSE(finding(r, "NoFaceTint"));  // reported only when there is geometry
+
+  // Template traits or a creature race: no FaceGen of its own is expected.
+  in.facegen_expected = false;
+  const auto templated = analyze_appearance_control(in);
+  CHECK_FALSE(finding(templated, "NoFaceGen"));
+  REQUIRE(finding(templated, "FaceGenNotUsed"));
+  CHECK_FALSE(has_warning(templated));
+  in.facegen_expected = true;
 
   in.facegen = loose("My NPC", {"My NPC"});
   const auto r2 = analyze_appearance_control(in);

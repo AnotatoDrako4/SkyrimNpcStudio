@@ -34,9 +34,11 @@ Panel: `qml/charactercreator/AppearanceControlPanel.qml`. Arnés: escenario `app
 
 | Código | Cuándo | Gravedad |
 |---|---|---|
-| `NoFaceGen` | no hay FaceGen en el perfil | warning |
+| `NoFaceGen` | no hay FaceGen en el perfil y el NPC debería tenerlo | warning |
+| `FaceGenNotUsed` | no hay FaceGen y no se espera: rasgos de plantilla, o raza que ningún NPC del perfil usa con FaceGen (criaturas) | ok |
 | `FaceGenRecordMismatch` | los datos faciales y el FaceGen vienen de mods distintos y la desviación medida no es < 0,05 (o no se pudo medir) | warning |
 | `FaceGenFromReplacedPluginCopy` | mods distintos, pero el mod del FaceGen trae su propia copia del plugin que fija la cara y gana otra copia del mismo archivo (traducción, copia limpiada) | info |
+| `FaceGenHasRecordHeadParts` | mods distintos, pero el otro mod solo fija HeadParts y cada pieza del registro tiene su forma (mismo nombre de EditorID) en el FaceGen efectivo | info |
 | `FaceGenFromOtherModMatches` | mods distintos, pero la desviación medida es < 0,05: el FaceGen sale del registro | ok |
 | `FaceTintFromOtherMod` | el FaceTint lo aporta otro mod que la geometría | warning |
 | `NoFaceTint` | hay geometría pero no tinte | info |
@@ -50,6 +52,13 @@ Panel: `qml/charactercreator/AppearanceControlPanel.qml`. Arnés: escenario `app
   si el mod de los datos faciales trae FaceGen suelto que pierde en MO2 → subirlo; si no → comprobar o
   regenerar el FaceGen con el estudio. Nunca se aplican solas.
 
+## Todo el perfil
+
+Botón **Analizar NPC únicos** (pestaña Origen): el mismo análisis para cada NPC único, sin la medición
+facial. Los NPC de una sola versión se analizan sin consultar al worker; los de varias piden su cadena.
+La lista muestra primero los avisos y abre el NPC al pulsarlo. En el perfil de prueba (1308 NPC únicos)
+tarda unos 38 s en Debug; ver `docs/plans/next-generation-development.md`.
+
 ## Límites conocidos
 
 - No se ejecuta Skyrim: «encaja» significa que los archivos son coherentes (mismo mod o desviación
@@ -62,6 +71,12 @@ Panel: `qml/charactercreator/AppearanceControlPanel.qml`. Arnés: escenario `app
 - Los BSA se atribuyen al mod que aporta el archivo `.bsa`; entre BSA el orden lo decide el
   `AssetResolver` (orden de plugins / INI), igual que el resto del estudio.
 - Plugins sin proveedor en MO2 (fuera del load order) aparecen con mod vacío.
+- «No se espera FaceGen» es heurístico: plantilla con rasgos (en el análisis del perfil, cualquier
+  plantilla de un NPC de una versión, porque sus flags no se cargan) o raza sin ningún FaceGen entre los
+  NPC únicos del perfil. Antes del primer análisis del perfil, un NPC sin piezas de cabeza de una raza
+  de criatura aún puede salir como `NoFaceGen`.
+- La comprobación de piezas compara nombres (EditorID = nombre de la forma en el FaceGen); la misma
+  pieza con otra malla no se detecta.
 - La pestaña «Protección facial» conserva su aviso de procedencia anterior (registro ganador frente al
   mod del FaceGen) porque alimenta el Easy Mod Creator; el mapa de control es más preciso porque usa los
   datos faciales y la medición.

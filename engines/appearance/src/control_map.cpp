@@ -99,7 +99,10 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
   const bool facegen_matches_record = in.regeneration_deviation && *in.regeneration_deviation < kFaceGenMatchesRecord;
 
   // ---- FaceGen present and from the mod that set the face data
-  if (!in.facegen.found) {
+  if (!in.facegen.found && !in.facegen_expected) {
+    finding("ok", "FaceGenNotUsed", "El NPC no usa FaceGen propio (toma los rasgos de una plantilla o su raza no usa FaceGen).",
+            "El juego toma la cabeza de la plantilla o de la raza.", "");
+  } else if (!in.facegen.found) {
     finding("warning", "NoFaceGen", "El NPC no tiene FaceGen en el perfil.",
             "Skyrim construye la cabeza al cargar el NPC; con frecuencia sale la «cara oscura» o un rostro distinto.",
             "Exporta el rostro con el estudio (genera un FaceGen coherente con el registro) o instala el FaceGen del mod que cambia su cara.");
@@ -108,6 +111,13 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
     // FaceGen mod ships: the FaceGen belongs to that plugin; only its winning copy comes from elsewhere.
     const auto face_link = std::find_if(chain.rbegin(), chain.rend(), [&](const OverrideLink& l) { return l.plugin == report.face_plugin; });
     const bool replaced_copy = face_link != chain.rend() && contains(face_link->plugin_mods, in.facegen.winner_mod);
+    // Geometry fields whose value comes from another mod than the FaceGen. Only head parts, all of them
+    // present in the FaceGen: the head the game shows has the record's pieces.
+    std::vector<std::string> foreign;
+    for (const auto& f : geometry_fields()) {
+      if (chain[controller_of(chain, f)].mod != in.facegen.winner_mod) foreign.push_back(f);
+    }
+    const bool head_parts_only = foreign == std::vector<std::string>{"HeadParts"} && in.facegen_has_record_head_parts.value_or(false);
     if (facegen_matches_record) {
       finding("ok", "FaceGenFromOtherModMatches",
               "La geometría FaceGen la aporta " + quoted(in.facegen.winner_mod) + " y los datos faciales " + quoted(report.face_plugin) +
@@ -120,6 +130,12 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
               "Normalmente encaja: las traducciones no cambian los rostros. Si " + quoted(report.face_mod) +
                   " cambió la cara, el FaceGen del mod original ya no le corresponde.",
               "Si en el juego ves la cara oscura o un rostro distinto, exporta el rostro con el estudio para regenerar el FaceGen.");
+    } else if (head_parts_only) {
+      finding("info", "FaceGenHasRecordHeadParts",
+              quoted(report.face_plugin) + " (" + report.face_mod + ") solo cambia las piezas de cabeza, y el FaceGen de " +
+                  quoted(in.facegen.winner_mod) + " contiene todas las piezas del registro" + deviation_text + ".",
+              "Forma de la cara, raza y peso vienen del mismo mod que el FaceGen; las piezas coinciden por nombre.",
+              "Si una pieza se ve distinta en el juego (misma pieza con otra malla), exporta el rostro con el estudio.");
     } else {
       std::string suggestion;
       const auto facegen_plugin = std::find_if(chain.begin(), chain.end(), [&](const OverrideLink& l) { return l.mod == in.facegen.winner_mod; });
