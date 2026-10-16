@@ -247,7 +247,7 @@ void SceneViewModel::cancel() {
 }
 
 void SceneViewModel::clear() {
-  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear();
+  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
   status_.clear();
   last_appearance_ = nullptr;
   last_request_key_.clear();
@@ -319,7 +319,25 @@ void SceneViewModel::sync_hair_tint() {
   if (color == hair_tint_) return;
   diag::record("scene", QStringLiteral("hair tint %1 -> %2 (no rebuild)").arg(hair_tint_.name(), color.name()).toStdString());
   hair_tint_ = color;
+  apply_hair_vertex_tint();
   emit hairTintChanged();
+}
+
+void SceneViewModel::apply_hair_vertex_tint() {
+  // Qt treats material colors as sRGB but uses vertex colors as they are: the tint is linearized so a
+  // fully tinted vertex (green = 1) looks exactly as the white-vertex parts tinted by baseColor.
+  auto linear = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+  const float tint[3] = {linear(hair_tint_.redF()), linear(hair_tint_.greenF()), linear(hair_tint_.blueF())};
+  for (auto& entry : hair_vertex_tint_) {
+    if (!entry.geometry) continue;
+    auto vertices = entry.vertices;
+    for (std::size_t v = 0; v + rendering::kFloatsPerVertex <= vertices.size(); v += rendering::kFloatsPerVertex) {
+      const float g = vertices[v + rendering::kColorOffset + 1];
+      for (int c = 0; c < 3; ++c) vertices[v + rendering::kColorOffset + c] = 1.0f + g * (tint[c] - 1.0f);
+    }
+    entry.geometry->setVertexData(QByteArray(reinterpret_cast<const char*>(vertices.data()), static_cast<qsizetype>(vertices.size() * sizeof(float))));
+    entry.geometry->update();
+  }
 }
 
 void SceneViewModel::reload() {
@@ -483,7 +501,7 @@ void SceneViewModel::install(Prepared& prepared) {
   auto* old = resources_;
   resources_ = new QObject(this);
   if (!pool_owner_) pool_owner_ = new QObject(this);
-  parts_.clear(); issues_.clear(); selected_.clear(); visibility_.clear();
+  parts_.clear(); issues_.clear(); selected_.clear(); visibility_.clear(); hair_vertex_tint_.clear();
   // Reuse GPU objects whose content did not change (a face edit leaves the body and outfit alone).
   op.stage("textures");
   QHash<QString, QQuick3DTextureData*> textures;
@@ -528,6 +546,10 @@ void SceneViewModel::install(Prepared& prepared) {
       {"scale", scene.scale}, {"tint", QColor(Qt::white)}, {"warningCount", static_cast<int>(part.warnings.size())},
       {"inspector", inspector(part, scene)}};
     if (part.tint) row["tint"] = QColor::fromRgbF(part.tint->r, part.tint->g, part.tint->b);
+    if (part.shader_type == nif::kShaderHairTint && part.vertex_colors) {
+      row["hairVertexTint"] = true;
+      hair_vertex_tint_.push_back({row.value("geometry").value<QQuick3DGeometry*>(), part.vertices});
+    }
     visibility_[qs(part.id)] = part.shown_by_default;
     parts_.push_back(row);
   }
@@ -548,6 +570,7 @@ void SceneViewModel::install(Prepared& prepared) {
   installed_preview_ = prepared.preview;
   record_hair_ = prepared.record_hair;
   sync_hair_tint();
+  apply_hair_vertex_tint();  // new geometries carry the NIF colors until the tint is written
   op.stage("notify QML");
   emit changed(); emit visibilityChanged(); emit selectionChanged();
   // QML has switched to the new objects synchronously in changed(); what is left over goes away

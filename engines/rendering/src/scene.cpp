@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "sns/assets/asset_resolver.hpp"
@@ -149,9 +150,6 @@ RenderPart to_part(const nif::Shape& shape, std::string id, std::string group, s
       if (part.degenerate_uvs) part.warnings.push_back("UV coordinates are degenerate (every triangle has zero UV area)");
     }
   }
-  if (shape.model_space_normals && !shape.textures[nif::Normal].empty()) {
-    part.warnings.push_back("model-space normal map (_msn) is not reproduced: vertex normals are used");
-  }
   return part;
 }
 
@@ -228,6 +226,82 @@ bool blend_by_weight(nif::Shape& heavy, const nif::Shape& thin, float weight) {
     }
   }
   return true;
+}
+
+// Smooth vertex normals from the geometry: area-weighted face normals, summed over every vertex that
+// shares a position (UV seams split vertices; welding keeps the normal continuous across them).
+void recompute_smooth_normals(nif::Shape& shape) {
+  const auto n = shape.positions.size();
+  std::vector<Vec3> sum(n);
+  for (std::size_t t = 0; t + 2 < shape.indices.size(); t += 3) {
+    const auto i0 = shape.indices[t], i1 = shape.indices[t + 1], i2 = shape.indices[t + 2];
+    if (i0 >= n || i1 >= n || i2 >= n) continue;
+    const Vec3& a = shape.positions[i0]; const Vec3& b = shape.positions[i1]; const Vec3& c = shape.positions[i2];
+    const Vec3 e1{b.x - a.x, b.y - a.y, b.z - a.z}, e2{c.x - a.x, c.y - a.y, c.z - a.z};
+    const Vec3 fn{e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z, e1.x * e2.y - e1.y * e2.x};  // |fn| = 2 * area
+    for (const auto i : {i0, i1, i2}) sum[i] = {sum[i].x + fn.x, sum[i].y + fn.y, sum[i].z + fn.z};
+  }
+  // Weld by position (quantized to 1e-4 units).
+  std::unordered_map<std::string, Vec3> welded;
+  auto key_of = [](const Vec3& p) {
+    char k[64];
+    std::snprintf(k, sizeof(k), "%lld,%lld,%lld", std::llround(p.x * 1e4), std::llround(p.y * 1e4), std::llround(p.z * 1e4));
+    return std::string(k);
+  };
+  for (std::size_t i = 0; i < n; ++i) {
+    auto& w = welded[key_of(shape.positions[i])];
+    w = {w.x + sum[i].x, w.y + sum[i].y, w.z + sum[i].z};
+  }
+  shape.normals.resize(n);
+  for (std::size_t i = 0; i < n; ++i) shape.normals[i] = normalized(welded[key_of(shape.positions[i])]);
+}
+
+// Per-vertex tangent (along u) and bitangent (along v) from the UVs, orthogonalized against the normal.
+// Only for shapes without them: the model-space path never reads tangents, but the bake and Qt need a frame.
+void ensure_uv_tangents(nif::Shape& shape) {
+  const auto n = shape.positions.size();
+  if (shape.tangents.size() == n && shape.bitangents.size() == n) return;
+  std::vector<Vec3> tu(n), tv(n);
+  for (std::size_t t = 0; t + 2 < shape.indices.size(); t += 3) {
+    const auto i0 = shape.indices[t], i1 = shape.indices[t + 1], i2 = shape.indices[t + 2];
+    if (i0 >= n || i1 >= n || i2 >= n || shape.uvs.size() != n) continue;
+    const Vec3& p0 = shape.positions[i0]; const Vec3& p1 = shape.positions[i1]; const Vec3& p2 = shape.positions[i2];
+    const Vec3 e1{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z}, e2{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+    const float du1 = shape.uvs[i1].u - shape.uvs[i0].u, dv1 = shape.uvs[i1].v - shape.uvs[i0].v;
+    const float du2 = shape.uvs[i2].u - shape.uvs[i0].u, dv2 = shape.uvs[i2].v - shape.uvs[i0].v;
+    const float r = du1 * dv2 - du2 * dv1;
+    if (std::abs(r) < 1e-12f) continue;
+    const Vec3 su{(e1.x * dv2 - e2.x * dv1) / r, (e1.y * dv2 - e2.y * dv1) / r, (e1.z * dv2 - e2.z * dv1) / r};
+    const Vec3 sv{(e2.x * du1 - e1.x * du2) / r, (e2.y * du1 - e1.y * du2) / r, (e2.z * du1 - e1.z * du2) / r};
+    for (const auto i : {i0, i1, i2}) {
+      tu[i] = {tu[i].x + su.x, tu[i].y + su.y, tu[i].z + su.z};
+      tv[i] = {tv[i].x + sv.x, tv[i].y + sv.y, tv[i].z + sv.z};
+    }
+  }
+  shape.tangents.resize(n);
+  shape.bitangents.resize(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const Vec3 nr = i < shape.normals.size() ? normalized(shape.normals[i]) : Vec3{0, 0, 1};
+    auto ortho = [&](Vec3 v) {
+      const float d = v.x * nr.x + v.y * nr.y + v.z * nr.z;
+      return normalized({v.x - nr.x * d, v.y - nr.y * d, v.z - nr.z * d});
+    };
+    shape.tangents[i] = ortho(tu[i]);
+    shape.bitangents[i] = ortho(tv[i]);
+  }
+}
+
+std::vector<float> bind_frames(const nif::Shape& shape) {
+  const auto n = shape.positions.size();
+  std::vector<float> frames(n * 9);
+  for (std::size_t i = 0; i < n; ++i) {
+    const Vec3 t = i < shape.tangents.size() ? shape.tangents[i] : Vec3{1, 0, 0};
+    const Vec3 b = i < shape.bitangents.size() ? shape.bitangents[i] : Vec3{0, 1, 0};
+    const Vec3 nr = i < shape.normals.size() ? shape.normals[i] : Vec3{0, 0, 1};
+    const float f[9] = {t.x, t.y, t.z, b.x, b.y, b.z, nr.x, nr.y, nr.z};
+    std::copy(std::begin(f), std::end(f), frames.data() + i * 9);
+  }
+  return frames;
 }
 
 SkinningReport apply_skinning(nif::Shape& shape, const nif::Skeleton& skeleton) {
@@ -461,6 +535,139 @@ textures::DdsImage apply_skin_tint(const textures::DdsImage& base, const Rgb& ti
   return out;
 }
 
+namespace {
+
+// Skyrim's _msn decode: n = rgb.xzy * 2 - 1 (Lighting.hlsl, MODELSPACENORMALS).
+Vec3 decode_msn(const textures::DdsImage& msn, std::uint32_t x, std::uint32_t y) {
+  const auto* t = reinterpret_cast<const std::uint8_t*>(msn.data.data()) + (static_cast<std::size_t>(y) * msn.width + x) * 4;
+  return normalized({t[0] / 127.5f - 1.0f, t[2] / 127.5f - 1.0f, t[1] / 127.5f - 1.0f});
+}
+
+Vec3 frame_vec(const std::vector<float>& frames, std::size_t vertex, int which) {
+  const float* f = frames.data() + vertex * 9 + which * 3;
+  return {f[0], f[1], f[2]};
+}
+
+void check_msn_inputs(const textures::DdsImage& msn, const std::vector<float>& uvs, const std::vector<float>& frames) {
+  if (msn.format != textures::TextureFormat::RGBA8 || msn.width == 0 || msn.height == 0 ||
+      msn.data.size() != 4ull * msn.width * msn.height) {
+    throw Error(ErrorKind::InvalidArgument, "model-space normal map must be a decoded RGBA8 image");
+  }
+  if (uvs.size() % 2 != 0 || frames.size() != uvs.size() / 2 * 9) {
+    throw Error(ErrorKind::InvalidArgument, "model-space normal bake needs 2 UV floats and 9 frame floats per vertex");
+  }
+}
+
+std::uint32_t wrap_texel(float coord, std::uint32_t size) {
+  const auto i = static_cast<long long>(std::floor(coord));
+  const auto s = static_cast<long long>(size);
+  return static_cast<std::uint32_t>(((i % s) + s) % s);
+}
+
+}  // namespace
+
+float model_space_normal_agreement(const textures::DdsImage& msn, const std::vector<float>& uvs, const std::vector<float>& frames) {
+  check_msn_inputs(msn, uvs, frames);
+  const std::size_t n = uvs.size() / 2;
+  if (n == 0) return 0.0f;
+  double sum = 0;
+  for (std::size_t v = 0; v < n; ++v) {
+    const Vec3 m = decode_msn(msn, wrap_texel(uvs[2 * v] * msn.width, msn.width), wrap_texel(uvs[2 * v + 1] * msn.height, msn.height));
+    const Vec3 nv = normalized(frame_vec(frames, v, 2));
+    sum += m.x * nv.x + m.y * nv.y + m.z * nv.z;
+  }
+  return static_cast<float>(sum / static_cast<double>(n));
+}
+
+textures::DdsImage bake_model_space_normals(const textures::DdsImage& msn, const std::vector<float>& uvs,
+                                            const std::vector<float>& frames, const std::vector<std::uint32_t>& indices, int dilate) {
+  check_msn_inputs(msn, uvs, frames);
+  const std::uint32_t w = msn.width, h = msn.height;
+  textures::DdsImage out = msn;
+  auto* px = reinterpret_cast<std::uint8_t*>(out.data.data());
+  std::vector<std::uint8_t> covered(static_cast<std::size_t>(w) * h, 0);
+  const std::size_t vertex_count = uvs.size() / 2;
+  for (std::size_t t = 0; t + 2 < indices.size(); t += 3) {
+    const std::uint32_t id[3] = {indices[t], indices[t + 1], indices[t + 2]};
+    if (id[0] >= vertex_count || id[1] >= vertex_count || id[2] >= vertex_count) continue;
+    // Texel centres in pixel space (the material samples at uv * size - 0.5).
+    float x[3], y[3];
+    for (int k = 0; k < 3; ++k) {
+      x[k] = uvs[2 * id[k]] * w - 0.5f;
+      y[k] = uvs[2 * id[k] + 1] * h - 0.5f;
+    }
+    const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+    if (std::abs(area) < 1e-12f) continue;
+    const int x0 = static_cast<int>(std::floor(std::min({x[0], x[1], x[2]}))), x1 = static_cast<int>(std::ceil(std::max({x[0], x[1], x[2]})));
+    const int y0 = static_cast<int>(std::floor(std::min({y[0], y[1], y[2]}))), y1 = static_cast<int>(std::ceil(std::max({y[0], y[1], y[2]})));
+    for (int py = y0; py <= y1; ++py) {
+      for (int pxi = x0; pxi <= x1; ++pxi) {
+        const float fx = static_cast<float>(pxi), fy = static_cast<float>(py);
+        const float b0 = ((x[1] - fx) * (y[2] - fy) - (x[2] - fx) * (y[1] - fy)) / area;
+        const float b1 = ((x[2] - fx) * (y[0] - fy) - (x[0] - fx) * (y[2] - fy)) / area;
+        const float b2 = 1.0f - b0 - b1;
+        constexpr float eps = -1e-4f;
+        if (b0 < eps || b1 < eps || b2 < eps) continue;
+        const std::uint32_t tx = wrap_texel(fx + 0.5f, w), ty = wrap_texel(fy + 0.5f, h);
+        Vec3 axes[3];
+        for (int which = 0; which < 3; ++which) {
+          const Vec3 a = frame_vec(frames, id[0], which), b = frame_vec(frames, id[1], which), c = frame_vec(frames, id[2], which);
+          axes[which] = normalized({a.x * b0 + b.x * b1 + c.x * b2, a.y * b0 + b.y * b1 + c.y * b2, a.z * b0 + b.z * b1 + c.z * b2});
+        }
+        const Vec3& T = axes[0];
+        const Vec3& B = axes[1];
+        const Vec3& N = axes[2];
+        // Solve [T B N] * c = n by Cramer's rule (the frame need not be orthonormal).
+        const float det = T.x * (B.y * N.z - B.z * N.y) - B.x * (T.y * N.z - T.z * N.y) + N.x * (T.y * B.z - T.z * B.y);
+        if (std::abs(det) < 1e-6f) continue;
+        const Vec3 m = decode_msn(msn, tx, ty);
+        const float cx = (m.x * (B.y * N.z - B.z * N.y) - B.x * (m.y * N.z - m.z * N.y) + N.x * (m.y * B.z - m.z * B.y)) / det;
+        const float cy = (T.x * (m.y * N.z - m.z * N.y) - m.x * (T.y * N.z - T.z * N.y) + N.x * (T.y * m.z - T.z * m.y)) / det;
+        const float cz = (T.x * (B.y * m.z - B.z * m.y) - B.x * (T.y * m.z - T.z * m.y) + m.x * (T.y * B.z - T.z * B.y)) / det;
+        const Vec3 ts = normalized({cx, cy, cz});
+        auto* o = px + (static_cast<std::size_t>(ty) * w + tx) * 4;
+        o[0] = static_cast<std::uint8_t>(std::clamp(ts.x * 127.5f + 127.5f, 0.0f, 255.0f));
+        o[1] = static_cast<std::uint8_t>(std::clamp(ts.y * 127.5f + 127.5f, 0.0f, 255.0f));
+        o[2] = static_cast<std::uint8_t>(std::clamp(ts.z * 127.5f + 127.5f, 0.0f, 255.0f));
+        o[3] = 255;
+        covered[static_cast<std::size_t>(ty) * w + tx] = 1;
+      }
+    }
+  }
+  // Dilate covered texels into their neighbours so bilinear sampling at island borders never mixes in
+  // unbaked data; whatever stays uncovered becomes flat.
+  for (int pass = 0; pass < dilate; ++pass) {
+    std::vector<std::uint8_t> next = covered;
+    for (std::uint32_t y = 0; y < h; ++y) {
+      for (std::uint32_t x = 0; x < w; ++x) {
+        if (covered[static_cast<std::size_t>(y) * w + x]) continue;
+        int sum[3] = {0, 0, 0}, count = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            const long long nx = static_cast<long long>(x) + dx, ny = static_cast<long long>(y) + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h || !covered[static_cast<std::size_t>(ny) * w + nx]) continue;
+            const auto* s = px + (static_cast<std::size_t>(ny) * w + nx) * 4;
+            for (int c = 0; c < 3; ++c) sum[c] += s[c];
+            ++count;
+          }
+        }
+        if (count == 0) continue;
+        auto* o = px + (static_cast<std::size_t>(y) * w + x) * 4;
+        for (int c = 0; c < 3; ++c) o[c] = static_cast<std::uint8_t>(sum[c] / count);
+        o[3] = 255;
+        next[static_cast<std::size_t>(y) * w + x] = 1;
+      }
+    }
+    covered.swap(next);
+  }
+  for (std::size_t i = 0; i < covered.size(); ++i) {
+    if (covered[i]) continue;
+    auto* o = px + i * 4;
+    o[0] = 128; o[1] = 128; o[2] = 255; o[3] = 255;
+  }
+  return out;
+}
+
 std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks) {
   std::vector<bool> equipped(slot_masks.size(), true);
   std::uint32_t taken = 0;
@@ -575,6 +782,20 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         if (found != thin->shapes.end()) blended = blend_by_weight(shape, *found, appearance.weight);
         if (!blended) issue(scene, "warning", "WeightTopologyMismatch", "Weight meshes do not match; heavy mesh retained", path);
       }
+      // _msn: the frame the map is baked against is the bind pose, before skinning moves the vertices.
+      std::vector<float> msn_frames;
+      const bool msn = shape.model_space_normals && !shape.textures[nif::Normal].empty();
+      if (msn && shape.uvs.size() == shape.positions.size()) {
+        // Skyrim never reads the vertex normals of a model-space shape, and on real bodies, hands and
+        // heads they disagree with the geometry (mean dot 0.1-0.4); the _msn map agrees with geometric
+        // normals (0.8-0.99). Light and bake with normals rebuilt from the geometry instead.
+        recompute_smooth_normals(shape);
+        shape.tangents.clear();
+        shape.bitangents.clear();
+        shape.tangents_swapped = false;
+        ensure_uv_tangents(shape);
+        msn_frames = bind_frames(shape);
+      }
       SkinningReport skinning;
       if (shape.skinned && options.apply_skinning && skeleton && !shape.bones.empty()) {
         skinning = apply_skinning(shape, *skeleton);
@@ -586,6 +807,12 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         }
       }
       auto part = to_part(shape, std::to_string(scene.parts.size()), group, label);
+      if (!msn_frames.empty()) {
+        part.msn_source = shape.textures[nif::Normal];
+        part.msn_frames = std::move(msn_frames);
+      } else if (msn) {
+        part.warnings.push_back("model-space normal map (_msn) on a shape without UVs: vertex normals are used");
+      }
       part.armor_form_key = armor;
       part.slot_mask = mask;
       part.mesh_path = path;
@@ -696,6 +923,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     request(part.face_tint, later, false);
     request(part.detail, later, false);
     request(part.normal, (head ? 2 : 3) + later, true);
+    request(part.msn_source, (head ? 2 : 3) + later, true);
   }
   std::stable_sort(requests.begin(), requests.end(), [](const Request& a, const Request& b) { return a.priority < b.priority; });
 
@@ -819,6 +1047,52 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     }
     part.diffuse = key;
     part.tint.reset();  // applied in the texture: a material multiply on top would tint twice
+  }
+
+  // ---- 3c. model-space normal maps baked to tangent space ----------------------------------------
+  for (auto& part : scene.parts) {
+    if (part.msn_source.empty()) continue;
+    const auto msn = scene.textures.find(part.msn_source);
+    if (msn == scene.textures.end()) {
+      part.warnings.push_back("model-space normal map unavailable: vertex normals are used");
+      part.msn_frames.clear();
+      continue;
+    }
+    std::vector<float> uvs(part.vertex_count * 2);
+    for (std::size_t v = 0; v < part.vertex_count; ++v) {
+      uvs[2 * v] = part.vertices[v * kFloatsPerVertex + 6];
+      uvs[2 * v + 1] = part.vertices[v * kFloatsPerVertex + 7];
+    }
+    part.msn_agreement = model_space_normal_agreement(*msn->second, uvs, part.msn_frames);
+    if (part.msn_agreement < 0.5f) {
+      char text[160];
+      std::snprintf(text, sizeof(text), "model-space normal map does not match this mesh (agreement %.2f): vertex normals are used",
+                    part.msn_agreement);
+      part.warnings.push_back(text);
+      issue(scene, "warning", "ModelSpaceNormalsMismatch", text, part.msn_source);
+      part.msn_frames.clear();
+      continue;
+    }
+    const auto key = part.msn_source + "|tangent:" + part.mesh_path + "|" + part.shape_name;
+    if (!scene.textures.contains(key)) {
+      auto baked = std::make_shared<textures::DdsImage>(bake_model_space_normals(*msn->second, uvs, part.msn_frames, part.indices));
+      TextureInfo info = scene.texture_info[part.msn_source];
+      info.path = key;
+      info.location = "composite";
+      char text[96];
+      std::snprintf(text, sizeof(text), " (model space -> tangent space, agreement %.2f)", part.msn_agreement);
+      info.derived_from = part.msn_source + text;
+      info.normal_map = true;
+      scene.texture_info[key] = std::move(info);
+      scene.textures[key] = std::move(baked);
+    }
+    part.normal = key;
+    part.msn_frames.clear();
+    part.msn_frames.shrink_to_fit();
+    char text[200];
+    std::snprintf(text, sizeof(text), "%s: model-space normal map converted to tangent space (agreement with vertex normals %.2f)",
+                  part.shape_name.c_str(), part.msn_agreement);
+    issue(scene, "info", "ModelSpaceNormalsBaked", text, part.msn_source);
   }
 
   // ---- 4. alpha translation, measured on what really reaches the material ---------------------

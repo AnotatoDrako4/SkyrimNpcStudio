@@ -104,7 +104,8 @@ Rectangle {
 
     // HairTint parts (hair, brows, beards) take the live hair color: a color edit recolors them at
     // once, without rebuilding the scene.
-    function tintOf(row) { return row.hair ? root.scene.hairTint : row.tint }
+    // Hair with vertex colors carries lerp(1, tint, green) per vertex (SceneViewModel); its material stays white.
+    function tintOf(row) { return row.hair ? (row.hairVertexTint ? "white" : root.scene.hairTint) : row.tint }
 
     Item {
         anchors.fill: parent

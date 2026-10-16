@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVector3D>
 #include <QHash>
@@ -108,6 +109,7 @@ class SceneViewModel : public QObject {
   void schedule(int delay_ms);
   void on_face_changed();
   void sync_hair_tint();
+  void apply_hair_vertex_tint();
   QString effective_npc() const;
   // The face draft's preview when it belongs to the NPC this viewport shows; empty otherwise.
   FacePreview current_preview() const;
@@ -149,6 +151,13 @@ class SceneViewModel : public QObject {
   FacePreview installed_preview_;
   QColor record_hair_;
   QColor hair_tint_ = QColor(Qt::white);
+  // HairTint parts with vertex colors: Skyrim tints them by lerp(1, tint, vertex color green), so the
+  // tint is written per vertex (the material stays white) and rewritten when the hair color changes.
+  struct HairVertexTint {
+    QPointer<QQuick3DGeometry> geometry;
+    std::vector<float> vertices;  // the part's vertex data, with the NIF vertex colors
+  };
+  std::vector<HairVertexTint> hair_vertex_tint_;
   // GPU-side objects reused across builds when a part's data did not change.
   QObject* pool_owner_ = nullptr;
   QHash<QString, QQuick3DGeometry*> geometry_pool_, uv_pool_;

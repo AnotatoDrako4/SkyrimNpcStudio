@@ -248,6 +248,67 @@ TEST_CASE("SkinTint applies the skin tone as a soft-light blend, not a multiply"
   CHECK_THROWS_AS(apply_skin_tint(sns::textures::DdsImage{}, {0.5f, 0.5f, 0.5f}), sns::Error);
 }
 
+namespace {
+// _msn texel for model normal n, encoded the way Skyrim decodes it (n = rgb.xzy * 2 - 1).
+std::array<std::uint8_t, 4> msn_texel(float x, float y, float z, bool skyrim_swizzle = true) {
+  auto enc = [](float c) { return static_cast<std::uint8_t>(std::lround(c * 127.5f + 127.5f)); };
+  return skyrim_swizzle ? std::array<std::uint8_t, 4>{enc(x), enc(z), enc(y), 255} : std::array<std::uint8_t, 4>{enc(x), enc(y), enc(z), 255};
+}
+}  // namespace
+
+TEST_CASE("Model-space normal maps bake to the tangent space of the mesh", "[scene][msn]") {
+  using sns::rendering::bake_model_space_normals;
+  using sns::rendering::model_space_normal_agreement;
+  // One triangle covering the upper-left half of an 8x8 map (uv (0,0), (1,0), (0,1)).
+  const std::vector<float> uvs = {0, 0, 1, 0, 0, 1};
+  const std::vector<std::uint32_t> tri = {0, 1, 2};
+  const float nx = 0.6f, ny = 0.0f, nz = 0.8f;
+  const auto t = msn_texel(nx, ny, nz);
+  const auto msn = image(8, 8, {t[0], t[1], t[2], 255});
+
+  SECTION("identity frame: the tangent-space normal is the decoded model normal (xzy swizzle)") {
+    const std::vector<float> identity = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::vector<float> frames;
+    for (int v = 0; v < 3; ++v) frames.insert(frames.end(), identity.begin(), identity.end());
+    const auto baked = bake_model_space_normals(msn, uvs, frames, tri);
+    const auto px = pixel(baked, 1);  // texel (1, 0): inside the triangle
+    CHECK(std::abs(int(px[0]) - 204) <= 1);  // x = 0.6
+    CHECK(std::abs(int(px[1]) - 128) <= 1);  // y = 0
+    CHECK(std::abs(int(px[2]) - 230) <= 1);  // z = 0.8
+    CHECK(model_space_normal_agreement(msn, uvs, frames) == Catch::Approx(0.8f).margin(0.01));
+  }
+
+  SECTION("rotated frame: frame * baked value gives the model normal back") {
+    // T = +Y, B = -X, N = +Z (a 90 degree turn around the normal).
+    const std::vector<float> rotated = {0, 1, 0, -1, 0, 0, 0, 0, 1};
+    std::vector<float> frames;
+    for (int v = 0; v < 3; ++v) frames.insert(frames.end(), rotated.begin(), rotated.end());
+    const auto baked = bake_model_space_normals(msn, uvs, frames, tri);
+    const auto px = pixel(baked, 1);
+    const float c0 = px[0] / 127.5f - 1, c1 = px[1] / 127.5f - 1, c2 = px[2] / 127.5f - 1;
+    // n = T*c0 + B*c1 + N*c2 = (-c1, c0, c2)
+    CHECK(-c1 == Catch::Approx(nx).margin(0.02));
+    CHECK(c0 == Catch::Approx(ny).margin(0.02));
+    CHECK(c2 == Catch::Approx(nz).margin(0.02));
+  }
+
+  SECTION("agreement exposes a map in another convention; uncovered texels are dilated, then flat") {
+    std::vector<float> frames;
+    for (int v = 0; v < 3; ++v) frames.insert(frames.end(), {1, 0, 0, 0, 1, 0, 0.6f, 0.0f, 0.8f});
+    CHECK(model_space_normal_agreement(msn, uvs, frames) > 0.99f);
+    // The same normal stored without Skyrim's swizzle decodes as (0.6, 0.8, 0): agreement drops.
+    const auto w = msn_texel(nx, ny, nz, false);
+    CHECK(model_space_normal_agreement(image(8, 8, {w[0], w[1], w[2], 255}), uvs, frames) < 0.5f);
+
+    const auto baked = bake_model_space_normals(msn, uvs, frames, tri, 1);
+    const auto corner = pixel(baked, 63);  // (7, 7): far from the triangle, beyond one dilation pass
+    CHECK(int(corner[0]) == 128); CHECK(int(corner[1]) == 128); CHECK(int(corner[2]) == 255);
+  }
+
+  CHECK_THROWS_AS(bake_model_space_normals(sns::textures::DdsImage{}, uvs, {}, tri), sns::Error);
+  CHECK_THROWS_AS(model_space_normal_agreement(msn, uvs, {1, 0, 0}), sns::Error);
+}
+
 TEST_CASE("Outfit items sharing a slot: the last one stays equipped", "[scene]") {
   CHECK(sns::rendering::resolve_equipped({1u << 16, (1u << 16) | (1u << 2), 1u << 4}) == std::vector<bool>{false, true, true});
   CHECK(sns::rendering::resolve_equipped({0, 0}) == std::vector<bool>{true, true});
@@ -347,6 +408,14 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   face.file.GetShader(head)->SetShaderType(sns::nif::kShaderFaceTint);
   auto* hair = face.quad("Hair"); face.texture(hair, "textures\\test\\hair_d.dds"); face.alpha(hair, 4844, 200);
   face.file.GetShader(hair)->SetShaderType(sns::nif::kShaderHairTint);
+  // Model-space normal map on a shape whose vertex normals are unreliable (+X on a quad facing +Z), as on
+  // real bodies: the scene must light it with geometric normals and bake the _msn to tangent space.
+  auto* msn_skin = face.quad("MsnSkin", 20);
+  face.texture(msn_skin, "textures\\test\\head_d.dds"); face.texture(msn_skin, "textures\\test\\skin_msn.dds", 1);
+  auto* msn_shader = dynamic_cast<nifly::BSLightingShaderProperty*>(face.file.GetShader(msn_skin));
+  REQUIRE(msn_shader != nullptr);
+  msn_shader->shaderFlags1 |= nifly::SLSF1_MODEL_SPACE_NORMALS;
+  face.file.SetNormalsForShape(msn_skin, std::vector<nifly::Vector3>(4, nifly::Vector3(1, 0, 0)));
   dir.write("Base Mod/meshes/test/head.nif", face.bytes());
   // -- textures: the override mod wins for plate_d.dds -------------------------------------------
   std::vector<Rgba> half_clear(16, Rgba{90, 90, 90, 255}); for (int i = 0; i < 8; ++i) half_clear[i][3] = 0;
@@ -357,6 +426,7 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   dir.write("Base Mod/textures/test/head_detail.dds", dds_rgba(4, 4, {64, 64, 64, 255}));
   dir.write("Base Mod/textures/test/tint.dds", dds_rgba(4, 4, {128, 128, 128, 255}));
   dir.write("Base Mod/textures/test/hair_d.dds", dds_rgba(4, 4, {120, 120, 120, 100}));
+  dir.write("Base Mod/textures/test/skin_msn.dds", dds_rgba(4, 4, {128, 255, 128, 255}));  // +Z, Skyrim's xzy encoding
 
   const auto vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}, {"Override Mod", dir.path() / "Override Mod"}});
   sns::assets::AssetResolver resolver(vfs, {});
@@ -415,6 +485,16 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   const auto composite = pixel(*scene.textures.at(head_part.diffuse), 0);
   CHECK(std::abs(int(composite[0]) - 180) <= 4); CHECK(std::abs(int(composite[2]) - 120) <= 4);
   // Hair: its own threshold (no fixed 0.5 cutoff, no blanket Mask) and the record's hair colour.
+  // _msn: geometric normal (same as the correctly lit Head quad), map baked to a flat tangent-space normal.
+  const auto& msn_part = part_named(scene, "MsnSkin");
+  const auto& head_quad = part_named(scene, "Head");
+  CHECK(msn_part.msn_agreement > 0.99f);
+  REQUIRE(msn_part.normal.find("|tangent:") != std::string::npos);
+  const auto ts = pixel(*scene.textures.at(msn_part.normal), 5);
+  CHECK(std::abs(int(ts[0]) - 128) <= 2); CHECK(std::abs(int(ts[1]) - 128) <= 2); CHECK(int(ts[2]) >= 250);
+  for (int c = 3; c < 6; ++c) CHECK(msn_part.vertices[c] == Catch::Approx(head_quad.vertices[c]).margin(0.01));  // Head normals are byte-packed (1/255)
+  CHECK(std::any_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) { return i.code == "ModelSpaceNormalsBaked"; }));
+
   const auto& hair_part = part_named(scene, "Hair");
   CHECK(hair_part.alpha_mode == AlphaMode::Mask); CHECK(hair_part.alpha_cutoff == Catch::Approx(200 / 255.0f));
   REQUIRE(hair_part.tint.has_value()); CHECK(hair_part.tint->g == Catch::Approx(0.25f));

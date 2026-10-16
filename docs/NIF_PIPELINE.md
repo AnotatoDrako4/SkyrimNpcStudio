@@ -73,24 +73,54 @@ salía más oscuro que la cara y se veía un corte en el cuello. Medido en la ca
 0,69 → 1,14; Serana 0,50 → 0,90 (la cara no cambia; la diferencia restante es de iluminación: el pecho
 mira a la luz). Prueba unitaria: `SkinTint applies the skin tone as a soft-light blend, not a multiply`.
 
-El pelo (HairTint, técnica `Hair`) sí multiplica: `lerp(1, TintColor, color de vértice.g)`; el visor
-multiplica por el tinte (y por el color de vértice completo si la malla lo trae).
+El pelo (HairTint, técnica `Hair`) multiplica por `lerp(1, TintColor, color de vértice.g)`. Desde el
+2026-10-16 el visor lo reproduce: en las piezas de pelo **con** colores de vértice el factor se escribe
+por vértice (`SceneViewModel::apply_hair_vertex_tint`, tinte linealizado porque Qt usa los colores de
+vértice tal cual) y el material queda blanco; antes se multiplicaba por el color de vértice completo y los
+vértices con verde 0 salían negros en lugar de sin tinte. Medido en el pelo vanilla de Ingrid: 4,3 % de
+los vértices con verde < 0,9 (mínimo 0), R = G = B; el pelo de Lydia y Serana no trae colores de vértice
+(sin cambio). Las zonas de tinte completo no cambian (captura de pelo idéntica píxel a píxel).
+
+### Mapas de normales en espacio de modelo (`_msn`)
+
+Skyrim decodifica `n = rgb.xzy · 2 − 1` en el espacio de la forma y, con skinning, lo gira con la matriz
+de hueso mezclada (`Lighting.hlsl`, `MODELSPACENORMALS`). Qt solo acepta normal maps tangentes, así que
+`rendering::bake_model_space_normals` hornea cada `_msn` por malla: para cada texel cubierto por un
+triángulo, `n_ts = [T B N]⁻¹ · n` con la base interpolada de la pose de reposo (antes del skinning);
+Qt ilumina con la base ya deformada, `R [T B N] n_ts = R n`, el resultado del juego. Los bordes de las
+islas UV se rellenan (4 pasadas) y lo no cubierto queda plano.
+
+Hallazgo con datos reales: en las formas `_msn` de cuerpos, manos y cabezas, las **normales de vértice
+del NIF no concuerdan con la geometría** (producto escalar medio 0,1–0,4; Skyrim nunca las lee), mientras
+que el `_msn` concuerda con las normales geométricas (0,82–0,99) con la decodificación `xzy` (la mejor de
+las 48 combinaciones de canales y signos en todas las mallas). El visor iluminaba esas formas con las
+normales del NIF; ahora las reconstruye desde la geometría (por área, soldadas por posición para no crear
+costuras en los cortes de UV), regenera las tangentes desde las UV y hornea con esa base.
+
+Salvaguarda: si la concordancia media normal-de-vértice/`_msn` de una malla es < 0,5, no se hornea
+(`ModelSpaceNormalsMismatch`) y se usan las normales de vértice; si se hornea, `ModelSpaceNormalsBaked`
+con la concordancia. Perfil real: Ingrid cuerpo 0,99, pies 0,94, manos 0,99, cabeza 0,82; Lydia y Serana
+cuerpo 3BA 0,96–0,97, manos 0,99, cabezas Helen/Priscilla 0,86–0,88. Pruebas: `Model-space normal maps
+bake to the tangent space of the mesh` (identidad, base girada, convención, relleno) y la escena sintética
+(normales falsas → geométricas, mapa plano horneado). Coste medido: el horneado suma 1,5–2,3 s a la
+carga de una escena con cuerpo, manos y cabeza `_msn` (Ingrid 4,8 → 6,4 s; Lydia 3,0 → 5,2 s).
 
 ### Lo que sigue siendo aproximado frente a Skyrim
 
 - Iluminación: luz direccional + ambiente de Qt Quick 3D con rugosidad fija 0,8 y sin especular de
   Skyrim, sin dispersión subsuperficial (`skin`) ni retroiluminación; un mismo color puede verse algo
   distinto en zonas que miran a la luz y en las que no.
-- Mapas de normales en espacio de modelo (`_msn`): se usan las normales de vértice (aviso en la pieza).
+- `_msn`: la base tangente se interpola por texel; en mallas muy deformadas por FaceGen (cabezas) el
+  mapa base y la geometría concuerdan menos (0,82–0,88) y el relieve fino puede diferir algo.
 - Color: las texturas se muestran como sRGB y la mezcla se hace en gamma, como el modo sin iluminación
   lineal del juego; con la iluminación lineal de Community Shaders el resultado final del juego varía.
-- Pelo: la modulación por el canal verde del color de vértice no se reproduce exactamente.
+- Pelo: el verde del color de vértice se reproduce; la especular anisótropa del pelo de Skyrim no.
 
 ## Texturas
 
 - Se elige el **mip almacenado** más grande que cabe (2048 px color, 1024 px normales); sin mips, filtro de caja. `TexturesReduced` lo indica.
 - Presupuesto de 512 MiB de RGBA8 por escena; si se agota, se baja la resolución a la mitad (hasta 256 px) en vez de dejar una pieza en blanco. Primero se cargan las texturas de la cabeza.
-- Los mapas de normales en espacio de modelo (`_msn`) no se reproducen: se usan las normales de vértice y la pieza lo avisa.
+- Los mapas de normales en espacio de modelo (`_msn`) se hornean a espacio tangente por malla (ver «Mapas de normales en espacio de modelo»); si no concuerdan con la malla, se usan las normales de vértice con aviso.
 
 ## Equipamiento
 
