@@ -57,16 +57,42 @@ Ejecutar desde la consola de desarrollo (`. .\scripts\dev-env.ps1` pone Qt en el
 cmake --build --preset debug --target deploy   # copia el runtime de Qt junto al .exe
 ```
 
+## Release
+
+```powershell
+.\scriptselease.ps1      # desde un commit sin cambios: paquete Release, ZIP y verificación
+```
+
+- Rechaza cambios sin commit en archivos versionados (`-AllowDirty` solo para pruebas, marca `-dirty`).
+- `dist\SkyrimNpcStudio-<versión>-<commit>-win64.zip` + `.sha256`. Dentro: `BUILDINFO.json` (commit,
+  MSVC, Qt, .NET SDK) y `release-manifest.json` (tamaño y SHA-256 de cada archivo). Los símbolos
+  (`.pdb`) quedan fuera, en `dist\symbols\<commit>`.
+- Reproducible: el paquete se compila con `/Brepro` y los archivos llevan la fecha del commit; dos
+  reconstrucciones desde cero del mismo commit dieron el mismo ZIP byte a byte (2026-10-15).
+- `scriptserify-release.ps1 -Zip <zip>` (también lo llama `release.ps1`) comprueba archivos
+  obligatorios (incluida `Qt6Test.dll`), que no haya restos de compilación, cada hash, y arranca la
+  copia extraída con un entorno nuevo (sin Qt, MSVC ni SDK de .NET). Con `-Instance`, `-MO2Profile`,
+  `-Npc` y `-Scenarios` además carga un perfil real en solo lectura.
+
+### CI en GitHub Actions
+
+`.github/workflows/windows.yml` no llega a ejecutarse: todas las ejecuciones (84 hasta el
+2026-10-15) terminan en `startup_failure` sin que empiece ningún trabajo, también con un workflow
+mínimo. Es una restricción de la cuenta, no del YAML. **Acción del propietario de la cuenta:**
+revisar https://github.com/settings/billing (minutos de Actions, límite de gasto, pagos pendientes)
+y *Settings → Actions → General* del repositorio; después, *Re-run* de la última ejecución. Hasta
+entonces la verificación es local: `ctest`, `dotnet test`, el arnés y `release.ps1`.
+
 ## Pruebas
 
 | Suite | Cómo | Qué cubre |
 |---|---|---|
-| .NET (65) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación (unit + export) |
-| C++ (115) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, validador glTF, informes de fallos y dependencias de compilación |
+| .NET (105) | `dotnet test --solution SkyrimNpcStudio.slnx` | índice, receta facial, apariencia efectiva, overrides/conflictos, caché, validador, protocolo, exportación (unit + export) |
+| C++ (138) | `ctest --preset debug` | IPC, MO2, proyectos, exportación, FaceGen, BSA/LZ4, DDS, NIF, escena 3D, validador glTF, informes de fallos y dependencias de compilación |
 | Locales `[local]` (4) | variables `SNS_LOCAL_*` (ver [tests/README.md](tests/README.md)) | tu instancia real de MO2 (8.686 NPCs, 8.297 armaduras, 414 plugins, Lydia); se omiten si no están definidas |
 | UI & Forge 3D | `.\scripts\smoke-test.ps1` / `.\scripts\local-review.ps1` | verificación de carga QML completa, renderizado nativo, captura gráfica y suite `-ForgePreview` con 6 modelos GLB/glTF |
 
-La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all`; incluye 18 escenarios de Lydia, cambios rápidos de cabello, cambio de NPC, rechazo de material no exportable, vestuario, guardado/reapertura y exportación. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
+La regresión de Character Creator se ejecuta en una ventana real con `--stress-appearance all` (32 escenarios): cambios rápidos de cabello, Hair Color Safe Mode, Easy Mod Creator (modos A/B/C y tamaños de ventana), Head Parts, sliders, tono de piel, donante, altura y peso, deshacer/rehacer exacto, cambio rápido de NPC, ciclo de proyecto, rechazo de material no exportable y exportación con reapertura. La guía y los resultados están en [docs/CRASH_DIAGNOSTICS.md](docs/CRASH_DIAGNOSTICS.md). Ninguna prueba automatizada afirma que un mod ya se comprobó dentro de Skyrim.
 
 ## Primer caso de uso: el atuendo de Lydia
 

@@ -119,6 +119,12 @@ try {
     dotnet publish (Join-Path $root 'services\BethesdaWorker\BethesdaWorker.csproj') -c Release -r win-x64 `
         --self-contained true -o (Join-Path $full 'worker') --nologo -v quiet
     if ($LASTEXITCODE) { throw "dotnet publish failed ($LASTEXITCODE)" }
+    # Symbols stay next to the package, not in it: dist\symbols\<commit> reads crash dumps of this build.
+    $symbols = Join-Path $root "dist\symbols\$(git -C $root rev-parse --short HEAD 2>$null)"
+    New-Item -ItemType Directory -Force $symbols | Out-Null
+    Get-ChildItem (Join-Path $full 'worker') -Filter *.pdb | Move-Item -Destination $symbols -Force
+    $studioPdb = Join-Path $root 'build\package\bin\SkyrimNpcStudio.pdb'
+    if (Test-Path $studioPdb) { Copy-Item $studioPdb $symbols -Force }
 
     Write-Host '[4/4] Documentacion y licencias...'
     foreach ($f in 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md') { Copy-Item (Join-Path $root $f) $full }
@@ -128,7 +134,23 @@ try {
     Copy-Item (Join-Path $root 'build\package\_deps\directxtex-src\LICENSE') (Join-Path $licenses 'DirectXTex-MIT.txt')
     $commit = (git -C $root rev-parse --short HEAD 2>$null)
     if ($LASTEXITCODE) { $commit = 'sin-commit' }  # a repo without commits must not fail the package
-    "Skyrim NPC Studio $(Get-Date -Format s) $commit" | Set-Content (Join-Path $full 'VERSION.txt')
+    # Dated with the commit, not the clock: the same commit packages to the same bytes.
+    $commitTime = [DateTimeOffset]::Parse((git -C $root log -1 --format=%cI 2>$null))
+    "Skyrim NPC Studio $($commitTime.ToString('s')) $commit" | Set-Content (Join-Path $full 'VERSION.txt')
+    # What produced this package, so a release can be rebuilt from the same sources and toolchain.
+    $projectVersion = if ((Get-Content (Join-Path $root 'CMakeLists.txt') -Raw) -match 'project\(SkyrimNpcStudio\s+VERSION\s+([0-9.]+)') { $Matches[1] } else { '' }
+    $dirty = @(git -C $root status --porcelain --untracked-files=no 2>$null).Count -gt 0
+    [ordered]@{
+        product     = 'Skyrim NPC Studio'
+        version     = $projectVersion
+        commit      = (git -C $root rev-parse HEAD 2>$null)
+        dirty       = $dirty
+        commitUtc   = $commitTime.ToUniversalTime().ToString('o')
+        msvc        = $env:VCToolsVersion
+        qt          = (Split-Path -Leaf (Split-Path -Parent $env:SNS_QT_DIR))
+        dotnetSdk   = (dotnet --version)
+        buildType   = 'Release'
+    } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $full 'BUILDINFO.json')
 
     $size = [math]::Round(((Get-ChildItem $full -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
     Write-Host "Listo: $full ($size MB)"

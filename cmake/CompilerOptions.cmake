@@ -28,6 +28,14 @@ if(MSVC)
     message(FATAL_ERROR "This build tree's compiler cache is incomplete:${_sns_cache_problems}\n"
                         "Reconfigure it from scratch: cmake --preset <preset> --fresh")
   endif()
+
+  # Release packages: /Brepro replaces the PE/COFF timestamps with a content hash, so a clean
+  # rebuild of the same commit gives the same SkyrimNpcStudio.exe (checked by release.ps1 runs).
+  option(SNS_REPRODUCIBLE "Build byte-reproducible binaries (/Brepro)" OFF)
+  if(SNS_REPRODUCIBLE)
+    add_compile_options(/Brepro)
+    add_link_options(/Brepro)
+  endif()
 else()
   target_compile_options(sns_compile_options INTERFACE -Wall -Wextra -Wpedantic -Werror)
 endif()
