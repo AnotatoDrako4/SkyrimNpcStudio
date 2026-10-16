@@ -15,7 +15,7 @@ scripts\smoke-test.ps1 -Instance D:\Apps\ModOrganizer.ini -MO2Profile Default -N
 scripts\smoke-test.ps1 -Instance D:\Apps\ModOrganizer.ini -MO2Profile Default -Npc "0370FB:alternate start - live another life.esp" -StressAppearance easy-mod-outfit -StressWork <carpeta>
 ```
 
-Copias del 2026-10-15 en `out\skyrim-acceptance\` (no versionadas):
+Copias del 2026-10-16 en `out\skyrim-acceptance\` (no versionadas), regeneradas con la protección facial y `installAbove` (PR #15):
 
 | ZIP | Plugin | Cambios en el `NPC_` (diff semántico del manifiesto) | FaceGen | Masters |
 | --- | --- | --- | --- | --- |
@@ -25,9 +25,14 @@ Copias del 2026-10-15 en `out\skyrim-acceptance\` (no versionadas):
 | `3a_ShadySam_ModeA_Outfit.zip` | `SNS_EasyOutfit.esp` | `DefaultOutfit` | ninguno | Skyrim, `alternate start - live another life.esp` |
 | `3c_ShadySam_ModeC_HairOutfit.zip` | `SNS_EasyComplete.esp` | `HairColor`, `DefaultOutfit` | NIF ganador (con los 31.260 bytes sobrantes conservados) con solo el HairTint cambiado | igual que 3a |
 
-SHA-256 de los ZIP: Serana `20693bfe…b841f`, Lydia A `0da2b906…3aab5c`, Lydia C `547dfe76…3e23dd`,
-Shady Sam A `01d015f6…c97c935`, Shady Sam C `a6da11f8…c4756` (valores completos en
+SHA-256 de los ZIP: Serana `9fcb4f1a…bc784f`, Lydia A `099df696…79e931`, Lydia C `0e427166…b1aca`,
+Shady Sam A `50f5935a…d199ba`, Shady Sam C `0b1fab0c…dc11` (valores completos en
 `out\skyrim-acceptance\SHA256SUMS.txt`).
+
+Prioridad en MO2 que trae cada mod (`faces[].installAbove` del manifiesto y «Prioridad en MO2» del
+README): Serana → por encima del mod de Priscilla; Lydia C → por encima de `NITHI NPC Enhancement -
+Whiterun` y `Farodadestin`; Shady Sam C → ninguno (su FaceGen está en el BSA de Alternate Start y el
+archivo suelto del mod siempre gana); los modos A no llevan FaceGen.
 
 Ya comprobado en Windows por el arnés y el worker, en cada paquete: el plugin se relee con Mutagen
 (masters presentes y en orden, referencias resueltas); cada `NPC_` se compara campo a campo con el
@@ -48,8 +53,8 @@ introduce el estudio).
    plugin, y también 2c y 3c, así que se prueban en dos rondas:
    - **Ronda 1:** `1_Serana_HairColorOnly`, `2c_Lydia_ModeC_HairOutfit`, `3a_ShadySam_ModeA_Outfit`.
    - **Ronda 2:** desactiva los de la ronda 1 y activa `2a_Lydia_ModeA_Outfit` y `3c_ShadySam_ModeC_HairOutfit`.
-3. Prioridad: cada mod del estudio **por encima** del replacer del mismo NPC (Priscilla, Helen) en el
-   panel izquierdo, para que su FaceGen gane. En la pestaña «Conflictos» del mod debe aparecer
+3. Prioridad: cada mod del estudio **por encima** de los mods que nombra su README («Prioridad en MO2»),
+   en el panel izquierdo, para que su FaceGen gane. En la pestaña «Conflictos» del mod debe aparecer
    ganando el `.nif` de la ruta `facegeom` del NPC; si otro mod lo sobrescribe, la prueba no vale.
 4. El plugin va después de sus masters (MO2/LOOT lo hacen solos); comprueba que no aparece el aviso de
    master ausente.
