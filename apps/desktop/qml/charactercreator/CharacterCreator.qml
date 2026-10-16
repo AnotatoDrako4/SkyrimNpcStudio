@@ -22,7 +22,8 @@ Item {
         // PANEL IZQUIERDO: BIBLIOTECA
         // ==========================================
         Rectangle {
-            SplitView.preferredWidth: 380
+            // Gives way on narrow windows so the three panels fit the 1100 px minimum window (280 + 380 + 420).
+            SplitView.preferredWidth: Math.max(280, Math.min(380, root.width - 420 - 380 - 16))
             SplitView.minimumWidth: 280
             SplitView.maximumWidth: 500
             color: Theme.panel
@@ -147,7 +148,7 @@ Item {
         // ==========================================
         ColumnLayout {
             SplitView.fillWidth: true
-            SplitView.minimumWidth: 400
+            SplitView.minimumWidth: 380
             spacing: 0
 
             CharacterToolbar {
@@ -220,8 +221,10 @@ Item {
         // PANEL DERECHO: PERSONALIZACIÓN
         // ==========================================
         Rectangle {
+            objectName: "creatorRightPanel"
             SplitView.preferredWidth: 420
-            SplitView.minimumWidth: 320
+            // The customizer pages are laid out for 420 px; narrower, their rows spilled out of the window.
+            SplitView.minimumWidth: 420
             SplitView.maximumWidth: 600
             color: Theme.panel
 
@@ -231,6 +234,7 @@ Item {
 
                 TabBar {
                     id: rightTabs
+                    objectName: "creatorRightTabs"
                     Layout.fillWidth: true
                     TabButton { text: qsTr("Presets") }
                     TabButton { text: qsTr("Rostro") }

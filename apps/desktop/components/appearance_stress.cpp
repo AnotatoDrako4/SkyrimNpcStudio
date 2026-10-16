@@ -337,6 +337,35 @@ struct Stress : std::enable_shared_from_this<Stress> {
 
   // The assistant page on screen: inside the window, no text elided or spilling sideways out of the
   // assistant, buttons wide enough for their label. Saves the page as wizard-<size>-<page>.png.
+  // Visible descendants of `container` whose text spills sideways out of it, buttons too narrow for their
+  // label (the style elides it) and, with `elided_fails`, any elided text (panels elide long names on
+  // purpose, so they pass false).
+  static QStringList layout_problems(QQuickItem* container, bool elided_fails, int* inspected) {
+    QStringList problems;
+    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+      for (auto* child : item->childItems()) {
+        if (!child->isVisible() || child->width() <= 0) continue;
+        const QByteArray cls = child->metaObject()->className();
+        const QRectF r = child->mapRectToItem(container, QRectF(0, 0, child->width(), child->height()));
+        const QString text = child->property("text").toString().left(40);
+        if (elided_fails && child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
+        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > container->width() + 1)
+          problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - container->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
+        // Buttons with a label (custom-content buttons such as color swatches have none to elide).
+        if (!text.isEmpty() && child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
+          const qreal need = child->property("implicitContentWidth").toReal() + child->property("leftPadding").toReal() +
+                             child->property("rightPadding").toReal();
+          if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
+        }
+        if (inspected) ++*inspected;
+        visit(child);
+      }
+    };
+    visit(container);
+    problems.removeDuplicates();
+    return problems;
+  }
+
   void check_wizard_layout(QObject* wizard, int page, const QString& size) {
     const QString where = QStringLiteral("%1 page %2").arg(size).arg(page + 1);
     // Grab first: a hidden window lays out (polishes) only when it renders, so measuring before the
@@ -349,29 +378,8 @@ struct Stress : std::enable_shared_from_this<Stress> {
               .arg(where).arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height()));
     auto* content = qvariant_cast<QQuickItem*>(wizard->property("contentItem"));
     if (!content) { check(false, where + ": assistant content item"); return; }
-    QStringList problems;
     int inspected = 0;
-    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
-      for (auto* child : item->childItems()) {
-        if (!child->isVisible() || child->width() <= 0) continue;
-        const QByteArray cls = child->metaObject()->className();
-        const QRectF r = child->mapRectToItem(content, QRectF(0, 0, child->width(), child->height()));
-        const QString text = child->property("text").toString().left(40);
-        if (child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
-        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > content->width() + 1)
-          problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - content->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
-        // Buttons: label + paddings wider than the button means the style elides it.
-        if (child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
-          const qreal need = child->property("implicitContentWidth").toReal() + child->property("leftPadding").toReal() +
-                             child->property("rightPadding").toReal();
-          if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
-        }
-        ++inspected;
-        visit(child);
-      }
-    };
-    visit(content);
-    problems.removeDuplicates();
+    const auto problems = layout_problems(content, true, &inspected);
     check(problems.isEmpty(), QStringLiteral("%1: %2 items in %3 px, layout %4").arg(where).arg(inspected).arg(content->width()).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
     const auto file = QDir(work_dir).filePath(QStringLiteral("wizard-%1-%2.png").arg(size).arg(page + 1));
     check(shot.save(file), "capture " + file);
@@ -1514,6 +1522,34 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->appearance()->resetFace();
         self->then_idle();
       });
+    } else if (name == "creator-layout") {
+      // Character Creator right panel at the current window size: every tab must keep its texts inside
+      // the panel and full labels on its buttons and tabs. One capture per tab.
+      steps.push_back([self] {
+        QQuickItem* panel = nullptr;
+        QObject* tabs = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("creatorRightPanel")) panel = qobject_cast<QQuickItem*>(o);
+          if (o->objectName() == QLatin1String("creatorRightTabs")) tabs = o;
+        }
+        self->check(panel && tabs, "Character Creator right panel found");
+        if (!panel || !tabs) { self->step(); return; }
+        const auto size = QStringLiteral("%1x%2").arg(self->window->width()).arg(self->window->height());
+        const QStringList names = {"presets", "rostro", "pelo-ojos", "cuerpo", "vestuario"};
+        std::vector<std::function<void()>> actions;
+        for (int i = 0; i < names.size(); ++i) {
+          actions.push_back([tabs, i] { tabs->setProperty("currentIndex", i); });
+          actions.push_back([self, panel, size, name = names[i]] {
+            const QImage shot = self->window->grabWindow();  // lays the page out (hidden window)
+            int inspected = 0;
+            const auto problems = layout_problems(panel, false, &inspected);
+            self->check(problems.isEmpty(), QStringLiteral("%1 %2: %3 items in %4 px, layout %5")
+                                                .arg(size, name).arg(inspected).arg(panel->width()).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+            shot.save(QDir(self->work_dir).filePath(QStringLiteral("creator-%1-%2.png").arg(size, name)));
+          });
+        }
+        self->chain(std::move(actions), 400, [self] { self->then_idle(); });
+      });
     } else if (name == "armor-mod-filter") {
       // Outfit catalog filtered by mod: the plugin list comes from the index, the selector shows it, and
       // choosing a plugin returns exactly the armors that plugin defines or overrides.
@@ -1588,7 +1624,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "armor-mod-filter", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

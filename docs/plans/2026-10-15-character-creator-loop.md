@@ -87,3 +87,22 @@ Estado de partida: PR #8 → #14 abiertos, sin fusionar; `main` en `78ea95c`.
   `undefined` a `visible` antes del diagnóstico (`ExportWizardDialog.qml:316`); lo detectó el arnés
   (falla con avisos QML). Corregido con `!!`.
 - **Próxima tarea:** seguir la auditoría del editor (vista previa frente a exportación, textos de error).
+
+## Iteración 3
+
+- **Commit base:** `604227c` (PR #15).
+- **Problema — paneles del Character Creator cortados en ventanas pequeñas.** Evidencia: escenario nuevo
+  `creator-layout` (mide las cinco pestañas del panel derecho: textos que se salen, botones con la
+  etiqueta recortada) a 1100×700, la ventana mínima: el panel derecho bajaba a 320 px y se cortaban
+  «Importar Archivo…» (69 px), «Usar como Donante», «Vaciar», «Aplicar»; la captura mostraba el panel
+  recortado por el borde de la ventana. Los tres paneles no cabían (380 preferido + 400 + 320).
+  - **Solución:** panel derecho con mínimo 420 px (el ancho para el que están hechas sus páginas); el
+    izquierdo cede (280–380 px) en ventanas estrechas; el visor, mínimo 380 px. Los botones 🎨/✕ de
+    cada pieza de vestuario se ensanchan si el glifo lo necesita (26 px recortaban 🎨).
+  - El comprobador de diseño se generalizó (`layout_problems`); los botones sin texto (muestras de
+    color) no cuentan como etiqueta recortada.
+  - **Pruebas:** `creator-layout` 1100×700 y 1600×900 PASSED (antes: 4 de 5 pestañas fallaban a
+    1100×700); Serana `creator-layout, easy-mod-layout, armor-mod-filter, hair-safe` 363
+    comprobaciones PASSED; ctest 138, 0 fallos.
+- **Próxima tarea:** la barra flotante del visor (vista, pose…) es más ancha que el visor a 1100 px y
+  asoma sobre el panel izquierdo.
