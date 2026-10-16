@@ -117,13 +117,17 @@ Rectangle {
                                + (root.npc.faceGenTint?.found ? root.npc.faceGenTint.provider : qsTr("no encontrado como archivo suelto (¿BSA?)"))
                         valueColor: root.npc.faceGenTint?.found ? Theme.text : Theme.warn
                     }
-                    Text {
-                        visible: root.npc.faceGenWarning !== undefined
-                        text: root.npc.faceGenWarning ?? ""
-                        color: Theme.warn
-                        wrapMode: Text.Wrap
-                        font.pixelSize: Theme.small
-                        Layout.fillWidth: true
+                    // Record/FaceGen coherence from the appearance control map (Character Creator: «Origen»).
+                    Repeater {
+                        model: (root.studio.appearanceControl.findings ?? []).filter(f => f.severity === "warning")
+                        delegate: Text {
+                            required property var modelData
+                            text: modelData.message + " " + modelData.suggestion
+                            color: Theme.warn
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.small
+                            Layout.fillWidth: true
+                        }
                     }
                 }
 

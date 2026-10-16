@@ -53,6 +53,10 @@ class StudioController : public QObject {
   Q_PROPERTY(QVariantMap summary READ summary NOTIFY summaryChanged)
   Q_PROPERTY(QVariantMap npc READ npc NOTIFY npcChanged)
   Q_PROPERTY(bool npcLoading READ npc_loading NOTIFY npcChanged)
+  // Appearance control map of the selected NPC (sns::appearance::analyze_appearance_control): which
+  // plugin/mod controls each part, what it overrides, and whether record and FaceGen fit together.
+  // {facePlugin, faceMod, worst, deviation, analysisUs, components: [...], findings: [...]}.
+  Q_PROPERTY(QVariantMap appearanceControl READ appearance_control NOTIFY appearanceControlChanged)
 
  public:
   enum class Phase { Idle, Scanning, Indexing, Ready, Error };
@@ -87,6 +91,7 @@ class StudioController : public QObject {
   [[nodiscard]] QVariantMap summary() const { return summary_; }
   [[nodiscard]] QVariantMap npc() const { return npc_; }
   [[nodiscard]] bool npc_loading() const { return npc_loading_; }
+  [[nodiscard]] QVariantMap appearance_control() const { return appearance_control_; }
   [[nodiscard]] SnapshotPtr snapshot() const { return snapshot_; }
 
   Q_INVOKABLE void discoverInstances();
@@ -123,6 +128,7 @@ class StudioController : public QObject {
   void armorResultsChanged();
   void armorPluginsChanged();
   void npcChanged();
+  void appearanceControlChanged();
   // selectNpc could not load the NPC (unknown FormKey, worker error); the message says why.
   void npcLoadFailed(const QString& message);
   void loaded();
@@ -135,6 +141,8 @@ class StudioController : public QObject {
   void rebuild_mod_rows();
   void refresh_plugin_counts();
   QVariantMap npc_row(const QVariantMap& item) const;
+  // Recomputes appearance_control_ from npc_, the profile VFS and the facial analysis.
+  void refresh_appearance_control();
 
   WorkerClient* worker_;
   ConsoleModel* console_;
@@ -166,6 +174,7 @@ class StudioController : public QObject {
   double progress_ = 0.0;
   QVariantMap summary_;
   QVariantMap npc_;
+  QVariantMap appearance_control_;
   bool npc_loading_ = false;
   QString pending_npc_;
   SnapshotPtr snapshot_;

@@ -21,6 +21,7 @@
 #include <algorithm>
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
+#include "sns/appearance/control_map.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
 #include "sns/ipc/protocol.hpp"
@@ -90,6 +91,8 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   history_ = new EditHistory(this);
   outfit_ = new OutfitEditor(worker_, console_, [this] { return snapshot_; }, draft_, history_, this);
   appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
+  // The control map uses the facial analysis (measured deviation) once it is available.
+  connect(appearance_, &AppearanceEditor::faceGenChanged, this, &StudioController::refresh_appearance_control);
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
   armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
   forge_ = new CharacterForgeViewModel([this] {
@@ -590,18 +593,12 @@ void StudioController::selectNpc(const QString& form_key) {
     const auto facegen = details.value("faceGen").toMap();
     details["faceGenGeometry"] = resolveAsset(facegen.value("geometryPath").toString());
     details["faceGenTint"] = resolveAsset(facegen.value("tintPath").toString());
-    const auto summary = details.value("summary").toMap();
-    const auto winner_mod = providerOf(summary.value("winningPlugin").toString());
-    const auto geometry = details["faceGenGeometry"].toMap();
-    if (geometry.value("found").toBool() && geometry.value("provider").toString() != winner_mod) {
-      details["faceGenWarning"] = tr("La FaceGen la aporta '%1' pero el registro ganador viene de '%2' (%3). Si no "
-                                     "coinciden puede aparecer el error de cara oscura.")
-                                      .arg(geometry.value("provider").toString(), winner_mod,
-                                           summary.value("winningPlugin").toString());
-    }
     npc_ = details;
     npc_loading_ = false;
     emit npcChanged();
+    // Which mod controls each part (record versions + FaceGen files); the measured deviation joins
+    // when the facial analysis of this NPC finishes (faceGenChanged).
+    refresh_appearance_control();
     const auto sum = details.value("summary").toMap();
     projects::NpcTarget target{
         .form_key = ss(sum.value("formKey").toString()),
@@ -622,6 +619,90 @@ void StudioController::selectNpc(const QString& form_key) {
     log("error", tr("No se pudo cargar el NPC %1: %2").arg(form_key, message));
     emit npcLoadFailed(message);
   });
+}
+
+void StudioController::refresh_appearance_control() {
+  QElapsedTimer timer;
+  timer.start();
+  QVariantMap out;
+  if (snapshot_ && !npc_.isEmpty()) {
+    appearance::ControlInputs in;
+    for (const auto& o : npc_.value("overrides").toList()) {
+      const auto e = o.toMap();
+      appearance::OverrideLink link;
+      link.plugin = ss(e.value("plugin").toString());
+      link.mod = ss(e.value("mod").toString());
+      link.is_origin = e.value("isOrigin").toBool();
+      link.is_winner = e.value("isWinner").toBool();
+      for (const auto& f : e.value("changedFields").toList()) link.changed_fields.push_back(ss(f.toString()));
+      for (const auto i : snapshot_->vfs.providers_of(link.plugin)) link.plugin_mods.push_back(snapshot_->vfs.providers()[i].name);
+      in.chain.push_back(std::move(link));
+    }
+    for (const auto& c : npc_.value("conflicts").toList()) in.lost_fields.push_back(ss(c.toMap().value("field").toString()));
+
+    // Effective copy (loose files over archives, like the game) and every loose copy in MO2.
+    const auto ctx = ResourceContext::for_snapshot(snapshot_);
+    const auto source = [&](const QString& path) {
+      appearance::AssetSource a;
+      a.path = ss(path);
+      if (path.isEmpty()) return a;
+      for (const auto i : snapshot_->vfs.providers_of(a.path)) a.loose_mods.push_back(snapshot_->vfs.providers()[i].name);
+      const auto loc = ctx && ctx->resolver ? ctx->resolver->locate(a.path) : std::nullopt;
+      if (loc) {
+        a.found = true;
+        a.kind = loc->kind == assets::AssetLocation::Kind::Loose ? "loose" : "bsa";
+        a.winner_mod = a.kind == "bsa" && !loc->archive_provider.empty() ? loc->archive_provider : loc->provider;
+      } else if (!a.loose_mods.empty()) {
+        a.found = true;
+        a.kind = "loose";
+        a.winner_mod = a.loose_mods.back();
+      }
+      return a;
+    };
+    const auto facegen = npc_.value("faceGen").toMap();
+    const auto geometry_path = facegen.value("geometryPath").toString();
+    in.facegen = source(geometry_path);
+    in.facetint = source(facegen.value("tintPath").toString());
+
+    // The facial analysis counts only if it examined this NPC's FaceGen (it may still be the previous one).
+    const auto compatibility = appearance_->face_compatibility();
+    const auto normalize = [](QString p) { return p.replace('/', '\\').toLower(); };
+    const auto analysed = compatibility.value("provenance").toMap().value("faceGenPath").toString();
+    bool numeric = false;
+    const double deviation = compatibility.value("deviation").toDouble(&numeric);
+    if (numeric && deviation >= 0.0 && !analysed.isEmpty() && normalize(analysed) == normalize(geometry_path)) {
+      in.regeneration_deviation = static_cast<float>(deviation);
+    }
+
+    const auto report = appearance::analyze_appearance_control(in);
+    QVariantList components, findings;
+    for (const auto& c : report.components) {
+      QStringList overridden;
+      for (const auto& o : c.overridden) overridden << qs(o);
+      components << QVariantMap{{"key", qs(c.key)},   {"label", qs(c.label)}, {"plugin", qs(c.plugin)},
+                                {"mod", qs(c.mod)},   {"kind", qs(c.kind)},   {"overridden", overridden}};
+    }
+    QString worst = QStringLiteral("ok");
+    for (const auto& f : report.findings) {
+      findings << QVariantMap{{"severity", qs(f.severity)}, {"code", qs(f.code)},           {"message", qs(f.message)},
+                              {"consequence", qs(f.consequence)}, {"suggestion", qs(f.suggestion)}};
+      if (f.severity == "warning" || (f.severity == "info" && worst == "ok")) worst = qs(f.severity);
+    }
+    out = {{"formKey", npc_.value("summary").toMap().value("formKey")},
+           {"facePlugin", qs(report.face_plugin)},
+           {"faceMod", qs(report.face_mod)},
+           {"worst", worst},
+           {"deviation", in.regeneration_deviation ? QVariant(*in.regeneration_deviation) : QVariant()},
+           {"components", components},
+           {"findings", findings}};
+  }
+  // faceGenChanged fires on every rebuild: notify only when the map itself changed.
+  auto previous = appearance_control_;
+  previous.remove("analysisUs");
+  if (previous == out) return;
+  out["analysisUs"] = static_cast<qint64>(timer.nsecsElapsed() / 1000);
+  appearance_control_ = out;
+  emit appearanceControlChanged();
 }
 
 void StudioController::searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type, bool smp_only) {
