@@ -10,6 +10,55 @@ bool blocked(const EasyModInputs& in, std::string_view op) {
   return std::find(in.blocked_operations.begin(), in.blocked_operations.end(), op) != in.blocked_operations.end();
 }
 
+std::string joined(const std::vector<std::string>& items, const char* separator) {
+  std::string out;
+  for (const auto& i : items) out += (out.empty() ? "" : separator) + i;
+  return out;
+}
+
+bool any_blocked_or_waiting(const EasyModPlan& plan) {
+  return std::any_of(plan.checks.begin(), plan.checks.end(),
+                     [](const EasyModItem& c) { return c.state == EasyModState::Blocked || c.state == EasyModState::Waiting; });
+}
+
+// «Usar el rostro de X»: a patch with X's face fields over the winning record and no FaceGen. It never
+// mixes with the editors' changes (a hair color edit keeps its own Hair Color Safe Mode export).
+EasyModPlan plan_face_resolution(const EasyModInputs& in, EasyModPlan plan) {
+  const auto& r = *in.face_resolution;
+  auto check = [&](std::string key, EasyModState state, std::string label, std::string detail = {}) {
+    plan.checks.push_back({std::move(key), state, std::move(label), std::move(detail)});
+  };
+  plan.mode = EasyModMode::FaceResolution;
+  plan.changes.push_back({"face-resolution", EasyModState::Ok, r.label, r.detail});
+  plan.changes.push_back({"fields", EasyModState::Ok, "Campos copiados: " + joined(r.fields, ", "),
+                          "Copiados tal cual de «" + r.source_plugin + "»; el resto del registro es el de «" + r.winner_plugin + "»."});
+
+  const bool edits = in.face_kind != FaceBuildKind::Unchanged || in.height_changed || in.outfit_changed;
+  if (in.face_kind == FaceBuildKind::WaitForAnalysis) {
+    check("analysis", EasyModState::Waiting, "Analizando el FaceGen original", "Espera a que termine para crear el parche.");
+  } else if (edits) {
+    check("edits", EasyModState::Blocked, "Hay cambios sin exportar en el editor",
+          "El parche solo copia el rostro de «" + r.source_plugin +
+              "». Deshaz o exporta antes las ediciones (el color de cabello se exporta con Hair Color Safe Mode).");
+  }
+  check("facegen", EasyModState::Ok, "FaceGen: se mantiene el de «" + r.source_mod + "»",
+        "El mod no trae FaceGen: ni se copia ni se regenera, y el archivo del perfil no se toca (FaceGen Integrity Guard: nada que comparar).");
+  if (blocked(in, "face-morphs") || blocked(in, "head-parts") || blocked(in, "skin-tone")) {
+    check("high-poly", EasyModState::Info, "Protección facial activa para esta cabeza",
+          "Sigue bloqueando editar y regenerar el rostro. Este parche no edita ni regenera: copia los valores que corresponden al "
+          "FaceGen que ya usa el juego.");
+  }
+  check("load-order", EasyModState::Info, "Se carga después de " + joined(r.load_after, " y "),
+        "Quedan declarados como masters del plugin; si un plugin posterior vuelve a cambiar este NPC, gana él.");
+  check("worker", EasyModState::Info, "Al crear el mod se comprueba",
+        "Plugin releído: campos copiados idénticos a «" + r.source_plugin +
+            "», ningún otro campo cambia (Safe Patch), masters y ZIP verificados, y el mapa de control recalculado con el parche al final.");
+  check("skyrim", EasyModState::Info, "Pendiente de verificación en Skyrim", "La exportación se comprueba en archivos, no dentro del juego.");
+  plan.can_export = !any_blocked_or_waiting(plan);
+  plan.summary = "Parche de resolución: rostro de «" + r.source_plugin + "» sobre «" + r.winner_plugin + "» (cambio mínimo, sin FaceGen).";
+  return plan;
+}
+
 }  // namespace
 
 std::string_view to_string(EasyModMode mode) {
@@ -17,6 +66,7 @@ std::string_view to_string(EasyModMode mode) {
     case EasyModMode::OutfitPatch: return "outfit-patch";
     case EasyModMode::FaceOverhaul: return "face-overhaul";
     case EasyModMode::CompleteOverhaul: return "complete-overhaul";
+    case EasyModMode::FaceResolution: return "face-resolution";
     case EasyModMode::None: break;
   }
   return "";
@@ -45,6 +95,8 @@ EasyModPlan plan_easy_mod(const EasyModInputs& in) {
     return plan;
   }
   check("npc", EasyModState::Ok, "NPC: " + in.npc_label);
+
+  if (in.face_resolution) return plan_face_resolution(in, std::move(plan));
 
   // ---- what the mod will contain
   const bool hair_only = in.face_kind == FaceBuildKind::HairColorSafe;
@@ -132,6 +184,7 @@ EasyModPlan plan_easy_mod(const EasyModInputs& in) {
     case EasyModMode::OutfitPatch: plan.summary = "Parche de atuendo (modo A)."; break;
     case EasyModMode::FaceOverhaul: plan.summary = hair_only && !in.height_changed ? "Cambio de color de cabello (modo B, cambio mínimo)." : "Rostro (modo B)."; break;
     case EasyModMode::CompleteOverhaul: plan.summary = "Rostro y atuendo en un mod (modo C)."; break;
+    case EasyModMode::FaceResolution: break;  // planned by plan_face_resolution
     case EasyModMode::None: plan.summary = "Nada que exportar todavía."; break;
   }
   return plan;

@@ -166,6 +166,7 @@ internal static class ModPackager
                 Files = files,
                 Verification = verification,
                 PendingVerification = pending,
+                ProjectedChains = built.ProjectedChains ?? [],
             };
         }
         catch
@@ -220,7 +221,8 @@ internal static class ModPackager
         tool = new { name = "Skyrim NPC Studio", workerVersion = WorkerVersion, protocol = $"{Protocol.Major}.{Protocol.Minor}" },
         createdUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
         mode,
-        readyForGame = mode == "native-npc-technical" ? (bool?)false : null,
+        // A face copied from another plugin is only checked in files (record vs FaceGen): never "ready".
+        readyForGame = mode == "native-npc-technical" || built.Faces?.Any(f => f.Provenance.Mode == "source-facegen") == true ? (bool?)false : null,
         faceGenStatus = mode == "native-npc-technical" ? "pending" : null,
         validationLevel = mode == "native-npc-technical" ? "structural-readback-only" : null,
         plugin = new { fileName = pluginName, sha256, eslFlagged = built.EslFlagged },
@@ -230,6 +232,8 @@ internal static class ModPackager
             providedBy = pluginProviders?.GetValueOrDefault(m.FileName.String),
             loadIndex = session.Find(m)?.LoadIndex,
         }),
+        // Plugins this one must load after (declared as masters although no record links to them).
+        loadAfter = built.LoadAfter ?? [],
         records = built.Records,
         assignments = built.Assignments.Select(a => new
         {
@@ -262,6 +266,7 @@ internal static class ModPackager
             customMorphs = f.Provenance.CustomMorphs,
             sculptTargets = f.Provenance.SculptTargets,
             installAbove = f.Provenance.InstallAbove,
+            effectiveFaceGenMod = f.Provenance.EffectiveFaceGenMod,
         }),
         personalUseOnly = (built.Faces ?? []).Any(f => f.Provenance.DerivedFrom.Count > 0),
         // Every NPC_ field that differs from the winning record, re-read from the written plugin.
@@ -314,6 +319,12 @@ internal static class ModPackager
                     $"  - Contiene geometría derivada de: {string.Join(", ", face.Provenance.DerivedFrom)}. Uso personal: no lo redistribuyas sin permiso de sus autores.");
             }
 
+            if (face.Provenance.Mode == "source-facegen")
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture,
+                    $"  - Rostro copiado del plugin indicado en los cambios: el mod no trae FaceGen; usa el de «{face.Provenance.EffectiveFaceGenMod}», que ya es el que carga el juego. Si ese mod deja de ganar en MO2, el registro y la cabeza dejarán de coincidir.");
+            }
+
             if (face.Provenance.InstallAbove.Count > 0)
             {
                 sb.AppendLine(CultureInfo.InvariantCulture,
@@ -360,6 +371,11 @@ internal static class ModPackager
         sb.AppendLine(CultureInfo.InvariantCulture, $"1. En MO2, *Instalar mod desde archivo* y elige `{modName}.zip`.");
         sb.AppendLine(CultureInfo.InvariantCulture, $"2. Activa el mod y el plugin `{pluginName}`.");
         sb.AppendLine("3. Coloca el plugin después de sus masters y de cualquier otro mod que modifique a estos NPC.");
+        if (built.LoadAfter is { Count: > 0 } after)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture,
+                $"   Debe cargarse después de {string.Join(" y ", after.Select(p => $"`{p}`"))}: por eso son masters del plugin aunque ningún registro apunte a ellos. Si otro plugin posterior vuelve a cambiar estos NPC, gana él.");
+        }
         if (bundledAssets.Count > 0)
         {
             sb.AppendLine("4. En el panel izquierdo de MO2, coloca este mod DEBAJO (prioridad mayor) de cualquier mod que aporte FaceGen para los mismos NPC; si no, el juego usará la cabeza del otro mod y puede verse la cara oscura.");
@@ -413,6 +429,16 @@ internal static class ModPackager
             checks.Add($"FaceGen: {generated.Count} archivo(s) con SHA-256 comprobado contra el que envió el estudio y copiados a la ruta propia del NPC.");
         }
 
+        if (built.Faces?.Where(f => f.Provenance.Mode == "source-facegen").ToList() is { Count: > 0 } copied)
+        {
+            checks.Add($"Rostro copiado: {copied.Count} NPC releídos con sus campos faciales idénticos a la versión de origen; sin FaceGen en el mod (se usa el de «{string.Join("», «", copied.Select(f => f.Provenance.EffectiveFaceGenMod).Distinct())}»).");
+        }
+
+        if (built.LoadAfter is { Count: > 0 } after)
+        {
+            checks.Add($"Se carga después de {string.Join(", ", after)}: declarados como masters y presentes en el plugin releído.");
+        }
+
         checks.Add($"{files.Count} archivo(s) del mod con SHA-256 y tamaño registrados en el manifiesto.");
         return checks;
     }
@@ -431,7 +457,11 @@ internal static class ModPackager
                 : "Comprobar en MO2 que ningún otro mod con FaceGen de estos NPC queda con mayor prioridad que este.");
         }
 
-        if (built.Faces is { Count: > 0 })
+        if (built.Faces?.Any(f => f.Provenance.Mode == "source-facegen") == true)
+        {
+            pending.Add("Comprobar en el juego que la cara ya no sale oscura ni distinta: el registro y el FaceGen ganador vienen ahora del mismo mod, pero no se ha ejecutado Skyrim.");
+        }
+        else if (built.Faces is { Count: > 0 })
         {
             pending.Add("Revisar la cabeza y el color de cabello en el juego (la vista previa y el FaceGen exportado coinciden, pero no se ha ejecutado Skyrim).");
         }

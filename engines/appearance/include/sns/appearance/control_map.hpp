@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,6 +21,9 @@ struct OverrideLink {
   // Every MO2 mod with a copy of the plugin file, ascending priority (`mod` is the winner). A losing copy
   // means the plugin was replaced file-for-file (translation, cleaned or patched copy).
   std::vector<std::string> plugin_mods;
+  // Changed fields whose new value is a copy of an earlier version's (a patch that forwards another
+  // mod's face): field -> plugin that introduced that value. The value is attributed to that plugin.
+  std::map<std::string, std::string> copied_from;
 };
 
 // Where a Data-relative file of the face (FaceGen geometry or tint) comes from.
@@ -54,6 +59,7 @@ struct ComponentControl {
   std::string mod;     // controlling MO2 mod
   std::string kind;    // "record", "loose", "bsa" or "missing"
   std::vector<std::string> overridden;  // "plugin (mod)" for record parts, "mod" for files: what lost
+  std::string via;  // record parts: the later plugin that carries `plugin`'s value as a copy (a patch), or empty
 };
 
 struct ControlFinding {
@@ -64,15 +70,46 @@ struct ControlFinding {
   std::string suggestion;   // what to do (never applied automatically)
 };
 
+// Assisted resolution of FaceGenRecordMismatch when the FaceGen's mod also has a version of the record
+// in the chain: «Usar el rostro de X». A patch that copies the face fields of X's version onto the
+// winning record (everything else stays the winner's) and loads after both, so the record says what
+// X's FaceGen, which already wins in MO2, was built from. No FaceGen is copied or regenerated.
+struct FaceResolution {
+  std::string source_plugin;  // X: the version whose face fields are copied
+  std::string source_mod;     // the MO2 mod that provides X and the effective FaceGen
+  std::string winner_plugin;  // the record the patch overrides (every other field is kept)
+  std::string winner_mod;
+  // NPC_ properties to copy, only those whose value differs between X's version and the winner
+  // (subset of kResolutionFields, in that order).
+  std::vector<std::string> fields;
+  // Plugins the patch must load after (declared as its masters): X and the winner, in chain order.
+  std::vector<std::string> load_after;
+  std::string label;   // "Usar el rostro de «X»"
+  std::string detail;  // what the patch does, in Spanish
+};
+
 struct ControlReport {
   std::vector<ComponentControl> components;
   std::vector<ControlFinding> findings;
   // The version that set the fields the FaceGen geometry is built from (head parts, morphs, race, weight).
   std::string face_plugin;
   std::string face_mod;
+  std::string face_via;  // the later plugin that carries those values as a copy (e.g. a patch), or empty
+  // Offered only with FaceGenRecordMismatch; never applied automatically.
+  std::optional<FaceResolution> resolution;
 };
 
 ControlReport analyze_appearance_control(const ControlInputs& in);
+
+// Index of the version whose value of `field` the winner has: the last one that changed it (the origin
+// when none did), or, when that change is a copy (`copied_from`), the version that introduced the value
+// -- unless the version that wrote it belongs to `facegen_mod` (the effective FaceGen's mod): its own.
+std::size_t field_controller(const std::vector<OverrideLink>& chain, const std::string& field, const std::string& facegen_mod = {});
+
+// Face fields a resolution may copy (the face the FaceGen is built from, plus the skin and hair colors
+// baked into it). Height, race and sex are never copied.
+inline const std::vector<std::string> kResolutionFields = {"HeadParts", "FaceMorph", "FaceParts", "TintLayers",
+                                                           "HairColor", "HeadTexture", "TextureLighting", "Weight"};
 
 // A deviation below this (game units) means the profile's FaceGen is what the record produces.
 inline constexpr float kFaceGenMatchesRecord = 0.05f;

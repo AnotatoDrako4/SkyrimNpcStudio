@@ -163,3 +163,93 @@ revisar); los 108 desajustes no se han revisado uno a uno.
 
 Siguiente mejora de rendimiento si hiciera falta: un método por lotes en el worker (cadena de varios
 NPC por llamada) y leer solo el bloque de nombres del NIF en vez del archivo completo.
+
+## 6. Iteración 3 — resolución asistida «Usar el rostro de X»
+
+Rama `feature/appearance-face-resolution`, apilada sobre `feature/appearance-control-map` (PR #18).
+Primer paso que **escribe** algo desde el mapa de control: un mod nuevo, en la carpeta que elige el
+usuario, por el mismo flujo de exportación (Easy Mod Creator → worker → verificación). Nada se instala
+en MO2 ni se toca Skyrim/Data. Reglas y contrato: `docs/APPEARANCE_CONTROL_MAP.md`.
+
+### Diseño
+
+- Motor: `ControlReport::resolution` (`FaceResolution`): X = última versión de la cadena del mod del
+  FaceGen efectivo, distinta del ganador, misma raza y sexo; campos = los de `kResolutionFields` cuyo
+  valor difiere entre X y el ganador.
+- Easy Mod: modo `face-resolution`; bloqueado si hay ediciones pendientes (Hair Color Safe Mode no se
+  mezcla), en espera mientras se analiza el FaceGen; FaceGen y protección facial explicados como
+  comprobaciones.
+- Worker: `FaceAssignment.copyFaceFrom` + `onlyFields` (subregistros), `faceGen.mode = "source-facegen"`;
+  copia verbatim de la versión de X, Safe Patch sobre el ganador, X y el ganador como masters
+  (`MastersContentCustomOverride` de Mutagen), cadena proyectada releída del plugin escrito
+  (`projectedChains`), `loadAfter` en el manifiesto, `readyForGame: false`.
+- Estudio: la exportación solo se da por buena si el mapa de control, con esa cadena proyectada y los
+  FaceGen del perfil, ya no ve `FaceGenRecordMismatch` y los datos faciales son del mod de X.
+- Protocolo 1.3 → 1.4 (campos opcionales nuevos).
+
+### Lo que la implementación destapó
+
+1. **El parche nunca habría «resuelto» nada** con la regla de control anterior: el parche cambia los
+   campos respecto al ganador, así que pasaba a ser él quien «fijaba la cara» (mod nuevo ≠ mod del
+   FaceGen). Solución general: un cambio cuyo valor es idéntico al de una versión anterior es una copia
+   (`overrides[].copiedFrom` del worker) y el valor se atribuye a quien lo introdujo; la versión que lo
+   copia se muestra como «copiado por» (`via`).
+2. **Las huellas de color eran todas iguales**: `Fingerprint` canoniza por las interfaces de Mutagen y
+   `System.Drawing.Color` no tiene ninguna, así que QNAM y los colores de TINC daban siempre `{}`. Un
+   cambio solo de tono de piel o de color de tinte no se veía en la cadena ni en las ediciones perdidas.
+   Corregido con su prueba; `RecordExtractor.Version` 6 → 7 reconstruye el catálogo.
+3. **Primera pasada del perfil con las copias: 50 avisos nuevos** `LostFaceEdits` (FaceMorph, Race,
+   Weight…). Causa: replacers con FaceGen propio cuyo registro conserva algún valor vanilla; la copia lo
+   atribuía a Skyrim.esm y el reemplazo completo parecía una edición perdida. Regla corregida: si quien
+   escribe el valor es el mod del FaceGen efectivo, el valor es suyo (prueba
+   `a replacer that writes a vanilla value keeps it as its own`).
+
+### Resultado en el perfil real (1308 NPC únicos, Debug)
+
+| | PR #18 | Esta rama |
+|---|---|---|
+| Con avisos | 128 | **126** |
+| `FaceGenRecordMismatch` | 108 | 105 |
+| `LostFaceEdits` | 82 | 80 |
+| `FaceSourcesConsistent` | 857 | 857 |
+| NPC con «Usar el rostro de X» | — | **82** |
+
+Solo 6 NPC cambian de hallazgos respecto a PR #18 y todos por las copias: Ysolda y Sybille Stentor
+(un mod de ropa reenvía la cara de NITHI → ya no es desajuste), Silda the Unseen (AI Overhaul reenvía las
+piezas de USSEP → `FaceGenHasRecordHeadParts`), Grogmar (edición «perdida» que era un reemplazo),
+Crescius Caerellius y Mirri Severin (de correcto a `FaceReplaced`, nota). Resoluciones ofrecidas: «NITHI
+NPCs - The Rift - Men.esp» 27, «BeastHHBB.esp» 11, «Skyrim.esm» 10, NITHI Fort Dawnguard 8, Dawnguard.esm 3,
+BB's College of Winterhold 3, otras.
+
+Escenario de arnés `face-resolution` (perfil `Default` en solo lectura, 1280×800):
+
+- **Bolli** (`01334E:Skyrim.esm`, Skyrim.esm → NITHI NPCs - The Rift - Men.esp → AI Overhaul.esp): antes
+  `FaceGenRecordMismatch` + `LostFaceEdits` (AI Overhaul aporta sus HeadParts y devuelve FaceMorph y
+  FaceParts a los de Skyrim.esm). Resolución: copiar HeadParts, FaceMorph, FaceParts, TintLayers,
+  HeadTexture y TextureLighting. Con una edición de color de cabello pendiente, bloqueada. El botón de
+  Origen abre el asistente con el plan (5 páginas sin recortes). Exportado `SNS_FaceFix_Bolli.esp`
+  (793 B, ESL) + ZIP: solo el plugin; masters `Skyrim.esm, NITHI NPCs - The Rift - Men.esp, AI
+  Overhaul.esp` (leídos también de la cabecera TES4 por el arnés); diff semántico = exactamente los 6
+  campos, todos «Copiado de NITHI…»; cadena releída con Mutagen terminada en el parche con esos 6 campos
+  copiados de NITHI; **mapa de control con el parche al final: datos faciales de NITHI NPCs - The Rift -
+  Men.esp («NITHI NPC Enhancement - Riften») copiados por el parche, `FaceReplaced` (nota) +
+  `FaceSourcesConsistent`, sin avisos**; FaceGen del perfil idéntico byte a byte tras la exportación.
+- **Brand-Shei** (`01334F:Skyrim.esm`): mismo resultado con 5 campos (sin HeadTexture).
+- **Lydia** (coherente): no se ofrece resolución.
+
+Regresión: `ctest` 162/162, `[local]` 6/6 con el perfil real, .NET worker 37/37 y exportación 75/75,
+arnés `appearance-control`, `hair-safe`, `easy-mod` y `appearance-scan` en verde.
+
+Rendimiento: motor con 400 versiones × 300 mods 14 → 20 ms (Debug) por la atribución de copias;
+análisis del perfil completo 42 s (antes 38 s, misma máquina, ruido incluido).
+
+### Pendiente
+
+- Nada de esto se ha comprobado dentro de Skyrim: que la cara de Bolli deje de verse oscura con el
+  parche instalado es lo esperado por los archivos, no algo visto en el juego.
+- El diff semántico del manifiesto muestra `…BinaryOverlay` en vez de los valores de FaceMorph, FaceParts
+  y TintLayers (afecta a todas las exportaciones de rostro, no solo a esta).
+- `dotnet restore` falla hoy con NU1902 (aviso nuevo de MessagePack 2.5.302, dependencia transitiva)
+  porque los avisos son errores; para compilar se usó `NuGetAuditLevel=high` solo en el entorno local.
+  Hay que actualizar la dependencia en otro cambio.
+- Resolver varios NPC en un solo parche (los 27 de Riften) — hoy es un parche por NPC.

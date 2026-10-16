@@ -9,6 +9,20 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
     private static readonly string LydiaKey = SyntheticLoadOrder.Lydia.ToString();
 
     [Fact]
+    public void Fingerprint_DistinguishesColors()
+    {
+        // Skin tone (QNAM) and tint colors (TINC) are System.Drawing.Color, not Mutagen getters.
+        var a = System.Drawing.Color.FromArgb(255, 206, 205, 204);
+        var b = System.Drawing.Color.FromArgb(255, 180, 150, 140);
+        Assert.NotEqual(NpcCatalog.Fingerprint.Of(a), NpcCatalog.Fingerprint.Of(b));
+        Assert.Equal(NpcCatalog.Fingerprint.Of(a), NpcCatalog.Fingerprint.Of(System.Drawing.Color.FromArgb(255, 206, 205, 204)));
+        Assert.NotEqual(NpcCatalog.Fingerprint.Of((System.Drawing.Color?)a), NpcCatalog.Fingerprint.Of((System.Drawing.Color?)null));
+        var tint = new Mutagen.Bethesda.Skyrim.TintLayer { Index = 24, Color = a, InterpolationValue = 1f };
+        var other = new Mutagen.Bethesda.Skyrim.TintLayer { Index = 24, Color = b, InterpolationValue = 1f };
+        Assert.NotEqual(NpcCatalog.Fingerprint.Of(new[] { tint }), NpcCatalog.Fingerprint.Of(new[] { other }));
+    }
+
+    [Fact]
     public void Index_ReportsCountsAndNoErrors()
     {
         var r = fixture.IndexResponse;
@@ -64,6 +78,10 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
         Assert.Contains("Weight", npc.Overrides[2].ChangedFields);
 
         // LateTweak was made from the original record: FaceMod's height change does not survive.
+        // Its height is the origin's value again, so it is a copy of Skyrim.esm's; its weight is its own.
+        Assert.Equal("Skyrim.esm", npc.Overrides[2].CopiedFrom["Height"]);
+        Assert.False(npc.Overrides[2].CopiedFrom.ContainsKey("Weight"));
+        Assert.Empty(npc.Overrides[1].CopiedFrom);
         var conflict = Assert.Single(npc.Conflicts);
         Assert.Equal("Height", conflict.Field);
         Assert.Equal(["FaceMod.esp"], conflict.LosingPlugins);

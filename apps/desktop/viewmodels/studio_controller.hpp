@@ -119,6 +119,9 @@ class StudioController : public QObject {
   Q_INVOKABLE void selectNpc(const QString& form_key);
   Q_INVOKABLE void scanAppearanceControl();
   Q_INVOKABLE void cancelAppearanceScan();
+  // Hands the control map's «Usar el rostro de X» of the selected NPC to the Easy Mod Creator, which
+  // then plans (and exports) that patch. Returns false when the map offers no resolution.
+  Q_INVOKABLE bool prepareFaceResolution();
   Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type = {}, bool smp_only = false);
   Q_INVOKABLE void filterMods(const QString& text, bool enabled_only);
   Q_INVOKABLE QVariantMap modDetails(const QString& mod_name) const;
@@ -196,6 +199,7 @@ class StudioController : public QObject {
   QVariantMap summary_;
   QVariantMap npc_;
   QVariantMap appearance_control_;
+  std::optional<appearance::FaceResolution> control_resolution_;  // of appearance_control_
   std::shared_ptr<AppearanceScan> scan_;
   QSet<QString> races_with_facegen_;  // race FormKeys (lower-case) with a FaceGen file for some unique NPC
   bool npc_loading_ = false;

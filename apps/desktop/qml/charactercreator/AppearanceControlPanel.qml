@@ -5,13 +5,17 @@ import SkyrimNpcStudio
 
 // Appearance control map of the selected NPC (StudioController.appearanceControl): which plugin and
 // MO2 mod controls each part of its look, what it overrides, and whether the record and the FaceGen
-// files fit together. Read-only: suggestions are never applied automatically.
+// files fit together. Read-only: suggestions are never applied automatically. The one assisted fix
+// («Usar el rostro de X») only opens the Easy Mod Creator, which writes a separate patch mod.
 ScrollView {
     id: root
     objectName: "appearanceControlPanel"
     required property StudioController studio
     readonly property var map: studio.appearanceControl
     readonly property bool hasMap: (map.components || []).length > 0
+    readonly property var resolution: map.resolution || null
+    // The creator opens the assistant (it owns it); the plan is already prepared.
+    signal resolutionRequested()
     readonly property var scan: studio.appearanceScan
     property int scanRowsShown: 50
     contentWidth: availableWidth
@@ -103,6 +107,7 @@ ScrollView {
                 Text {
                     Layout.fillWidth: true
                     text: qsTr("Datos faciales: %1 (mod «%2»)").arg(root.map.facePlugin || "?").arg(root.map.faceMod || "?")
+                          + (root.map.faceVia ? qsTr(", copiados por %1").arg(root.map.faceVia) : "")
                     color: Theme.text
                     font.pixelSize: 11
                     wrapMode: Text.WrapAnywhere
@@ -166,6 +171,71 @@ ScrollView {
             }
         }
 
+        // ---- assisted resolution («Usar el rostro de X»)
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            visible: root.hasMap && root.resolution !== null
+            implicitHeight: resolutionColumn.implicitHeight + 14
+            color: Theme.panelAlt
+            radius: 4
+            border.color: Theme.accent
+            border.width: 1
+
+            ColumnLayout {
+                id: resolutionColumn
+                anchors.fill: parent
+                anchors.margins: 7
+                spacing: 4
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Resolución asistida")
+                    color: Theme.accent
+                    font.bold: true
+                    font.pixelSize: 11
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: root.resolution ? root.resolution.detail : ""
+                    color: Theme.text
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: root.resolution ? qsTr("Campos: %1 · se carga después de %2")
+                                              .arg(root.resolution.fields.join(", ")).arg(root.resolution.loadAfter.join(" y ")) : ""
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    wrapMode: Text.WrapAnywhere
+                }
+                Button {
+                    objectName: "faceResolutionButton"
+                    Layout.fillWidth: true
+                    text: root.resolution ? root.resolution.label : ""
+                    enabled: !root.studio.appearance.exporting
+                    contentItem: Text {
+                        text: parent.text
+                        color: Theme.text
+                        font.pixelSize: 11
+                        elide: Text.ElideMiddle
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    onClicked: if (root.studio.prepareFaceResolution()) root.resolutionRequested()
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Abre el asistente de Easy Mod: comprobaciones y creación de un mod nuevo en la carpeta que elijas. "
+                             + "No cambia el orden de carga, MO2 ni Skyrim/Data.")
+                    color: Theme.textMuted
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
         // ---- parts
         Text {
             Layout.fillWidth: true
@@ -202,6 +272,15 @@ ScrollView {
                         font.pixelSize: 11
                         wrapMode: Text.WrapAnywhere
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    visible: (modelData.via || "").length > 0
+                    text: qsTr("copiado por: ") + (modelData.via || "")
+                    color: Theme.textMuted
+                    font.pixelSize: 10
+                    wrapMode: Text.WrapAnywhere
                 }
                 Text {
                     Layout.fillWidth: true

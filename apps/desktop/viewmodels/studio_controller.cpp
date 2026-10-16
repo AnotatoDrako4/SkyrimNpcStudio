@@ -72,6 +72,8 @@ QString severity_name(mo2::Diagnostic::Severity s) {
   }
 }
 
+QVariantMap control_report_map(const appearance::ControlReport& report);
+
 }  // namespace
 
 StudioController::StudioController(QString worker_executable, QObject* parent)
@@ -94,6 +96,23 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   appearance_ = new AppearanceEditor(worker_, console_, outfit_, [this] { return snapshot_; }, draft_, history_, this);
   // The control map uses the facial analysis (measured deviation) once it is available.
   connect(appearance_, &AppearanceEditor::faceGenChanged, this, &StudioController::refresh_appearance_control);
+  // A face resolution export is checked against the control map the profile would have with the
+  // written plugin loaded last (chain from the worker, FaceGen files as the profile has them).
+  appearance_->set_control_projector([this](const QVariantMap& chain, const QString& plugin) -> QVariantMap {
+    if (!snapshot_ || npc_.isEmpty()) return {};
+    auto details = npc_;
+    QVariantList overrides;
+    for (const auto& o : chain.value("overrides").toList()) {
+      auto entry = o.toMap();
+      const auto name = entry.value("plugin").toString();
+      // Not installed yet: its MO2 mod will be the exported folder, named after the plugin.
+      entry["mod"] = name.compare(plugin, Qt::CaseInsensitive) == 0 ? QFileInfo(plugin).completeBaseName() : providerOf(name);
+      overrides << entry;
+    }
+    details["overrides"] = overrides;
+    details["conflicts"] = chain.value("conflicts");
+    return control_report_map(appearance::analyze_appearance_control(control_inputs(details)));
+  });
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
   armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
   forge_ = new CharacterForgeViewModel([this] {
@@ -629,14 +648,19 @@ void StudioController::selectNpc(const QString& form_key) {
 
 namespace {
 
-// QML form of a control report: {facePlugin, faceMod, worst, components, findings}.
+QStringList string_list(const std::vector<std::string>& items) {
+  QStringList out;
+  for (const auto& i : items) out << qs(i);
+  return out;
+}
+
+// QML form of a control report: {facePlugin, faceMod, faceVia, worst, components, findings, resolution?}.
 QVariantMap control_report_map(const appearance::ControlReport& report) {
   QVariantList components, findings;
   for (const auto& c : report.components) {
-    QStringList overridden;
-    for (const auto& o : c.overridden) overridden << qs(o);
-    components << QVariantMap{{"key", qs(c.key)}, {"label", qs(c.label)}, {"plugin", qs(c.plugin)},
-                              {"mod", qs(c.mod)}, {"kind", qs(c.kind)},   {"overridden", overridden}};
+    components << QVariantMap{{"key", qs(c.key)},   {"label", qs(c.label)}, {"plugin", qs(c.plugin)},
+                              {"mod", qs(c.mod)},   {"kind", qs(c.kind)},   {"overridden", string_list(c.overridden)},
+                              {"via", qs(c.via)}};
   }
   QString worst = QStringLiteral("ok");
   for (const auto& f : report.findings) {
@@ -644,8 +668,15 @@ QVariantMap control_report_map(const appearance::ControlReport& report) {
                             {"consequence", qs(f.consequence)}, {"suggestion", qs(f.suggestion)}};
     if (f.severity == "warning" || (f.severity == "info" && worst == "ok")) worst = qs(f.severity);
   }
-  return {{"facePlugin", qs(report.face_plugin)}, {"faceMod", qs(report.face_mod)}, {"worst", worst},
-          {"components", components},             {"findings", findings}};
+  QVariantMap out{{"facePlugin", qs(report.face_plugin)}, {"faceMod", qs(report.face_mod)}, {"faceVia", qs(report.face_via)},
+                  {"worst", worst}, {"components", components}, {"findings", findings}};
+  if (const auto& r = report.resolution) {
+    out["resolution"] = QVariantMap{{"sourcePlugin", qs(r->source_plugin)}, {"sourceMod", qs(r->source_mod)},
+                                    {"winnerPlugin", qs(r->winner_plugin)}, {"winnerMod", qs(r->winner_mod)},
+                                    {"fields", string_list(r->fields)},     {"loadAfter", string_list(r->load_after)},
+                                    {"label", qs(r->label)},                {"detail", qs(r->detail)}};
+  }
+  return out;
 }
 
 }  // namespace
@@ -661,6 +692,8 @@ appearance::ControlInputs StudioController::control_inputs(const QVariantMap& de
     link.is_origin = e.value("isOrigin").toBool();
     link.is_winner = e.value("isWinner").toBool();
     for (const auto& f : e.value("changedFields").toList()) link.changed_fields.push_back(ss(f.toString()));
+    const auto copied = e.value("copiedFrom").toMap();
+    for (auto it = copied.begin(); it != copied.end(); ++it) link.copied_from[ss(it.key())] = ss(it.value().toString());
     for (const auto i : snapshot_->vfs.providers_of(link.plugin)) link.plugin_mods.push_back(snapshot_->vfs.providers()[i].name);
     in.chain.push_back(std::move(link));
   }
@@ -694,11 +727,8 @@ appearance::ControlInputs StudioController::control_inputs(const QVariantMap& de
   // are named after the head part EditorIDs.
   const auto parts = details.value("headParts").toList();
   if (in.facegen.found && !parts.isEmpty() && !in.chain.empty() && ctx && ctx->resolver) {
-    std::size_t at = 0;
-    for (std::size_t i = in.chain.size(); i-- > 1;) {
-      const auto& fields = in.chain[i].changed_fields;
-      if (std::find(fields.begin(), fields.end(), "HeadParts") != fields.end()) { at = i; break; }
-    }
+    // The version whose head parts the record has (a forwarded copy counts as its original).
+    const auto at = appearance::field_controller(in.chain, "HeadParts", in.facegen.winner_mod);
     if (in.chain[at].mod != in.facegen.winner_mod) {
       if (const auto bytes = ctx->resolver->read(in.facegen.path)) {
         const auto info = face::inspect_facegen(*bytes);
@@ -733,6 +763,7 @@ void StudioController::refresh_appearance_control() {
   QElapsedTimer timer;
   timer.start();
   QVariantMap out;
+  control_resolution_.reset();
   if (snapshot_ && !npc_.isEmpty()) {
     auto in = control_inputs(npc_);
     // The facial analysis counts only if it examined this NPC's FaceGen (it may still be the previous one).
@@ -745,7 +776,9 @@ void StudioController::refresh_appearance_control() {
     if (numeric && deviation >= 0.0 && !analysed.isEmpty() && normalize(analysed) == normalize(geometry_path)) {
       in.regeneration_deviation = static_cast<float>(deviation);
     }
-    out = control_report_map(appearance::analyze_appearance_control(in));
+    const auto report = appearance::analyze_appearance_control(in);
+    control_resolution_ = report.resolution;
+    out = control_report_map(report);
     out["formKey"] = npc_.value("summary").toMap().value("formKey");
     out["deviation"] = in.regeneration_deviation ? QVariant(*in.regeneration_deviation) : QVariant();
   }
@@ -772,6 +805,7 @@ struct StudioController::AppearanceScan {
   int total = 0;
   int rpc_calls = 0;
   int errors = 0;
+  int resolutions = 0;  // NPCs for which the map offers «Usar el rostro de X»
   int since_emit = 0;
   qint64 listing_ms = 0;
   qint64 elapsed_ms = 0;
@@ -788,9 +822,20 @@ QVariantMap StudioController::appearance_scan() const {
   for (auto it = s.codes.begin(); it != s.codes.end(); ++it) codes.insert(it.key(), it.value());
   return {{"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
           {"total", s.total},         {"pending", static_cast<int>(s.pending.size())},       {"rpcCalls", s.rpc_calls},
-          {"errors", s.errors},       {"listingMs", s.listing_ms},
+          {"errors", s.errors},       {"listingMs", s.listing_ms},  {"resolutions", s.resolutions},
           {"elapsedMs", s.running ? s.timer.elapsed() : s.elapsed_ms},
           {"counts", counts},         {"codes", codes},         {"rows", s.rows}};
+}
+
+bool StudioController::prepareFaceResolution() {
+  const auto form_key = appearance_control_.value("formKey").toString();
+  if (!control_resolution_ || form_key.isEmpty() || form_key != appearance_->npc_form_key()) {
+    log("warning", tr("El mapa de control no ofrece ninguna resolución para este NPC."));
+    return false;
+  }
+  diag::record("studio", "face resolution " + ss(form_key) + ": " + control_resolution_->label);
+  appearance_->set_face_resolution(*control_resolution_);
+  return true;
 }
 
 void StudioController::scanAppearanceControl() {
@@ -908,6 +953,7 @@ void StudioController::scan_record(const QVariantMap& details) {
     }
   }
   ++scan.analysed;
+  if (report.resolution) ++scan.resolutions;
   ++scan.counts[worst];
   if (worst != "ok") {
     const auto summary = details.value("summary").toMap();
@@ -923,7 +969,8 @@ void StudioController::scan_record(const QVariantMap& details) {
                              {"facePlugin", qs(report.face_plugin)},
                              {"faceMod", qs(report.face_mod)},
                              {"faceGenMod", facegen_mod},
-                             {"message", message}};
+                             {"message", message},
+                             {"resolution", report.resolution ? qs(report.resolution->label) : QString()}};
   }
   if (++scan.since_emit >= 250) {
     scan.since_emit = 0;

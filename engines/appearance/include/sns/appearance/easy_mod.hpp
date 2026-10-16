@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "sns/appearance/appearance_draft.hpp"
+#include "sns/appearance/control_map.hpp"
 
 namespace sns::appearance {
 
@@ -29,12 +31,16 @@ struct EasyModInputs {
   bool outfit_preview_material = false;  // a material variant that is preview-only
   std::vector<std::string> blocked_operations;  // face compatibility: "hair-color", "face-morphs", ...
   std::string provenance_conflict;       // winning ESP and FaceGen from different mods
+  // «Usar el rostro de X» chosen in the control map (Origen): the guided export writes that patch
+  // instead of the editors' changes, and only when there are none.
+  std::optional<FaceResolution> face_resolution;
 };
 
 enum class EasyModState { Ok, Warning, Waiting, Blocked, Info };
 
-// "outfit-patch" (Mode A), "face-overhaul" (Mode B), "complete-overhaul" (Mode C).
-enum class EasyModMode { None, OutfitPatch, FaceOverhaul, CompleteOverhaul };
+// "outfit-patch" (Mode A), "face-overhaul" (Mode B), "complete-overhaul" (Mode C), "face-resolution"
+// (Mode B with a face copied from another version of the record, no FaceGen).
+enum class EasyModMode { None, OutfitPatch, FaceOverhaul, CompleteOverhaul, FaceResolution };
 
 struct EasyModItem {
   std::string key;

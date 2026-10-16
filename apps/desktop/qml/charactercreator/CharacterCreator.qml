@@ -278,6 +278,7 @@ Item {
                     // Pestaña 6: Origen (qué mod controla cada parte y conflictos de FaceGen)
                     AppearanceControlPanel {
                         studio: root.studio
+                        onResolutionRequested: exportWizard.open()
                     }
                 }
             }

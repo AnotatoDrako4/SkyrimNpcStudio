@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QUuid>
 #include <algorithm>
@@ -225,6 +226,8 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   build_timer_.stop();
   cancel_jobs();
   target_ = target;
+  resolution_.reset();  // a resolution belongs to the NPC it was offered for
+  resolution_npc_.clear();
   ++head_part_serial_;  // options of the previous NPC are not valid for this one
   if (!head_part_options_.isEmpty()) {
     head_part_options_.clear();
@@ -834,6 +837,7 @@ QVariantMap AppearanceEditor::easy_mod_plan() const {
   }
   for (const auto& b : compatibility_.value("blocked").toList()) in.blocked_operations.push_back(ss(b.toMap().value("op").toString()));
   in.provenance_conflict = ss(compatibility_.value("provenance").toMap().value("conflict").toString());
+  if (resolution_ && resolution_npc_ == target_.form_key) in.face_resolution = resolution_;
 
   const auto plan = appearance::plan_easy_mod(in);
   auto items = [](const std::vector<appearance::EasyModItem>& list) {
@@ -848,11 +852,34 @@ QVariantMap AppearanceEditor::easy_mod_plan() const {
     return out;
   };
   const auto mode = appearance::to_string(plan.mode);
-  return {{"mode", QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size()))},
-          {"summary", qs(plan.summary)},
-          {"canExport", plan.can_export && !exporting_},
-          {"changes", items(plan.changes)},
-          {"checks", items(plan.checks)}};
+  QVariantMap out{{"mode", QString::fromUtf8(mode.data(), static_cast<qsizetype>(mode.size()))},
+                  {"summary", qs(plan.summary)},
+                  {"canExport", plan.can_export && !exporting_},
+                  {"changes", items(plan.changes)},
+                  {"checks", items(plan.checks)}};
+  if (in.face_resolution) {
+    QStringList after;
+    for (const auto& p : in.face_resolution->load_after) after << qs(p);
+    out["loadAfter"] = after;
+    // One patch per NPC: "SNS_FaceFix_<EditorID>.esp" (the FormID when there is no EditorID).
+    auto id = qs(target_.editor_id.empty() ? target_.form_key.substr(0, target_.form_key.find(':')) : target_.editor_id);
+    id.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_]")), QStringLiteral("_"));
+    out["suggestedPluginName"] = QStringLiteral("SNS_FaceFix_%1.esp").arg(id.left(60));
+  }
+  return out;
+}
+
+void AppearanceEditor::set_face_resolution(const appearance::FaceResolution& resolution) {
+  resolution_ = resolution;
+  resolution_npc_ = target_.form_key;
+  emit easyModChanged();
+}
+
+void AppearanceEditor::clearFaceResolution() {
+  if (!resolution_) return;
+  resolution_.reset();
+  resolution_npc_.clear();
+  emit easyModChanged();
 }
 
 bool AppearanceEditor::exportable() const {
@@ -1514,6 +1541,136 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
                   QVariantMap extra{{"issues", to_variant(data.is_object() ? data.value("issues", Json::array()) : Json::array())}};
                   // The reasons (e.g. which NPC field the safe patch refused) are part of the message:
                   // the console, the assistant and the session log show them.
+                  QStringList reasons;
+                  for (const auto& i : extra.value("issues").toList()) {
+                    const auto m = i.toMap();
+                    if (m.value("severity").toString() == "error") reasons << m.value("code").toString() + ": " + m.value("message").toString();
+                  }
+                  finish_export(false, tr("Exportación cancelada: %1").arg(error) + (reasons.isEmpty() ? QString() : "\n" + reasons.join("\n")),
+                                {}, {}, extra);
+                });
+}
+
+namespace {
+
+// NPC_ property of the control map -> the subrecord the worker's OnlyFields names.
+const char* subrecord_of(const std::string& field) {
+  static const std::map<std::string, const char*> map = {{"HeadParts", "PNAM"},   {"FaceMorph", "NAM9"}, {"FaceParts", "NAMA"},
+                                                         {"TintLayers", "TINT"},  {"HairColor", "HCLF"}, {"HeadTexture", "FTST"},
+                                                         {"TextureLighting", "QNAM"}, {"Weight", "NAM7"}};
+  const auto it = map.find(field);
+  return it == map.end() ? nullptr : it->second;
+}
+
+}  // namespace
+
+void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QString& output_dir, bool esl, bool zip,
+                                            const QString& author, const QString& description) {
+  if (exporting_ || target_.form_key.empty() || !worker_) return;
+  if (!resolution_ || resolution_npc_ != target_.form_key) {
+    finish_export(false, tr("No hay ninguna resolución preparada para este NPC (pestaña Origen)."), {}, {}, {});
+    return;
+  }
+  // The same checks the assistant shows: no pending editor changes, analysis finished.
+  const auto plan = easy_mod_plan();
+  if (plan.value("mode").toString() != QLatin1String("face-resolution") || !plan.value("canExport").toBool()) {
+    QStringList reasons;
+    for (const auto& c : plan.value("checks").toList()) {
+      const auto m = c.toMap();
+      if (m.value("state").toString() == "blocked" || m.value("state").toString() == "waiting") reasons << m.value("label").toString();
+    }
+    finish_export(false, tr("El parche de resolución no se puede crear ahora: %1").arg(reasons.join("; ")), {}, {}, {});
+    return;
+  }
+  const auto r = *resolution_;
+  Json only = Json::array();
+  for (const auto& f : r.fields) {
+    if (const auto* code = subrecord_of(f)) only.push_back(code);
+  }
+  const auto output = QDir::toNativeSeparators(local_path(output_dir));
+  QDir().mkpath(output);
+  exporting_ = true;
+  emit exportingChanged();
+  diag::record("export", QStringLiteral("face resolution npc=%1 from=%2 onto=%3 fields=%4 plugin=%5 -> %6")
+                             .arg(qs(target_.form_key), qs(r.source_plugin), qs(r.winner_plugin), qs(only.dump()), plugin_name, output)
+                             .toStdString());
+
+  // No generated assets: the source mod's FaceGen is the one the game already loads.
+  Json face_part{{"npcFormKey", target_.form_key},
+                 {"copyFaceFrom", r.source_plugin},
+                 {"onlyFields", only},
+                 {"faceGen",
+                  {{"mode", "source-facegen"},
+                   {"effectiveFaceGenMod", r.source_mod},
+                   {"parts", Json::array()},
+                   {"derivedFrom", Json::array()},
+                   {"installAbove", Json::array()}}}};
+  Json providers = Json::object();
+  if (const auto snap = snapshot_()) {
+    for (const auto& p : snap->load_order.active) providers[p.name] = p.provider;
+  }
+  Json request{{"pluginName", ss(plugin_name)}, {"outputDirectory", ss(output)}, {"eslFlag", esl},
+               {"createZip", zip},              {"pluginProviders", providers},  {"assignments", Json::array({face_part})}};
+  if (!author.trimmed().isEmpty()) request["author"] = ss(author.trimmed());
+  if (!description.trimmed().isEmpty()) request["description"] = ss(description.trimmed());
+
+  worker_->call(method::kExportFacePatch, request, 5min, this,
+                [this, r, plugin_name](const Json& j) {
+                  const auto mod_dir = qs(j.value("modDirectory", ""));
+                  const auto zip_path = qs(j.value("zipPath", ""));
+                  QStringList problems;
+                  // FaceGen Integrity Guard for this mode: the mod carries no FaceGen at all.
+                  for (const auto& f : j.value("files", Json::array())) {
+                    const auto path = qs(f.value("path", ""));
+                    if (path.contains(QLatin1String("facegendata"), Qt::CaseInsensitive)) problems << tr("El mod trae FaceGen (%1)").arg(path);
+                  }
+                  QStringList masters;
+                  for (const auto& m : j.value("masters", Json::array())) masters << qs(m.get<std::string>());
+                  for (const auto& p : r.load_after) {
+                    if (!masters.contains(qs(p), Qt::CaseInsensitive)) problems << tr("No se carga después de %1 (no es master)").arg(qs(p));
+                  }
+                  // The control map with the plugin loaded last must say record and FaceGen now agree.
+                  QVariantMap projected, chain;
+                  for (const auto& c : j.value("projectedChains", Json::array())) {
+                    if (c.value("npc", "") == target_.form_key) chain = to_variant(c).toMap();
+                  }
+                  if (chain.isEmpty()) {
+                    problems << tr("El worker no devolvió la cadena del NPC con el parche");
+                  } else if (control_projector_) {
+                    projected = control_projector_(chain, plugin_name);
+                    QStringList codes;
+                    for (const auto& f : projected.value("findings").toList()) codes << f.toMap().value("code").toString();
+                    if (codes.contains(QLatin1String("FaceGenRecordMismatch")) || projected.value("faceMod").toString() != qs(r.source_mod)) {
+                      problems << tr("Con el parche, el mapa de control sigue viendo un desajuste (datos faciales de «%1»): %2")
+                                      .arg(projected.value("faceMod").toString(), codes.join(", "));
+                    }
+                  }
+                  QVariantMap extra{{"pluginPath", qs(j.value("pluginPath", ""))},
+                                    {"masters", masters},
+                                    {"issues", to_variant(j.value("issues", Json::array()))},
+                                    {"records", to_variant(j.value("records", Json::array()))},
+                                    {"semanticDiff", to_variant(j.value("semanticDiff", Json::array()))},
+                                    {"files", to_variant(j.value("files", Json::array()))},
+                                    {"verification", to_variant(j.value("verification", Json::array()))},
+                                    {"pendingVerification", to_variant(j.value("pendingVerification", Json::array()))},
+                                    {"projectedChain", chain},
+                                    {"projectedControl", projected},
+                                    {"verificationProblems", problems},
+                                    {"faceResolution", qs(r.label)},
+                                    {"readyForGame", false},
+                                    {"inGameVerified", false}};
+                  if (!problems.isEmpty()) {
+                    finish_export(false, tr("Mod escrito pero la verificación posterior falló: %1").arg(problems.join("; ")), mod_dir, zip_path, extra);
+                    return;
+                  }
+                  finish_export(true,
+                                tr("Parche de resolución exportado y verificado: el rostro es el de «%1» y el mapa de control, con el parche al "
+                                   "final, ve registro y FaceGen del mismo mod. Pendiente: comprobarlo dentro del juego.")
+                                    .arg(qs(r.source_plugin)),
+                                mod_dir, zip_path, extra);
+                },
+                [this](int, const QString& error, const Json& data) {
+                  QVariantMap extra{{"issues", to_variant(data.is_object() ? data.value("issues", Json::array()) : Json::array())}};
                   QStringList reasons;
                   for (const auto& i : extra.value("issues").toList()) {
                     const auto m = i.toMap();

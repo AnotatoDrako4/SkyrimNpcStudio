@@ -25,6 +25,11 @@ Panel: `qml/charactercreator/AppearanceControlPanel.qml`. Arnés: escenario `app
 - **Quién controla una parte**: la última versión de la cadena cuyo valor del campo difiere del de la
   versión anterior; si ninguna lo cambió, el origen. Por eso un parche que solo toca el atuendo gana el
   registro pero no controla la cara.
+- **Valores copiados**: si ese cambio deja el campo con un valor idéntico al de una versión anterior (un
+  parche que reenvía la cara de otro mod, o un plugin hecho sobre el registro vanilla que la devuelve al
+  original), el valor se atribuye a la versión que lo introdujo y la que lo copia aparece como «copiado
+  por» (`via`). El worker lo calcula por huella de cada campo (`overrides[].copiedFrom`: campo → plugin
+  más antiguo con ese valor).
   Partes: forma de la cara (FaceMorph, FaceParts), piezas de cabeza (HeadParts), textura de cara
   (HeadTexture), tono de piel (TextureLighting, TintLayers), color de pelo (HairColor), raza y sexo,
   altura y peso, atuendo (DefaultOutfit, SleepingOutfit, WornArmor).
@@ -48,9 +53,49 @@ Panel: `qml/charactercreator/AppearanceControlPanel.qml`. Arnés: escenario `app
 | `FaceSourcesConsistent` | sin avisos y datos faciales + FaceGen del mismo mod | ok |
 
 - **Sugerencias de `FaceGenRecordMismatch`**, por orden: si el mod del FaceGen tiene un plugin en la
-  cadena (anulado por el que fija la cara) → cargarlo después o usar un parche con sus campos faciales;
-  si el mod de los datos faciales trae FaceGen suelto que pierde en MO2 → subirlo; si no → comprobar o
-  regenerar el FaceGen con el estudio. Nunca se aplican solas.
+  cadena (anulado por el que fija la cara) → el botón **Usar el rostro de «X»** (abajo) o cargarlo
+  después; si el mod de los datos faciales trae FaceGen suelto que pierde en MO2 → subirlo; si no →
+  comprobar o regenerar el FaceGen con el estudio. Nunca se aplican solas.
+
+## Resolución asistida: «Usar el rostro de X»
+
+Para el caso clásico de cara oscura: el FaceGen que gana en MO2 es de un mod que **también** tiene su
+versión del registro en la cadena, pero un plugin posterior fija otros datos faciales (en el perfil de
+prueba, «AI Overhaul 1.8» sobre «NITHI NPC Enhancement - Riften», 28 NPC).
+
+Motor: `ControlReport::resolution` (`sns::appearance::FaceResolution`), solo junto a
+`FaceGenRecordMismatch`. Condiciones:
+
+- X = la última versión de la cadena cuyo mod aporta el FaceGen efectivo, y no es el ganador;
+- raza y sexo del ganador iguales a los de X (nunca se copian: el FaceGen se hizo para ellos);
+- al menos un campo facial distinto entre X y el ganador. Campos posibles: HeadParts, FaceMorph,
+  FaceParts, TintLayers, HairColor, HeadTexture, TextureLighting y Weight; se copian **solo los que
+  difieren** (Weight, por ejemplo, solo si el ganador lo cambió). La altura nunca.
+
+El botón (pestaña Origen) llama a `StudioController::prepareFaceResolution` y abre el asistente de
+Easy Mod en el modo `face-resolution`:
+
+- **No se mezcla con las ediciones**: con cambios pendientes en el editor (rostro, color de cabello,
+  altura, atuendo) la creación queda bloqueada; el color de cabello sigue su exportación con Hair Color
+  Safe Mode. Mientras se analiza el FaceGen, espera.
+- **FaceGen**: el mod no trae ninguno (ni copiado ni regenerado); el arnés comprueba que el FaceGen del
+  perfil queda idéntico byte a byte. La protección facial (High Poly) sigue bloqueando editar y
+  regenerar; el asistente explica que este parche no hace ninguna de las dos cosas.
+- **Worker** (`FaceAssignment.copyFaceFrom` + `onlyFields` con PNAM, NAM9, NAMA, TINT, HCLF, FTST, QNAM,
+  NAM7; `faceGen.mode = "source-facegen"`, `faceGen.effectiveFaceGenMod`): copia esos subregistros de
+  la versión de X tal cual sobre el override del ganador y rechaza la exportación si X no está cargado,
+  es el ganador, es de otra raza o sexo, si llega algún FaceGen, si el mod del FaceGen no es el que
+  aporta X o si se pide otro campo. Tras escribir, relee el plugin con Mutagen: los campos copiados
+  idénticos a X, ningún otro campo del NPC distinto del ganador (Safe Patch, motivo «Copiado de X») y
+  X y el ganador como **masters** (se carga después de ambos; `loadAfter` en el manifiesto y el README).
+  `installAbove` queda vacío: el mod no tiene archivos que compitan en MO2.
+- **Comprobación final**: el worker devuelve la cadena del NPC con el plugin releído como última versión
+  (`projectedChains`), el estudio la pasa por el mapa de control con los FaceGen del perfil y la
+  exportación solo se da por buena si ya no hay `FaceGenRecordMismatch` y los datos faciales son del mod
+  de X (`FaceSourcesConsistent`). `readyForGame: false`, `inGameVerified: false`.
+
+Pruebas: `test_control_map.cpp` (`[resolution]`), `test_easy_mod.cpp` (`[resolution]`),
+`FaceResolutionExportTests.cs` (plugins sintéticos) y el escenario de arnés `face-resolution`.
 
 ## Todo el perfil
 
@@ -67,7 +112,20 @@ tarda unos 38 s en Debug; ver `docs/plans/next-generation-development.md`.
   registro; con cabezas High Poly, esculpidas o de RaceMenu suele ser «no comparable» y el aviso se basa
   solo en la procedencia (mods distintos ≠ incompatibles con certeza; el texto lo dice).
 - Las versiones del registro se comparan por los campos que rastrea el worker; un cambio en un campo no
-  rastreado no mueve el control.
+  rastreado no mueve el control. Hasta la versión 7 del extractor los colores (QNAM, colores de TINC)
+  tenían todos la misma huella, así que un cambio solo de tono de piel o de color de tinte no se veía;
+  corregido (el catálogo se reconstruye solo).
+- «Copiado» significa valor idéntico por huella, no que el autor lo copiara: dos mods que fijan por
+  separado el mismo valor también cuentan como copia del primero.
+- Si quien escribe el valor es el mod del FaceGen efectivo, el valor es suyo aunque coincida con el de
+  una versión anterior (un replacer que conserva morphs vanilla hizo su FaceGen con ellos); solo se
+  atribuye por copia cuando lo escribe otro mod.
+- Cuando el FaceGen efectivo es el del juego (BSA), la resolución puede ser «Usar el rostro de
+  «Skyrim.esm»»: devuelve la cara al registro vanilla, que es la que dibuja ese FaceGen, y deshace los
+  cambios faciales del otro mod (p. ej. las piezas de cabeza que corrige USSEP). Revísalo antes de usarlo.
+- La resolución asistida no comprueba que la cara de X sea la que quieres, solo que registro y FaceGen
+  vuelvan a ser del mismo mod; lo que AI Overhaul (u otro) cambiaba en esos campos se pierde (aparece
+  como `FaceReplaced`). Un plugin posterior que vuelva a cambiar el NPC ganará al parche.
 - Los BSA se atribuyen al mod que aporta el archivo `.bsa`; entre BSA el orden lo decide el
   `AssetResolver` (orden de plugins / INI), igual que el resto del estudio.
 - Plugins sin proveedor en MO2 (fuera del load order) aparecen con mod vacío.

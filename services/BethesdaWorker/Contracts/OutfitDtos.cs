@@ -128,6 +128,20 @@ public sealed record ExportResponse
 
     /// <summary>What the worker cannot check: still to do by hand inside the game.</summary>
     public IReadOnlyList<string> PendingVerification { get; init; } = [];
+
+    /// <summary>
+    /// Face resolutions (FaceAssignment.CopyFaceFrom): per NPC, the override chain as it will be with the
+    /// written plugin loaded last, computed from the re-read plugin. The studio feeds it to the control map.
+    /// </summary>
+    public IReadOnlyList<ProjectedChain> ProjectedChains { get; init; } = [];
+}
+
+/// <summary>An NPC's override chain with an exported plugin appended as its winning version.</summary>
+public sealed record ProjectedChain
+{
+    public required string Npc { get; init; }
+    public required IReadOnlyList<OverrideEntry> Overrides { get; init; }
+    public required IReadOnlyList<FieldConflict> Conflicts { get; init; }
 }
 
 /// <summary>The complete face of an NPC as the export writes it (NAM9, NAMA, NAM7, QNAM, HCLF, tints).</summary>
@@ -180,6 +194,12 @@ public sealed record FaceGenProvenance
     /// installed above all of them in MO2, or the game shows their head with the new record.
     /// </summary>
     public IReadOnlyList<string> InstallAbove { get; init; } = [];
+
+    /// <summary>
+    /// Mode "source-facegen" (FaceAssignment.CopyFaceFrom): the MO2 mod whose FaceGen the game already
+    /// uses for this NPC, as the studio located it. It must be the mod that provides the source plugin.
+    /// </summary>
+    public string? EffectiveFaceGenMod { get; init; }
 }
 
 public sealed record FaceAssignment
@@ -211,6 +231,15 @@ public sealed record FaceAssignment
     /// record (UnauthorizedNpcChange otherwise). Null keeps the previous behavior (the whole face).
     /// </summary>
     public IReadOnlyList<string>? RequestedFields { get; init; }
+
+    /// <summary>
+    /// Assisted resolution («Usar el rostro de X»): copy the face fields listed in OnlyFields ("PNAM",
+    /// "NAM9", "NAMA", "TINT", "HCLF", "FTST", "QNAM", "NAM7") from this plugin's version of the record onto
+    /// the winning record, which keeps every other field. No FaceGen is generated or copied (FaceGen.Mode
+    /// "source-facegen": the source mod's FaceGen already wins in MO2), and the plugin declares the
+    /// source and the winning plugins as masters so it loads after both.
+    /// </summary>
+    public string? CopyFaceFrom { get; init; }
 }
 
 public sealed record ExportFaceOverhaulRequest

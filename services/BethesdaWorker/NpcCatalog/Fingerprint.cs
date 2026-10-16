@@ -55,6 +55,10 @@ internal static class Fingerprint
             case FormKey fk:
                 sb.Append(fk.ToString());
                 return;
+            // Not a Mutagen getter: without this every color (QNAM, TINC) had the same fingerprint.
+            case System.Drawing.Color color:
+                sb.Append('#').Append(color.ToArgb().ToString("X8", CultureInfo.InvariantCulture));
+                return;
             case IFormLinkGetter link:
                 sb.Append(link.FormKeyNullable?.ToString() ?? "null");
                 return;
