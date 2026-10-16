@@ -706,14 +706,19 @@ struct Stress : std::enable_shared_from_this<Stress> {
           QFile tint(QDir(mod_dir).filePath(qs(text::data_path_key(recipe->facegen_tint_path)).replace('\\', '/')));
           self->check(!tint.exists(), "no FaceTint exported for a hair color edit");
           QFile manifest(QDir(mod_dir).filePath("manifest.json"));
-          QStringList changed;
+          QStringList changed, above;
           if (manifest.open(QIODevice::ReadOnly)) {
             const auto faces = QJsonDocument::fromJson(manifest.readAll()).object().value("faces").toArray();
             for (const auto& f : faces) {
               for (const auto& field : f.toObject().value("changedFields").toArray()) changed << field.toString();
+              for (const auto& mod : f.toObject().value("installAbove").toArray()) above << mod.toString();
             }
           }
           self->check(changed == QStringList{"HCLF"}, "record fields changed by the plugin: " + changed.join(", ") + " (expected HCLF)");
+          // The mod must win over every MO2 mod with this NPC's loose FaceGen/FaceTint (archives never compete).
+          const auto competitors = self->appearance()->face_compatibility().value("provenance").toMap().value("faceGenCompetitors").toStringList();
+          self->check(above == competitors, "manifest installAbove = MO2 mods with the NPC's loose FaceGen: [" + above.join(", ") + "] (diagnosis: [" +
+                                                competitors.join(", ") + "])");
           self->step();
         };
         self->after(100, *wait);
@@ -1220,10 +1225,20 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->appearance()->applyDonor(donor, QStringLiteral("donante"));
         self->after(500, [self] { self->then_idle(); });
       });
+      steps.push_back([self] {
+        // The toolbar shows where the face comes from; regression: it read properties that did not exist.
+        if (!self->head_part_skip) self->check(self->appearance()->face_source() == QStringLiteral("Donante: donante"), "face source shown: " + self->appearance()->face_source());
+        self->step();
+      });
       const auto dir = QDir(work_dir).filePath(QStringLiteral("donor-%1").arg(QDateTime::currentMSecsSinceEpoch()));
       steps.push_back([self, dir] {
         if (self->head_part_skip) { self->step(); return; }
         self->export_face_and_check(dir, QStringLiteral("SNS_Donor.esp"), {});
+      });
+      steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+      steps.push_back([self] {
+        self->check(self->appearance()->face_source().isEmpty(), "reset clears the face source: '" + self->appearance()->face_source() + "'");
+        self->step();
       });
     } else if (name == "body-export") {
       // Body tab: height alone is a minimal export (NAM6 only, no FaceGen); weight changes the head
@@ -1440,6 +1455,53 @@ struct Stress : std::enable_shared_from_this<Stress> {
         self->then_idle();
       });
       steps.push_back([self] { self->appearance()->resetFace(); self->then_idle(); });
+    } else if (name == "armor-mod-filter") {
+      // Outfit catalog filtered by mod: the plugin list comes from the index, the selector shows it, and
+      // choosing a plugin returns exactly the armors that plugin defines or overrides.
+      auto search = [](const std::shared_ptr<Stress>& self, const QString& plugin, std::function<void()> next) {
+        auto done = std::make_shared<QMetaObject::Connection>();
+        *done = QObject::connect(self->studio, &StudioController::armorResultsChanged, self->studio, [done, next] {
+          QObject::disconnect(*done);
+          next();
+        });
+        self->studio->searchArmors({}, 0, plugin);
+      };
+      auto all_total = std::make_shared<int>(0);
+      steps.push_back([self, search, all_total] {
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, search, all_total] {
+          if (self->studio->armor_plugins().isEmpty()) { self->after(200, *wait); return; }
+          search(self, {}, [self, all_total] { *all_total = self->studio->armor_total(); self->step(); });
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self, search, all_total] {
+        const auto plugins = self->studio->armor_plugins();
+        self->check(!plugins.isEmpty(), QStringLiteral("%1 plugin(s) with armors listed for the mod filter").arg(plugins.size()));
+        QObject* box = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String("armorModFilter")) { box = o; break; }
+        }
+        self->check(box && box->property("count").toInt() == plugins.size() + 1, "catalog selector lists every plugin plus 'Todos los mods'");
+        // A plugin with several armors, preferring the outfit mod of the test NPCs.
+        QVariantMap pick = plugins.front().toMap();
+        for (const auto& p : plugins) {
+          const auto m = p.toMap();
+          if (m.value("plugin").toString().contains(QLatin1String("Runes of Roots"), Qt::CaseInsensitive)) { pick = m; break; }
+          if (m.value("armors").toInt() > pick.value("armors").toInt() && m.value("armors").toInt() < 200) pick = m;
+        }
+        const auto plugin = pick.value("plugin").toString();
+        const int expected = pick.value("armors").toInt();
+        self->log("filter by " + plugin + " (" + pick.value("mod").toString() + ")");
+        search(self, plugin, [self, search, plugin, expected, all_total] {
+          self->check(self->studio->armor_total() == expected,
+                      QStringLiteral("%1: %2 armor(s) (index says %3)").arg(plugin).arg(self->studio->armor_total()).arg(expected));
+          search(self, {}, [self, all_total] {
+            self->check(self->studio->armor_total() == *all_total, QStringLiteral("'Todos los mods' back to %1 armor(s)").arg(*all_total));
+            self->step();
+          });
+        });
+      });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {
         hair(QColor("#E6C280"));
@@ -1467,7 +1529,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "armor-mod-filter", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

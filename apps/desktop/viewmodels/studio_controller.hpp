@@ -40,6 +40,9 @@ class StudioController : public QObject {
   Q_PROPERTY(VariantListModel* armorResults READ armor_results CONSTANT)
   Q_PROPERTY(int npcTotal READ npc_total NOTIFY npcResultsChanged)
   Q_PROPERTY(int armorTotal READ armor_total NOTIFY armorResultsChanged)
+  // Plugins that define or override armors, for the catalog's mod filter: {plugin, mod, armors},
+  // sorted by MO2 mod name.
+  Q_PROPERTY(QVariantList armorPlugins READ armor_plugins NOTIFY armorPluginsChanged)
   Q_PROPERTY(QString instancePath READ instance_path NOTIFY instanceChanged)
   Q_PROPERTY(QString instanceName READ instance_name NOTIFY instanceChanged)
   Q_PROPERTY(QStringList profiles READ profiles NOTIFY instanceChanged)
@@ -73,6 +76,7 @@ class StudioController : public QObject {
   [[nodiscard]] VariantListModel* armor_results() const { return armor_results_; }
   [[nodiscard]] int npc_total() const { return npc_total_; }
   [[nodiscard]] int armor_total() const { return armor_total_; }
+  [[nodiscard]] QVariantList armor_plugins() const { return armor_plugins_; }
   [[nodiscard]] QString instance_path() const { return instance_path_; }
   [[nodiscard]] QString instance_name() const { return instance_name_; }
   [[nodiscard]] QStringList profiles() const { return profiles_; }
@@ -117,6 +121,7 @@ class StudioController : public QObject {
   void summaryChanged();
   void npcResultsChanged();
   void armorResultsChanged();
+  void armorPluginsChanged();
   void npcChanged();
   // selectNpc could not load the NPC (unknown FormKey, worker error); the message says why.
   void npcLoadFailed(const QString& message);
@@ -147,6 +152,7 @@ class StudioController : public QObject {
   VariantListModel* npc_results_;
   VariantListModel* armor_results_;
   QList<QVariantMap> all_mod_rows_;
+  QVariantList armor_plugins_;
   QHash<QString, QVariantMap> plugin_counts_;  // plugin (lower-case) -> {npcRecords, armorRecords, outfitRecords}
   int npc_total_ = 0;
   int armor_total_ = 0;
