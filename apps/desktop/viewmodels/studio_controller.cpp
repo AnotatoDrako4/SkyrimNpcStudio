@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QPointer>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThreadPool>
@@ -685,9 +686,28 @@ QVariantMap control_report_map(const appearance::ControlReport& report) {
 
 }  // namespace
 
-appearance::ControlInputs StudioController::control_inputs(const QVariantMap& details) const {
+namespace {
+
+// Whether the NPC should have a FaceGen of its own (see StudioController::facegen_expected).
+bool expects_facegen(const QSet<QString>& races_with_facegen, const QVariantMap& details) {
+  const auto summary = details.value("summary").toMap();
+  if (details.contains("templateFlags")) {
+    if (!details.value("template").toMap().isEmpty() && details.value("templateFlags").toStringList().contains("Traits")) return false;
+  } else if (summary.value("usesTemplate").toBool()) {
+    return false;  // scan entry without details: templated unique NPCs take their traits from the template
+  }
+  if (!details.value("headParts").toList().isEmpty()) return true;
+  const auto race = summary.value("raceFormKey").toString().toLower();
+  return races_with_facegen.isEmpty() || race.isEmpty() || races_with_facegen.contains(race);
+}
+
+// Control map inputs from getNpc details. Reads only the (immutable) profile snapshot and the given race
+// set, so the profile scan runs it on a worker thread; it may read the FaceGen file (head part check).
+appearance::ControlInputs build_control_inputs(const SnapshotPtr& snapshot, const QSet<QString>& races_with_facegen,
+                                               const QVariantMap& details) {
   appearance::ControlInputs in;
-  if (!snapshot_) return in;
+  if (!snapshot) return in;
+  const auto& snapshot_ = snapshot;
   for (const auto& o : details.value("overrides").toList()) {
     const auto e = o.toMap();
     appearance::OverrideLink link;
@@ -725,7 +745,7 @@ appearance::ControlInputs StudioController::control_inputs(const QVariantMap& de
   const auto facegen = details.value("faceGen").toMap();
   in.facegen = source(facegen.value("geometryPath").toString());
   in.facetint = source(facegen.value("tintPath").toString());
-  in.facegen_expected = facegen_expected(details);
+  in.facegen_expected = expects_facegen(races_with_facegen, details);
 
   // When another mod than the FaceGen's set the head parts: are all of them in the FaceGen? Its shapes
   // are named after the head part EditorIDs.
@@ -751,17 +771,13 @@ appearance::ControlInputs StudioController::control_inputs(const QVariantMap& de
   return in;
 }
 
-bool StudioController::facegen_expected(const QVariantMap& details) const {
-  const auto summary = details.value("summary").toMap();
-  if (details.contains("templateFlags")) {
-    if (!details.value("template").toMap().isEmpty() && details.value("templateFlags").toStringList().contains("Traits")) return false;
-  } else if (summary.value("usesTemplate").toBool()) {
-    return false;  // scan entry without details: templated unique NPCs take their traits from the template
-  }
-  if (!details.value("headParts").toList().isEmpty()) return true;
-  const auto race = summary.value("raceFormKey").toString().toLower();
-  return races_with_facegen_.isEmpty() || race.isEmpty() || races_with_facegen_.contains(race);
+}  // namespace
+
+appearance::ControlInputs StudioController::control_inputs(const QVariantMap& details) const {
+  return build_control_inputs(snapshot_, races_with_facegen_, details);
 }
+
+bool StudioController::facegen_expected(const QVariantMap& details) const { return expects_facegen(races_with_facegen_, details); }
 
 void StudioController::refresh_appearance_control() {
   QElapsedTimer timer;
@@ -842,7 +858,10 @@ QVariantMap StudioController::appearance_scan() const {
           {"errors", s.errors},       {"listingMs", s.listing_ms},
           {"maxBlockMs", s.max_block_us / 1000.0}, {"maxBlockWhere", s.max_block_where}, {"analysisMs", s.analysis_us / 1000},  {"resolutions", s.resolutions},
           {"elapsedMs", s.running ? s.timer.elapsed() : s.elapsed_ms},
-          {"counts", counts},         {"codes", codes},         {"rows", s.rows}};
+          {"counts", counts},         {"codes", codes},
+          // The rows are published once, when the scan ends: handing QML the growing list on every progress
+          // update made it rebuild the list and blocked the interface (~200 ms on the test profile).
+          {"rows", s.running ? QVariantList{} : s.rows}};
 }
 
 bool StudioController::prepareFaceResolution() {
@@ -965,7 +984,6 @@ void StudioController::scan_next() {
 void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& scan, const QString& form_key) {
   worker_->call(method::kGetNpc, Json{{"formKey", ss(form_key)}}, 30s, this, [this, scan](const Json& r) {
     if (scan != scan_ || !scan->running) return;
-    --scan->in_flight;
     QElapsedTimer block;
     block.start();
     auto details = to_map(r);
@@ -976,9 +994,30 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
       overrides << entry;
     }
     details["overrides"] = overrides;
-    scan_record(details);
     scan->note_block(block, "getNpc answer");
-    scan_next();
+    // The analysis (which may read a FaceGen out of a BSA) runs on a worker thread; the row is recorded
+    // back on this thread. The request stays "in flight" until then, so the scan cannot finish early.
+    QThreadPool::globalInstance()->start([self = QPointer<StudioController>(this), scan, details, snapshot = snapshot_,
+                                          races = races_with_facegen_] {
+      QElapsedTimer analysis;
+      analysis.start();
+      auto report = std::make_shared<const appearance::ControlReport>(
+          appearance::analyze_appearance_control(build_control_inputs(snapshot, races, details)));
+      const qint64 us = analysis.nsecsElapsed() / 1000;
+      QMetaObject::invokeMethod(
+          self.data(),
+          [self, scan, details, report, us] {
+            if (!self || scan != self->scan_ || !scan->running) return;
+            --scan->in_flight;
+            QElapsedTimer record;
+            record.start();
+            self->scan_record_report(details, *report);
+            scan->analysis_us += us;
+            scan->note_block(record, "recording a row");
+            self->scan_next();
+          },
+          Qt::QueuedConnection);
+    });
   }, [this, scan, form_key](int, const QString& message, const Json&) {
     if (scan != scan_ || !scan->running) return;
     --scan->in_flight;
@@ -989,15 +1028,15 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
 }
 
 void StudioController::scan_record(const QVariantMap& details) {
-  auto& scan = *scan_;
   QElapsedTimer analysis;
   analysis.start();
-  const struct Account {
-    AppearanceScan& scan;
-    QElapsedTimer& t;
-    ~Account() { scan.analysis_us += t.nsecsElapsed() / 1000; }
-  } account{scan, analysis};
   const auto report = appearance::analyze_appearance_control(control_inputs(details));
+  scan_->analysis_us += analysis.nsecsElapsed() / 1000;
+  scan_record_report(details, report);
+}
+
+void StudioController::scan_record_report(const QVariantMap& details, const appearance::ControlReport& report) {
+  auto& scan = *scan_;
   QString worst = QStringLiteral("ok");
   QString message;
   QStringList codes;
