@@ -28,6 +28,8 @@
 #include "viewmodels/studio_controller.hpp"
 #include "components/appearance_stress.hpp"
 #include "components/forge_preview_check.hpp"
+#include "components/workbench_check.hpp"
+#include "viewmodels/workbench_state.hpp"
 #include "components/viewport_verifier.hpp"
 
 namespace {
@@ -170,6 +172,12 @@ int main(int argc, char* argv[]) {
                                              "Check the Character Forge 3D preview with these models (';'-separated, loaded in order).",
                                              "files");
   const QCommandLineOption forge_capture_opt("forge-capture", "Folder for the Character Forge preview captures.", "directory");
+  const QCommandLineOption workbench_opt("workbench-check",
+                                         "Drive the panel layout, focus and scale with real input; captures and expect.json here.",
+                                         "directory");
+  const QCommandLineOption workbench_expect_opt("workbench-expect",
+                                                "Check that the layout an earlier --workbench-check stored came back.", "file");
+  cli.addOptions({workbench_opt, workbench_expect_opt});
   cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, workspace_opt, size_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
                   second_npc_opt, stress_work_opt, crash_opt, forge_preview_opt, forge_capture_opt});
   cli.process(app);
@@ -212,7 +220,8 @@ int main(int argc, char* argv[]) {
 
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
   const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
-                         cli.isSet(stress_opt) || cli.isSet(forge_preview_opt);
+                         cli.isSet(stress_opt) || cli.isSet(forge_preview_opt) ||
+                         cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt);
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
@@ -264,6 +273,12 @@ int main(int argc, char* argv[]) {
         if (studio.scene()->parts().isEmpty()) { finish(5); return; }
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         const auto then_stress = [&, window] {
+          if (cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt)) {
+            auto* workbench = engine.singletonInstance<sns::app::WorkbenchState*>("SkyrimNpcStudio", "Workbench");
+            sns::app::run_workbench_check(window, workbench, cli.value(workbench_opt), cli.value(workbench_expect_opt),
+                                          [&](bool ok) { finish(ok ? 0 : 11); });
+            return;
+          }
           if (!cli.isSet(stress_opt)) { finish(0); return; }
           auto scenarios = cli.value(stress_opt).split(',', Qt::SkipEmptyParts);
           if (scenarios == QStringList{"all"}) scenarios = sns::app::appearance_stress_scenarios();

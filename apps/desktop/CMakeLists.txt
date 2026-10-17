@@ -6,6 +6,7 @@ qt_add_executable(SkyrimNpcStudio WIN32
   components/viewport_verifier.cpp components/viewport_verifier.hpp
   components/appearance_stress.cpp components/appearance_stress.hpp
   components/forge_preview_check.cpp components/forge_preview_check.hpp
+  components/workbench_check.cpp components/workbench_check.hpp
   diagnostics/crash_diagnostics.cpp diagnostics/crash_diagnostics.hpp
   viewmodels/json_bridge.hpp
   viewmodels/mo2_snapshot.hpp
