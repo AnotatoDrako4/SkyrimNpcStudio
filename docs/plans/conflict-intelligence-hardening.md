@@ -126,6 +126,25 @@ Lecturas redundantes: el FaceGen se lee una vez por NPC y solo si las piezas de 
 el del FaceGen; la ubicación (`locate`) se hace dos veces por NPC de varias versiones (listado y análisis),
 coste por debajo de la medición. No se optimiza sin medición que lo justifique.
 
+## Sprint 2 — revisión de diseño de loop y siguientes tareas
+
+Revisión con `loop-design-check`: las tareas son puntuales (no semanales), así que **no** se monta un loop
+autónomo; cada una lleva un criterio decidible, sus límites y un juez externo, con un tope de 3 intentos.
+
+| Tarea | Criterio | Resultado |
+|---|---|---|
+| B. Análisis del escaneo fuera del hilo de la interfaz | bloqueo máx. < 150 ms **y** filas idénticas a la referencia `out\hardening6` **y** ctest/.NET en verde **y** Bolli 44/44 | **cumplido en el intento 2**: 112 ms (antes 798 → 214 → 205), 683/683 filas idénticas, escaneo 20,5 s (antes 37,0), ctest 162/162, exportación 77/77, worker 37/37, Bolli y Brand-Shei 44/44 |
+| A. Caché del índice segura entre procesos | prueba nueva que falla antes y pasa después; worker en verde | **cumplido**: PR #23 (apilado sobre #20, porque `main` no compila sin él por NU1902); la prueba fallaba con `SQLite Error 19` y ahora pasa; worker 37/37, exportación 66/66 en esa base |
+| C. Verificación en Skyrim | no automatizable: decide una persona | kit preparado: `out\skyrim-verification-kit\` (dos parches con SHA-256) y `docs/SKYRIM_VERIFICATION_FACE_RESOLUTION.md` |
+
+B en detalle: el cálculo de las entradas del mapa pasa a funciones sin estado de la clase
+(`build_control_inputs`, `expects_facegen`), que leen solo el snapshot inmutable y una copia del conjunto
+de razas; el escaneo analiza cada NPC de varias versiones en el pool de hilos y registra la fila en el hilo
+de la interfaz (la petición sigue «en vuelo» hasta entonces). El primer intento dejó el bloqueo en
+"registrar una fila" (214 ms): cada aviso de progreso entregaba a QML la lista de filas creciente; ahora las
+filas se publican una vez al terminar. `analysisMs` suma el tiempo de todos los hilos (puede superar el
+tiempo total).
+
 ## Propuesta (no implementada): Multi-NPC Conflict Resolution Engine
 
 Basada en el flujo individual validado. Objetivo: elegir varios NPC con conflictos parecidos, decidir el
