@@ -165,7 +165,6 @@ Item {
 
             CharacterViewport {
                 id: charViewport
-                objectName: "creatorViewport"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 studio: root.studio
@@ -187,18 +186,27 @@ Item {
 
                     Button {
                         text: qsTr("↶ Deshacer")
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: implicitWidth
+                        Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
                         enabled: root.studio.appearance.canUndo
                         onClicked: root.studio.appearance.undo()
                     }
 
                     Button {
                         text: qsTr("↷ Rehacer")
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: implicitWidth
+                        Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
                         enabled: root.studio.appearance.canRedo
                         onClicked: root.studio.appearance.redo()
                     }
 
                     Button {
                         text: qsTr("Restablecer")
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: implicitWidth
+                        Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
                         onClicked: root.studio.appearance.resetFace()
                     }
 
