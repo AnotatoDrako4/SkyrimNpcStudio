@@ -161,6 +161,13 @@ revisar); los 108 desajustes no se han revisado uno a uno.
 | Mapa de un NPC al seleccionarlo | 1,7–2,7 ms; 37 ms si lee un FaceGen de un BSA (Shady Sam) |
 | Motor, 400 versiones × 300 mods | 11 ms |
 
+## Versión 1.1.0
+
+La rama `release/v1.1` integra #8 → #19 y #20 con la versión 1.1.0; verificación completa (compilación
+desde cero, ctest 162/162, worker 37/37, exportación 75/75, cuatro arneses en el perfil real, ZIP
+reproducible, app empaquetada contra el perfil real, perfil y `Data` sin cambios) y problema conocido
+de la caché del índice en `docs/RELEASE_NOTES_V1.1.md`.
+
 Siguiente mejora de rendimiento si hiciera falta: un método por lotes en el worker (cadena de varios
 NPC por llamada) y leer solo el bloque de nombres del NIF en vez del archivo completo.
 
