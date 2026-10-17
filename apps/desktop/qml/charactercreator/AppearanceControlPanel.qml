@@ -62,7 +62,7 @@ ScrollView {
             text: qsTr("Quién controla la apariencia")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 13
+            font.pixelSize: Theme.fs(13)
         }
 
         Text {
@@ -72,7 +72,7 @@ ScrollView {
             visible: !root.hasMap
             text: qsTr("Selecciona un NPC para ver qué mod controla cada parte de su apariencia.")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
         }
 
@@ -101,7 +101,7 @@ ScrollView {
                         : qsTr("Registro y FaceGen encajan")
                     color: root.severityColor(root.map.worst)
                     font.bold: true
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.normal
                     wrapMode: Text.WordWrap
                 }
                 Text {
@@ -109,7 +109,7 @@ ScrollView {
                     text: qsTr("Datos faciales: %1 (mod «%2»)").arg(root.map.facePlugin || "?").arg(root.map.faceMod || "?")
                           + (root.map.faceVia ? qsTr(", copiados por %1").arg(root.map.faceVia) : "")
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                     wrapMode: Text.WrapAnywhere
                 }
                 Text {
@@ -119,7 +119,7 @@ ScrollView {
                         : root.studio.appearance.analysing ? qsTr("Midiendo el FaceGen frente al registro…")
                         : qsTr("FaceGen frente al registro: no comparable (otras formas o sin FaceGen)")
                     color: Theme.textDim
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
                 }
             }
@@ -148,7 +148,7 @@ ScrollView {
                         Layout.fillWidth: true
                         text: root.severityText(modelData.severity) + " · " + modelData.message
                         color: root.severityColor(modelData.severity)
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         wrapMode: Text.WordWrap
                     }
                     Text {
@@ -156,7 +156,7 @@ ScrollView {
                         visible: (modelData.consequence || "").length > 0
                         text: qsTr("En el juego: ") + modelData.consequence
                         color: Theme.textDim
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.micro
                         wrapMode: Text.WordWrap
                     }
                     Text {
@@ -164,7 +164,7 @@ ScrollView {
                         visible: (modelData.suggestion || "").length > 0
                         text: "→ " + modelData.suggestion
                         color: Theme.text
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.micro
                         wrapMode: Text.WordWrap
                     }
                 }
@@ -193,13 +193,13 @@ ScrollView {
                     text: qsTr("Resolución asistida")
                     color: Theme.accent
                     font.bold: true
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
                 Text {
                     Layout.fillWidth: true
                     text: root.resolution ? root.resolution.detail : ""
                     color: Theme.text
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
                 }
                 Text {
@@ -207,7 +207,7 @@ ScrollView {
                     text: root.resolution ? qsTr("Campos: %1 · se carga después de %2")
                                               .arg(root.resolution.fields.join(", ")).arg(root.resolution.loadAfter.join(" y ")) : ""
                     color: Theme.textDim
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WrapAnywhere
                 }
                 Button {
@@ -218,7 +218,7 @@ ScrollView {
                     contentItem: Text {
                         text: parent.text
                         color: Theme.text
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         elide: Text.ElideMiddle
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -230,7 +230,7 @@ ScrollView {
                     text: qsTr("Abre el asistente de Easy Mod: comprobaciones y creación de un mod nuevo en la carpeta que elijas. "
                              + "No cambia el orden de carga, MO2 ni Skyrim/Data.")
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
                 }
             }
@@ -244,7 +244,7 @@ ScrollView {
             text: qsTr("Partes de la apariencia")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 12
+            font.pixelSize: Theme.normal
         }
         Repeater {
             model: root.hasMap ? root.map.components : []
@@ -259,7 +259,7 @@ ScrollView {
                     Text {
                         text: modelData.label
                         color: Theme.text
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         Layout.preferredWidth: 150
                         elide: Text.ElideRight
                     }
@@ -269,7 +269,7 @@ ScrollView {
                             ? modelData.plugin + "  «" + modelData.mod + "»"
                             : (modelData.mod ? "«" + modelData.mod + "» " : "") + root.kindText(modelData.kind)
                         color: modelData.kind === "missing" ? Theme.warn : Theme.textDim
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         wrapMode: Text.WrapAnywhere
                     }
                 }
@@ -279,7 +279,7 @@ ScrollView {
                     visible: (modelData.via || "").length > 0
                     text: qsTr("copiado por: ") + (modelData.via || "")
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WrapAnywhere
                 }
                 Text {
@@ -288,7 +288,7 @@ ScrollView {
                     visible: (modelData.overridden || []).length > 0
                     text: qsTr("anula a: ") + (modelData.overridden || []).join(", ")
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WrapAnywhere
                 }
             }
@@ -302,7 +302,7 @@ ScrollView {
             text: qsTr("Todo el perfil")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 12
+            font.pixelSize: Theme.normal
         }
         RowLayout {
             Layout.fillWidth: true
@@ -319,7 +319,7 @@ ScrollView {
                 Layout.fillWidth: true
                 text: root.scanStatus()
                 color: Theme.textDim
-                font.pixelSize: 10
+                font.pixelSize: Theme.micro
                 wrapMode: Text.WordWrap
             }
         }
@@ -330,7 +330,7 @@ ScrollView {
             visible: root.scanCodes().length > 0
             text: root.scanCodes()
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.micro
             wrapMode: Text.WordWrap
         }
         Repeater {
@@ -352,7 +352,7 @@ ScrollView {
                         Layout.fillWidth: true
                         text: root.severityText(modelData.worst) + " · " + modelData.name + "  [" + modelData.formKey + "]"
                         color: root.severityColor(modelData.worst)
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         wrapMode: Text.WrapAnywhere
                     }
                     Text {
@@ -360,7 +360,7 @@ ScrollView {
                         text: qsTr("datos faciales «%1» · FaceGen «%2» · %3").arg(modelData.faceMod).arg(modelData.faceGenMod || qsTr("ninguno"))
                                   .arg(modelData.codes.join(", "))
                         color: Theme.textDim
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.micro
                         wrapMode: Text.WrapAnywhere
                     }
                 }
@@ -390,7 +390,7 @@ ScrollView {
             text: qsTr("Análisis en archivos del perfil (registro, MO2 y FaceGen), sin cambiar nada: el orden de carga y las "
                      + "prioridades de MO2 no se tocan. Pendiente de verificación dentro de Skyrim.")
             color: Theme.textMuted
-            font.pixelSize: 10
+            font.pixelSize: Theme.micro
             wrapMode: Text.WordWrap
         }
     }

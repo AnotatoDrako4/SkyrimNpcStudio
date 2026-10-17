@@ -51,6 +51,9 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/KeyValue.qml
     qml/components/IssueList.qml
     qml/components/StatusBadge.qml
+    qml/components/SplitHandleBar.qml
+    qml/components/WorkbenchSplit.qml
+    qml/components/ScalePreferencesDialog.qml
     qml/charactercreator/FaceSliderGroup.qml
     qml/charactercreator/FaceProtectionCard.qml
     qml/charactercreator/FaceCustomizer.qml

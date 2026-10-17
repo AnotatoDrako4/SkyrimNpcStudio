@@ -18,7 +18,7 @@ Dialog {
 
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: 620
+    width: Theme.px(620)
     title: standalone.checked ? qsTr("Guardar mod — outfit independiente") : qsTr("Guardar mod — parche de atuendo")
     standardButtons: Dialog.Close
 
@@ -242,7 +242,7 @@ Dialog {
         title: qsTr("Instalación asistida en MO2")
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: 480
+        width: Theme.px(480)
         standardButtons: Dialog.Ok | Dialog.Cancel
         ColumnLayout {
             spacing: 8

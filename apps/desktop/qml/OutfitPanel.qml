@@ -44,7 +44,7 @@ ScrollView {
             else if (action === "duplicate") root.outfit.duplicatePreset(presetId, name)
             else root.outfit.renamePreset(presetId, name)
         }
-        TextField { id: presetNameField; width: 320; placeholderText: qsTr("Nombre del conjunto") }
+        TextField { id: presetNameField; width: Theme.px(320); placeholderText: qsTr("Nombre del conjunto") }
     }
 
     Dialog {
@@ -70,7 +70,7 @@ ScrollView {
         title: qsTr("Configuración de material pendiente: ") + targetPieceName
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: 440
+        width: Theme.px(440)
         standardButtons: Dialog.Close
 
         property string targetPieceFormKey: ""
@@ -444,7 +444,7 @@ ScrollView {
                                 Text {
                                     anchors.centerIn: parent
                                     text: root.getSlotIcon(modelData.slots)
-                                    font.pixelSize: 13
+                                    font.pixelSize: Theme.fs(13)
                                 }
                             }
 

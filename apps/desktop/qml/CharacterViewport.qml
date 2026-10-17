@@ -249,7 +249,7 @@ Rectangle {
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     text: root.previewMode ? "🥋" : "🎭"
-                    font.pixelSize: 36
+                    font.pixelSize: Theme.fs(36)
                 }
 
                 Text {
@@ -396,7 +396,7 @@ Rectangle {
             anchors.right: inspectorPanel.visible ? inspectorPanel.left : parent.right
             anchors.top: parent.top
             anchors.bottom: bottomStatusRow.top
-            width: 220
+            width: Theme.px(220)
             color: Qt.rgba(0.09, 0.10, 0.12, 0.94)
             border.color: Theme.borderSubtle
             border.width: 1
@@ -464,7 +464,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: bottomStatusRow.top
-            width: 320
+            width: Theme.px(320)
             color: Qt.rgba(0.09, 0.10, 0.12, 0.95)
             border.color: Theme.borderSubtle
             border.width: 1

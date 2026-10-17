@@ -137,7 +137,7 @@ Item {
                         text: "✕"
                         implicitWidth: 20
                         implicitHeight: 20
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.micro
                         onClicked: { searchField.text = ""; root.search() }
                     }
                 }
@@ -409,7 +409,7 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             text: root.getSlotIcon(card.slots, card.armorType)
-                            font.pixelSize: 16
+                            font.pixelSize: Theme.title
                         }
                     }
 
@@ -530,7 +530,7 @@ Item {
                             text: "👁"
                             implicitHeight: 24
                             implicitWidth: 26
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.small
                             onClicked: root.previewRequested(card.formKey)
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Ver en el visor 3D")
@@ -541,7 +541,7 @@ Item {
                             highlighted: true
                             implicitHeight: 24
                             implicitWidth: 26
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.fs(13)
                             font.bold: true
                             onClicked: root.studio.outfit.addPiece(root.studio.armorResults.get(card.index), true)
                             ToolTip.visible: hovered
@@ -623,7 +623,7 @@ Item {
                             Text {
                                 anchors.centerIn: parent
                                 text: root.getSlotIcon(gridCard.slots, gridCard.armorType)
-                                font.pixelSize: 18
+                                font.pixelSize: Theme.heading
                             }
                         }
 
@@ -641,7 +641,7 @@ Item {
                                 anchors.centerIn: parent
                                 text: "✦"
                                 color: Theme.smpBadgeText
-                                font.pixelSize: 9
+                                font.pixelSize: Theme.micro
                                 font.bold: true
                             }
                         }
@@ -687,7 +687,7 @@ Item {
                             text: qsTr("👁 3D")
                             Layout.fillWidth: true
                             implicitHeight: 22
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.micro
                             onClicked: root.previewRequested(gridCard.formKey)
                         }
 
@@ -696,7 +696,7 @@ Item {
                             highlighted: true
                             implicitWidth: 26
                             implicitHeight: 22
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.normal
                             font.bold: true
                             onClicked: root.studio.outfit.addPiece(root.studio.armorResults.get(gridCard.index), true)
                             ToolTip.visible: hovered
@@ -730,7 +730,7 @@ Item {
                     Text {
                         Layout.alignment: Qt.AlignHCenter
                         text: "🧥"
-                        font.pixelSize: 32
+                        font.pixelSize: Theme.fs(32)
                     }
 
                     Text {

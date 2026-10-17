@@ -23,7 +23,7 @@ Rectangle {
         Text {
             text: qsTr("Cámara:")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
         }
 
         Button {
@@ -108,7 +108,7 @@ Rectangle {
                     text: root.studio.appearance.faceSource
                     color: "#FFFFFF"
                     font.bold: true
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     elide: Text.ElideRight
                 }
             }

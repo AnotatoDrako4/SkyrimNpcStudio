@@ -15,23 +15,43 @@ ApplicationWindow {
     minimumHeight: 700
     visible: true
     color: Theme.bg
+    font.family: Theme.fontFamily
+    font.pixelSize: Theme.normal
     title: "Skyrim NPC Studio — Creative Workspace"
            + (studio.selectedProfile.length > 0 ? " [" + studio.instanceName + " / " + studio.selectedProfile + "]" : "")
            + (studio.outfit.dirty ? "  •" : "")
 
     Settings {
+        id: windowSettings
         category: "window"
         property alias x: window.x
         property alias y: window.y
         property alias width: window.width
         property alias height: window.height
-        property alias showBottom: bottomToggle.checked
-        property alias showLeft: leftToggle.checked
-        property alias showRight: rightToggle.checked
-        property alias advancedMode: modeSwitch.checked
+        property bool advancedMode: false
+    }
+    Connections {
+        target: Theme
+        function onAdvancedModeChanged() { windowSettings.advancedMode = Theme.advancedMode }
     }
 
     readonly property bool ready: studio.phase === StudioController.Ready
+
+    // Panels of the workspace on screen (each workspace keeps its own; see WorkbenchState).
+    readonly property var workspaceKeys: ["creator", "outfit", "forge"]
+    readonly property WorkspaceLayout layout: Workbench.layout(workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
+
+    // Show or hide one panel of the current workspace; showing one leaves the focused viewer.
+    function setPanel(which, shown) {
+        if (layout.maximized) {
+            layout.maximized = false
+            if (!shown)
+                return
+        }
+        if (which === "left") layout.leftVisible = shown
+        else if (which === "right") layout.rightVisible = shown
+        else layout.bottomVisible = shown
+    }
 
     // ---------------------------------------------------------------- DIÁLOGOS
     FileDialog {
@@ -84,7 +104,10 @@ ApplicationWindow {
         onAccepted: window.studio.forge.saveProject(selectedFolder.toString())
     }
 
-    Component.onCompleted: if (!ready) welcome.open()
+    Component.onCompleted: {
+        Theme.advancedMode = windowSettings.advancedMode
+        if (!ready) welcome.open()
+    }
 
     // ---------------------------------------------------------------- MENÚS
     menuBar: MenuBar {
@@ -141,9 +164,62 @@ ApplicationWindow {
         }
         Menu {
             title: qsTr("&Vista")
-            Action { id: leftToggle; text: qsTr("Panel de exploración"); checkable: true; checked: true }
-            Action { id: rightToggle; text: qsTr("Panel de propiedades"); checkable: true; checked: true }
-            Action { id: bottomToggle; text: qsTr("Consola y diagnósticos"); checkable: true; checked: false }
+            Action {
+                text: workspaceTabs.currentIndex === 2 ? qsTr("Panel de herramientas") : qsTr("Panel de exploración")
+                shortcut: "Ctrl+B"
+                checkable: true
+                checked: window.layout.leftVisible && !window.layout.maximized
+                onTriggered: window.setPanel("left", checked)
+            }
+            Action {
+                text: workspaceTabs.currentIndex === 2 ? qsTr("Panel contextual") : qsTr("Panel de propiedades")
+                shortcut: "Ctrl+Alt+B"
+                checkable: true
+                checked: window.layout.rightVisible && !window.layout.maximized
+                onTriggered: window.setPanel("right", checked)
+            }
+            Action {
+                text: qsTr("Consola y diagnósticos")
+                shortcut: "Ctrl+J"
+                checkable: true
+                checked: window.layout.bottomVisible && !window.layout.maximized
+                onTriggered: window.setPanel("bottom", checked)
+            }
+            Action {
+                text: qsTr("Enfocar el visor")
+                shortcut: "F11"
+                checkable: true
+                checked: window.layout.maximized
+                onTriggered: window.layout.maximized = checked
+            }
+            Action {
+                text: qsTr("Restablecer distribución")
+                onTriggered: window.layout.reset()
+            }
+            MenuSeparator {}
+            Menu {
+                title: qsTr("Escala de interfaz (%1 %)").arg(Workbench.uiScale)
+                Action { text: qsTr("Aumentar"); shortcut: StandardKey.ZoomIn; onTriggered: Workbench.zoomIn() }
+                Action { text: qsTr("Reducir"); shortcut: StandardKey.ZoomOut; onTriggered: Workbench.zoomOut() }
+                Action { text: qsTr("Restablecer (100 %)"); shortcut: "Ctrl+0"; onTriggered: Workbench.zoomReset() }
+            }
+            Menu {
+                title: qsTr("Tamaño del texto (%1 %)").arg(Workbench.fontScale)
+                Action { text: qsTr("Aumentar"); onTriggered: Workbench.fontScale = Workbench.fontScale + 10 }
+                Action { text: qsTr("Reducir"); onTriggered: Workbench.fontScale = Workbench.fontScale - 10 }
+                Action { text: qsTr("Restablecer (100 %)"); onTriggered: Workbench.fontScale = 100 }
+            }
+            Menu {
+                title: qsTr("Densidad")
+                ActionGroup { id: densityGroup }
+                Action { text: qsTr("Compacta"); checkable: true; ActionGroup.group: densityGroup
+                         checked: Workbench.density === Workbench.Compact; onTriggered: Workbench.density = Workbench.Compact }
+                Action { text: qsTr("Normal"); checkable: true; ActionGroup.group: densityGroup
+                         checked: Workbench.density === Workbench.Normal; onTriggered: Workbench.density = Workbench.Normal }
+                Action { text: qsTr("Cómoda"); checkable: true; ActionGroup.group: densityGroup
+                         checked: Workbench.density === Workbench.Comfortable; onTriggered: Workbench.density = Workbench.Comfortable }
+            }
+            Action { text: qsTr("Preferencias de apariencia…"); onTriggered: scaleDialog.open() }
             MenuSeparator {}
             Action {
                 text: qsTr("Modo avanzado")
@@ -188,9 +264,14 @@ ApplicationWindow {
         }
     }
 
+    // Ctrl+= is Ctrl++ on keyboards where "+" needs Shift (StandardKey.ZoomIn covers the rest).
+    Shortcut { sequence: "Ctrl+="; onActivated: Workbench.zoomIn() }
+
+    ScalePreferencesDialog { id: scaleDialog }
+
     // ---------------------------------------------------------------- TOOLBAR SUPERIOR
     header: ToolBar {
-        implicitHeight: 44
+        implicitHeight: Theme.toolbarHeight
         background: Rectangle {
             color: Theme.header
             border.color: Theme.borderSubtle
@@ -198,36 +279,43 @@ ApplicationWindow {
         }
 
         RowLayout {
+            id: headerRow
+            // Short labels when the window is narrow for the chosen scale, so every action stays on screen.
+            readonly property bool compact: window.width / Theme.fontFactor < 1200
             anchors.fill: parent
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
-            spacing: 10
+            anchors.leftMargin: Theme.spacingLg
+            anchors.rightMargin: Theme.spacingLg
+            spacing: Theme.spacingLg
 
             // Modos de trabajo principales
             TabBar {
                 id: workspaceTabs
                 objectName: "workspaceTabs"
-                implicitHeight: 32
-                TabButton { text: qsTr("🎭 PERSONALIZAR PERSONAJE") }
-                TabButton { text: qsTr("👗 ESTUDIO DE ATUENDOS") }
-                TabButton { text: qsTr("CHARACTER FORGE") }
+                implicitHeight: Theme.controlHeight + Theme.spacingXs
+                // The last workspace comes back on start (automation may still pick another one).
+                Component.onCompleted: currentIndex = Workbench.workspace
+                onCurrentIndexChanged: Workbench.workspace = currentIndex
+                // Each tab as wide as its label (TabBar would otherwise split the width evenly and elide).
+                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("🎭 PERSONAJE") : qsTr("🎭 PERSONALIZAR PERSONAJE") }
+                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("👗 ATUENDOS") : qsTr("👗 ESTUDIO DE ATUENDOS") }
+                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("FORGE") : qsTr("CHARACTER FORGE") }
             }
 
-            Rectangle { width: 1; height: 22; color: Theme.borderSubtle }
+            Rectangle { width: 1; height: Theme.px(22); color: Theme.borderSubtle }
 
             // Acciones de proyecto
             ToolButton {
-                text: "📁 " + qsTr("Abrir")
+                text: headerRow.compact ? "📁" : "📁 " + qsTr("Abrir")
                 enabled: workspaceTabs.currentIndex === 2 || window.ready
-                implicitHeight: 28
+                implicitHeight: Theme.controlHeight
                 onClicked: workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open()
                 ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Abrir un proyecto .sncf") : qsTr("Abrir proyecto .snps existente")
             }
 
             ToolButton {
-                text: "💾 " + qsTr("Guardar")
+                text: headerRow.compact ? "💾" : "💾 " + qsTr("Guardar")
                 enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
-                implicitHeight: 28
+                implicitHeight: Theme.controlHeight
                 onClicked: {
                     if (workspaceTabs.currentIndex === 2) {
                         window.studio.forge.projectPath.length > 0
@@ -242,26 +330,30 @@ ApplicationWindow {
                 ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Guardar proyecto independiente .sncf") : qsTr("Guardar proyecto .snps actual")
             }
 
-            Item { Layout.fillWidth: true }
+            Rectangle { width: 1; height: Theme.px(22); color: Theme.borderSubtle }
 
-            // Conmutador Modo Simple / Avanzado
-            Switch {
-                id: modeSwitch
-                text: Theme.advancedMode ? qsTr("Modo Avanzado") : qsTr("Modo Simple")
-                checked: Theme.advancedMode
-                onToggled: Theme.advancedMode = checked
+            // Visor a pantalla completa dentro de la ventana; la escena y la selección no cambian.
+            ToolButton {
+                objectName: "focusViewerButton"
+                text: (window.layout.maximized ? "⤡" : "⤢") + (headerRow.compact ? ""
+                      : " " + (window.layout.maximized ? qsTr("Salir del enfoque") : qsTr("Enfocar visor")))
+                checkable: true
+                checked: window.layout.maximized
+                implicitHeight: Theme.controlHeight
+                onClicked: window.layout.maximized = !window.layout.maximized
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Alterna entre interfaz simplificada e inspector técnico con diagnósticos")
+                ToolTip.text: qsTr("Oculta los paneles laterales y la consola (F11). Vuelve a la distribución anterior al salir.")
             }
 
-            Rectangle { width: 1; height: 22; color: Theme.borderSubtle }
+            Item { Layout.fillWidth: true }
 
             // Botón de exportación principal
             Button {
-                text: qsTr("🚀 Exportar Mod…")
+                objectName: "headerExportButton"
+                text: headerRow.compact ? qsTr("🚀 Exportar") : qsTr("🚀 Exportar Mod…")
                 highlighted: true
                 enabled: window.ready && workspaceTabs.currentIndex !== 2
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeight + Theme.spacingXs
                 font.bold: true
                 ToolTip.visible: hovered && workspaceTabs.currentIndex === 2
                 ToolTip.text: qsTr("La exportación de NPC nuevos llegará en Fase 2")
@@ -272,8 +364,40 @@ ApplicationWindow {
 
     // ---------------------------------------------------------------- CONTENIDO PRINCIPAL
     SplitView {
+        id: mainSplit
+        objectName: "mainVerticalSplit"
         anchors.fill: parent
         orientation: Qt.Vertical
+        handle: SplitHandleBar { vertical: true }
+
+        readonly property bool bottomShown: window.layout.bottomVisible && !window.layout.maximized
+        property int appliedBottom: 0
+        // The console keeps the height the user dragged it to (per workspace, at 100 % scale) but never
+        // takes more than 60 % of the window, so the viewer stays usable.
+        function applyBottom() {
+            if (height <= 0) return
+            appliedBottom = Math.max(Theme.px(80), Math.min(Theme.px(window.layout.bottomHeight), Math.round(height * 0.6)))
+            bottomPanel.SplitView.preferredHeight = appliedBottom
+        }
+        onResizingChanged: {
+            if (!resizing && bottomShown && Math.abs(bottomPanel.height - appliedBottom) > 1)
+                window.layout.bottomHeight = Math.round(bottomPanel.height / Theme.uiFactor)
+            applyBottom()
+        }
+        onHeightChanged: applyBottom()
+        onBottomShownChanged: applyBottom()
+        Connections {
+            target: window
+            function onLayoutChanged() { mainSplit.applyBottom() }
+        }
+        Connections {
+            target: window.layout
+            function onBottomHeightChanged() { mainSplit.applyBottom() }
+        }
+        Connections {
+            target: Theme
+            function onUiFactorChanged() { mainSplit.applyBottom() }
+        }
 
         StackLayout {
             currentIndex: workspaceTabs.currentIndex
@@ -285,16 +409,20 @@ ApplicationWindow {
             }
 
             // Vista 2: Estudio de Atuendos dedicado (Layout 3 columnas: 24% | 56% | 20%)
-            SplitView {
+            WorkbenchSplit {
+                objectName: "outfitSplit"
                 SplitView.fillHeight: true
-                orientation: Qt.Horizontal
+                layout: Workbench.layout("outfit")
+                leftPane: outfitLeftPanel
+                rightPane: outfitRightPanel
+                leftMinimum: 240
+                rightMinimum: 280
+                centerMinimum: 380
 
-                // Panel Izquierdo: Catálogo y Exploración (~24%)
+                // Panel Izquierdo: Catálogo y Exploración
                 Rectangle {
-                    visible: leftToggle.checked
-                    SplitView.preferredWidth: 380
-                    SplitView.minimumWidth: 280
-                    SplitView.maximumWidth: 500
+                    id: outfitLeftPanel
+                    objectName: "outfitLeftPanel"
                     color: Theme.panel
 
                     ColumnLayout {
@@ -335,7 +463,6 @@ ApplicationWindow {
                 // Panel Central: Visor 3D Dominante (~56%)
                 Rectangle {
                     SplitView.fillWidth: true
-                    SplitView.minimumWidth: 400
                     color: Theme.surface
 
                     CharacterViewport {
@@ -348,10 +475,8 @@ ApplicationWindow {
 
                 // Panel Derecho: Editor de Atuendos (~20%)
                 Rectangle {
-                    visible: rightToggle.checked
-                    SplitView.preferredWidth: 380
-                    SplitView.minimumWidth: 300
-                    SplitView.maximumWidth: 550
+                    id: outfitRightPanel
+                    objectName: "outfitRightPanel"
                     color: Theme.panel
 
                     ColumnLayout {
@@ -390,25 +515,26 @@ ApplicationWindow {
 
         // Panel inferior colapsable para Consola y Diagnósticos
         BottomPanel {
-            visible: bottomToggle.checked
+            id: bottomPanel
+            objectName: "bottomPanel"
+            visible: mainSplit.bottomShown
             studio: window.studio
-            SplitView.preferredHeight: 200
-            SplitView.minimumHeight: 120
+            SplitView.minimumHeight: Theme.px(80)
         }
     }
 
     // ---------------------------------------------------------------- STATUS BAR INFERIOR
     footer: Rectangle {
-        implicitHeight: 28
+        implicitHeight: Theme.statusHeight
         color: Theme.header
         border.color: Theme.borderSubtle
         border.width: 1
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
-            spacing: 12
+            anchors.leftMargin: Theme.spacingLg
+            anchors.rightMargin: Theme.spacingLg
+            spacing: Theme.spacingLg
 
             StatusBadge {
                 text: window.studio.worker.state === WorkerClient.Ready ? qsTr("WORKER OK")
@@ -432,7 +558,7 @@ ApplicationWindow {
                 visible: window.studio.phase === StudioController.Scanning || window.studio.phase === StudioController.Indexing
                 indeterminate: window.studio.progress < 0
                 value: Math.max(0, window.studio.progress)
-                Layout.preferredWidth: 200
+                Layout.preferredWidth: Theme.px(200)
             }
 
             Text {
@@ -442,18 +568,35 @@ ApplicationWindow {
                       .arg(window.studio.summary.activePlugins ?? 0).arg(window.studio.summary.files ?? 0)
                 color: Theme.textDim
                 font.pixelSize: Theme.small
+                // Gives way (elided) before the scale and console buttons leave a narrow window.
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.maximumWidth: implicitWidth
             }
 
-            Rectangle { width: 1; height: 16; color: Theme.borderSubtle }
+            Rectangle { width: 1; height: Theme.px(16); color: Theme.borderSubtle }
+
+            // Escala actual; un clic abre las preferencias de apariencia.
+            ToolButton {
+                objectName: "scaleStatusButton"
+                text: Workbench.uiScale + " %" + (Workbench.fontScale !== 100 ? " · " + qsTr("texto %1 %").arg(Workbench.fontScale) : "")
+                implicitHeight: Theme.statusHeight - 6
+                font.pixelSize: Theme.small
+                onClicked: scaleDialog.open()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Escala de interfaz: Ctrl++ / Ctrl+- / Ctrl+0")
+            }
+
+            Rectangle { width: 1; height: Theme.px(16); color: Theme.borderSubtle }
 
             // Botón de alternancia de Consola y Diagnósticos
             ToolButton {
                 text: "📟 " + qsTr("Consola & Diagnósticos") + (window.studio.diagnostics.count > 0 ? " (" + window.studio.diagnostics.count + ")" : "")
                 checkable: true
-                checked: bottomToggle.checked
-                implicitHeight: 22
-                font.pixelSize: Theme.micro
-                onClicked: bottomToggle.checked = !bottomToggle.checked
+                checked: mainSplit.bottomShown
+                implicitHeight: Theme.statusHeight - 6
+                font.pixelSize: Theme.small
+                onClicked: window.setPanel("bottom", !mainSplit.bottomShown)
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Mostrar/ocultar panel de consola y diagnósticos técnicos")
             }

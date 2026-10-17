@@ -33,7 +33,7 @@ ScrollView {
         title: qsTr("Informe de Compatibilidad de Preset")
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: 480
+        width: Theme.px(480)
         property var issues: []
         property string pendingPath: ""
         standardButtons: Dialog.Ok | Dialog.Cancel
@@ -53,7 +53,7 @@ ScrollView {
                     color: Theme.warning
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
             }
             Text {
@@ -78,7 +78,7 @@ ScrollView {
                 text: qsTr("Presets de RaceMenu (.jslot)")
                 color: Theme.text
                 font.bold: true
-                font.pixelSize: 14
+                font.pixelSize: Theme.large
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -94,7 +94,7 @@ ScrollView {
         Text {
             text: qsTr("Presets detectados en mods instalados (SKSE\\Plugins\\CharGen\\Presets) o importados.")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -116,7 +116,7 @@ ScrollView {
                     anchors.centerIn: parent
                     text: qsTr("No hay presets .jslot detectados. Haz clic en 'Escanear VFS' o 'Importar Archivo'.")
                     color: Theme.textDim
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
             }
 
@@ -138,13 +138,13 @@ ScrollView {
                             text: modelData.name
                             color: Theme.text
                             font.bold: true
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.normal
                             elide: Text.ElideRight
                         }
                         Text {
                             text: qsTr("Mod: ") + (modelData.sourceMod || qsTr("Desconocido")) + " · " + modelData.fileName
                             color: Theme.textDim
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.micro
                             elide: Text.ElideRight
                         }
                     }
@@ -174,13 +174,13 @@ ScrollView {
             text: qsTr("Transferencia de Apariencia (NPC Donante / Replacer)")
             color: Theme.text
             font.bold: true
-            font.pixelSize: 14
+            font.pixelSize: Theme.large
         }
 
         Text {
             text: qsTr("Aplica el rostro de otro NPC o replacer instalado (morphs, Head Parts, tono y tintes de su registro). El FaceGen se regenera; no se copia el del donante.")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -228,14 +228,14 @@ ScrollView {
                             text: model.name || model.editorId || model.formKey
                             color: Theme.text
                             font.bold: true
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.small
                             elide: Text.ElideRight
                         }
                         Text {
                             Layout.fillWidth: true
                             text: (model.race || "") + " · " + (model.sex || "") + " · " + (model.winningPlugin || "")
                             color: Theme.textDim
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.micro
                             elide: Text.ElideRight
                         }
                     }

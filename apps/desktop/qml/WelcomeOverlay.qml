@@ -13,7 +13,7 @@ Dialog {
 
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: 640
+    width: Theme.px(640)
     title: qsTr("Instancia de Mod Organizer 2")
     closePolicy: root.studio.phase === StudioController.Ready ? Popup.CloseOnEscape : Popup.NoAutoClose
     standardButtons: root.studio.phase === StudioController.Ready ? Dialog.Close : Dialog.NoButton

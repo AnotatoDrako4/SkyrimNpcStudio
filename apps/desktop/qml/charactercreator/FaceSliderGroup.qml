@@ -23,7 +23,7 @@ Rectangle {
             text: root.title
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 12
+            font.pixelSize: Theme.normal
             Layout.topMargin: 4
             Layout.bottomMargin: 2
         }
@@ -41,7 +41,7 @@ Rectangle {
                 Text {
                     text: modelData.displayNameEs || modelData.displayNameEn || modelData.key
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                     Layout.preferredWidth: 140
                     elide: Text.ElideRight
                     ToolTip.text: modelData.key
@@ -66,7 +66,7 @@ Rectangle {
                 Text {
                     text: rowDel.currentVal.toFixed(2)
                     color: Theme.textDim
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                     font.family: "Consolas, monospace"
                     Layout.preferredWidth: 36
                     horizontalAlignment: Text.AlignRight

@@ -2,6 +2,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QQmlEngine>
 #include <algorithm>
 #include <array>
 #include <optional>
@@ -128,6 +129,7 @@ void WorkbenchState::init() {
   for (const auto& zone : kZones) zone_fonts_.insert(zone, 100);
   for (const auto& id : kWorkspaces) {
     auto* layout = new WorkspaceLayout(id, defaults_for(id), this);
+    QQmlEngine::setObjectOwnership(layout, QQmlEngine::CppOwnership);  // handed to QML by layout()
     connect(layout, &WorkspaceLayout::changed, this, &WorkbenchState::schedule_save);
     layouts_.insert(id, layout);
   }
