@@ -178,9 +178,12 @@ internal sealed class CatalogStore : IDisposable
         using (var cmd = _db.CreateCommand())
         {
             cmd.Transaction = tx;
+            // Every studio build shares this cache: another process may have committed the same signature
+            // since FindBySignature missed. Same signature, same content, written in one transaction, so its
+            // row is complete: reuse it instead of failing the UNIQUE constraint (which aborted indexing).
             cmd.CommandText = """
                 INSERT INTO plugin_files(file_name, signature, npc_count, armor_count, outfit_count, issues)
-                VALUES ($f, $s, $n, $a, $o, $i) RETURNING id
+                VALUES ($f, $s, $n, $a, $o, $i) ON CONFLICT(signature) DO NOTHING RETURNING id
                 """;
             cmd.Parameters.AddWithValue("$f", fileName);
             cmd.Parameters.AddWithValue("$s", signature);
@@ -188,7 +191,14 @@ internal sealed class CatalogStore : IDisposable
             cmd.Parameters.AddWithValue("$a", extract.Armors.Count);
             cmd.Parameters.AddWithValue("$o", extract.OutfitCount);
             cmd.Parameters.AddWithValue("$i", JsonSerializer.Serialize(extract.Issues, RecordExtractor.Json));
-            id = (long)cmd.ExecuteScalar()!;
+            if (cmd.ExecuteScalar() is not long inserted)
+            {
+                tx.Rollback();
+                return FindBySignature(signature)?.Id
+                    ?? throw new InvalidOperationException($"Plugin signature {signature} conflicted but its row cannot be read.");
+            }
+
+            id = inserted;
         }
 
         using (var cmd = _db.CreateCommand())
