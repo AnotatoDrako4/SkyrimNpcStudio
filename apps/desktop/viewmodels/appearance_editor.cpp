@@ -1363,7 +1363,8 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
       return;
     }
   }
-  const auto output = QDir::toNativeSeparators(local_path(output_dir));
+  // The worker only accepts absolute output paths.
+  const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
@@ -1587,7 +1588,8 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
   for (const auto& f : r.fields) {
     if (const auto* code = subrecord_of(f)) only.push_back(code);
   }
-  const auto output = QDir::toNativeSeparators(local_path(output_dir));
+  // The worker only accepts absolute output paths.
+  const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
@@ -1595,13 +1597,23 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
                              .arg(qs(target_.form_key), qs(r.source_plugin), qs(r.winner_plugin), qs(only.dump()), plugin_name, output)
                              .toStdString());
 
+  // The FaceGen the game uses now, located again in MO2 (loose over BSA): the worker refuses the copy unless
+  // it belongs to the source plugin's mod, and refuses it when it cannot be located (empty).
+  std::string facegen_mod;
+  const auto& recipe = recipe_ ? recipe_ : base_recipe_;
+  if (const auto ctx = context(); ctx && ctx->resolver && recipe) {
+    if (const auto loc = ctx->resolver->locate(recipe->facegen_mesh_path)) {
+      facegen_mod = loc->kind == assets::AssetLocation::Kind::Archive && !loc->archive_provider.empty() ? loc->archive_provider : loc->provider;
+    }
+  }
+
   // No generated assets: the source mod's FaceGen is the one the game already loads.
   Json face_part{{"npcFormKey", target_.form_key},
                  {"copyFaceFrom", r.source_plugin},
                  {"onlyFields", only},
                  {"faceGen",
                   {{"mode", "source-facegen"},
-                   {"effectiveFaceGenMod", r.source_mod},
+                   {"effectiveFaceGenMod", facegen_mod},
                    {"parts", Json::array()},
                    {"derivedFrom", Json::array()},
                    {"installAbove", Json::array()}}}};
@@ -1636,6 +1648,9 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
                   }
                   if (chain.isEmpty()) {
                     problems << tr("El worker no devolvió la cadena del NPC con el parche");
+                  } else if (const auto remaining = chain.value("remainingFaceDifferences").toStringList(); !remaining.isEmpty()) {
+                    // Compared on the re-read records, not on fingerprints: the copy is incomplete.
+                    problems << tr("El parche no lleva todo el rostro de %1: siguen distintos %2").arg(qs(r.source_plugin), remaining.join(", "));
                   } else if (control_projector_) {
                     projected = control_projector_(chain, plugin_name);
                     QStringList codes;

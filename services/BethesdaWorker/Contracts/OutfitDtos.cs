@@ -142,6 +142,12 @@ public sealed record ProjectedChain
     public required string Npc { get; init; }
     public required IReadOnlyList<OverrideEntry> Overrides { get; init; }
     public required IReadOnlyList<FieldConflict> Conflicts { get; init; }
+
+    /// <summary>
+    /// Face subrecords (FacePatchBuilder.SourceFaceFields) of the written record that still differ from the
+    /// source version, compared on the records themselves; empty when the whole source face was copied.
+    /// </summary>
+    public IReadOnlyList<string> RemainingFaceDifferences { get; init; } = [];
 }
 
 /// <summary>The complete face of an NPC as the export writes it (NAM9, NAMA, NAM7, QNAM, HCLF, tints).</summary>
