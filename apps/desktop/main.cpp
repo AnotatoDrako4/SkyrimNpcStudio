@@ -6,6 +6,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
 #include <cstdio>
@@ -116,6 +117,12 @@ int main(int argc, char* argv[]) {
   QGuiApplication::setApplicationName("SkyrimNpcStudio");
   QGuiApplication::setApplicationDisplayName("Skyrim NPC Studio");
   QGuiApplication::setApplicationVersion(SNS_VERSION);
+  // Automation and tests keep every preference (window, workbench layout, MO2 profile) in an INI file
+  // of their own instead of the user's registry hive.
+  if (qEnvironmentVariableIsSet("SNS_SETTINGS_DIR")) {
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, qEnvironmentVariable("SNS_SETTINGS_DIR"));
+  }
 
   // Crash diagnostics first: everything after this point is covered by the session log and the
   // crash handler (minidump + report in %LOCALAPPDATA%\SkyrimNpcStudio\SkyrimNpcStudio\diagnostics,
