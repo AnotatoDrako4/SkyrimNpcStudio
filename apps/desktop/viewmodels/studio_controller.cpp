@@ -674,7 +674,11 @@ QVariantMap control_report_map(const appearance::ControlReport& report) {
     out["resolution"] = QVariantMap{{"sourcePlugin", qs(r->source_plugin)}, {"sourceMod", qs(r->source_mod)},
                                     {"winnerPlugin", qs(r->winner_plugin)}, {"winnerMod", qs(r->winner_mod)},
                                     {"fields", string_list(r->fields)},     {"loadAfter", string_list(r->load_after)},
-                                    {"label", qs(r->label)},                {"detail", qs(r->detail)}};
+                                    {"label", qs(r->label)},                {"detail", qs(r->detail)},
+                                    {"explanation", qs(r->explanation)},    {"keeps", string_list(r->keeps)},
+                                    {"replaced", string_list(r->replaced)}, {"pending", string_list(r->pending)},
+                                    {"alternatives", string_list(r->alternatives)},
+                                    {"discardsOwnEdits", string_list(r->discards_own_edits)}};
   }
   return out;
 }
@@ -799,6 +803,8 @@ struct StudioController::AppearanceScan {
   QElapsedTimer timer;
   QStringList pending;  // NPCs with several record versions: their chain needs getNpc
   QVariantList singles;  // NPCs with one version, analysed once every race is known
+  int next_single = 0;   // the singles are analysed in slices so the interface keeps repainting
+  int in_flight = 0;     // getNpc requests sent and not answered yet
   QSet<QString> races;   // races with a FaceGen file for some listed NPC
   int listed = 0;
   int analysed = 0;
@@ -809,6 +815,17 @@ struct StudioController::AppearanceScan {
   int since_emit = 0;
   qint64 listing_ms = 0;
   qint64 elapsed_ms = 0;
+  // Time on the UI thread: the longest single slice (the interface cannot repaint meanwhile) and the
+  // total spent analysing in the studio (the rest of the elapsed time is waiting for the worker).
+  qint64 max_block_us = 0;
+  QString max_block_where;
+  qint64 analysis_us = 0;
+  void note_block(const QElapsedTimer& t, const char* where) {
+    if (const auto us = t.nsecsElapsed() / 1000; us > max_block_us) {
+      max_block_us = us;
+      max_block_where = QString::fromLatin1(where);
+    }
+  }
   QMap<QString, int> counts;
   QMap<QString, int> codes;
   QVariantList rows;
@@ -822,7 +839,8 @@ QVariantMap StudioController::appearance_scan() const {
   for (auto it = s.codes.begin(); it != s.codes.end(); ++it) codes.insert(it.key(), it.value());
   return {{"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
           {"total", s.total},         {"pending", static_cast<int>(s.pending.size())},       {"rpcCalls", s.rpc_calls},
-          {"errors", s.errors},       {"listingMs", s.listing_ms},  {"resolutions", s.resolutions},
+          {"errors", s.errors},       {"listingMs", s.listing_ms},
+          {"maxBlockMs", s.max_block_us / 1000.0}, {"maxBlockWhere", s.max_block_where}, {"analysisMs", s.analysis_us / 1000},  {"resolutions", s.resolutions},
           {"elapsedMs", s.running ? s.timer.elapsed() : s.elapsed_ms},
           {"counts", counts},         {"codes", codes},         {"rows", s.rows}};
 }
@@ -856,9 +874,11 @@ void StudioController::cancelAppearanceScan() {
 void StudioController::scan_page(int offset) {
   auto scan = scan_;
   ++scan->rpc_calls;
-  worker_->call(method::kSearchNpcs, Json{{"limit", 1000}, {"offset", offset}, {"kind", "unique"}}, 60s, this,
+  worker_->call(method::kSearchNpcs, Json{{"limit", 250}, {"offset", offset}, {"kind", "unique"}}, 60s, this,
                 [this, scan, offset](const Json& r) {
     if (scan != scan_ || !scan->running) return;
+    QElapsedTimer block;
+    block.start();
     scan->total = r.value("total", 0);
     const auto items = r.value("items", Json::array());
     const auto ctx = ResourceContext::for_snapshot(snapshot_);
@@ -886,16 +906,18 @@ void StudioController::scan_page(int offset) {
     }
     const int next = offset + static_cast<int>(items.size());
     if (!items.empty() && next < scan->total) {
+      scan->note_block(block, "listing page");
       scan_page(next);
       return;
     }
     races_with_facegen_ = scan->races;
-    for (const auto& single : std::as_const(scan->singles)) scan_record(single.toMap());
-    scan->singles.clear();
+    scan->note_block(block, "listing");
     scan->listing_ms = scan->timer.elapsed();
     scan->stage = QStringLiteral("analysing");
     emit appearanceScanChanged();
+    // The worker starts on the multi-version NPCs while the studio analyses the single-version ones.
     scan_next();
+    scan_singles();
   }, [this, scan](int, const QString& message, const Json&) {
     if (scan != scan_ || !scan->running) return;
     log("error", tr("Análisis del perfil: %1").arg(message));
@@ -905,18 +927,47 @@ void StudioController::scan_page(int offset) {
   });
 }
 
+// Single-version NPCs: analysed 40 at a time, one slice per pass of the event loop (one slice of all of
+// them blocked the interface for 0.8 s on the test profile).
+void StudioController::scan_singles() {
+  auto scan = scan_;
+  if (!scan || !scan->running) return;
+  QElapsedTimer block;
+  block.start();
+  const int end = std::min<int>(scan->next_single + 40, static_cast<int>(scan->singles.size()));
+  for (; scan->next_single < end; ++scan->next_single) scan_record(scan->singles[scan->next_single].toMap());
+  scan->note_block(block, "single-version NPCs (slice)");
+  if (scan->next_single < scan->singles.size()) {
+    QTimer::singleShot(0, this, [this] { scan_singles(); });
+    return;
+  }
+  scan_next();  // finishes the scan when the worker is done too
+}
+
+// Multi-version NPCs: up to four getNpc requests in flight, so the worker never waits for the studio
+// to send the next one (it answered one at a time, ~30 ms each, on the test profile).
 void StudioController::scan_next() {
   auto scan = scan_;
   if (!scan || !scan->running) return;
-  if (scan->pending.isEmpty()) {
+  while (scan->in_flight < 4 && !scan->pending.isEmpty()) {
+    const auto form_key = scan->pending.takeFirst();
+    ++scan->rpc_calls;
+    ++scan->in_flight;
+    request_scan_npc(scan, form_key);
+  }
+  const bool singles_left = scan->next_single < scan->singles.size();
+  if (scan->pending.isEmpty() && scan->in_flight == 0 && !singles_left) {
     scan->stage = QStringLiteral("done");
     scan_finish();
-    return;
   }
-  const auto form_key = scan->pending.takeFirst();
-  ++scan->rpc_calls;
+}
+
+void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& scan, const QString& form_key) {
   worker_->call(method::kGetNpc, Json{{"formKey", ss(form_key)}}, 30s, this, [this, scan](const Json& r) {
     if (scan != scan_ || !scan->running) return;
+    --scan->in_flight;
+    QElapsedTimer block;
+    block.start();
     auto details = to_map(r);
     QVariantList overrides;
     for (const auto& o : details.value("overrides").toList()) {
@@ -926,9 +977,11 @@ void StudioController::scan_next() {
     }
     details["overrides"] = overrides;
     scan_record(details);
+    scan->note_block(block, "getNpc answer");
     scan_next();
   }, [this, scan, form_key](int, const QString& message, const Json&) {
     if (scan != scan_ || !scan->running) return;
+    --scan->in_flight;
     ++scan->errors;
     log("warning", tr("Análisis del perfil: %1 no se pudo leer (%2)").arg(form_key, message));
     scan_next();
@@ -937,6 +990,13 @@ void StudioController::scan_next() {
 
 void StudioController::scan_record(const QVariantMap& details) {
   auto& scan = *scan_;
+  QElapsedTimer analysis;
+  analysis.start();
+  const struct Account {
+    AppearanceScan& scan;
+    QElapsedTimer& t;
+    ~Account() { scan.analysis_us += t.nsecsElapsed() / 1000; }
+  } account{scan, analysis};
   const auto report = appearance::analyze_appearance_control(control_inputs(details));
   QString worst = QStringLiteral("ok");
   QString message;
@@ -970,7 +1030,11 @@ void StudioController::scan_record(const QVariantMap& details) {
                              {"faceMod", qs(report.face_mod)},
                              {"faceGenMod", facegen_mod},
                              {"message", message},
-                             {"resolution", report.resolution ? qs(report.resolution->label) : QString()}};
+                             {"resolution", report.resolution ? qs(report.resolution->label) : QString()},
+                             {"resolutionWinner", report.resolution ? qs(report.resolution->winner_plugin) : QString()},
+                             {"resolutionFields", report.resolution ? string_list(report.resolution->fields) : QStringList()},
+                             {"resolutionKeeps", report.resolution ? string_list(report.resolution->keeps) : QStringList()},
+                             {"resolutionDiscardsOwn", report.resolution ? string_list(report.resolution->discards_own_edits) : QStringList()}};
   }
   if (++scan.since_emit >= 250) {
     scan.since_emit = 0;

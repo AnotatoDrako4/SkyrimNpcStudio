@@ -1795,6 +1795,9 @@ struct Stress : std::enable_shared_from_this<Stress> {
                         .arg(scan.value("elapsedMs").toLongLong()).arg(scan.value("listingMs").toLongLong()).arg(scan.value("rpcCalls").toInt())
                         .arg(analysed > 0 ? scan.value("elapsedMs").toLongLong() * 1000 / analysed : 0).arg(codes.join(", "))
                         .arg(scan.value("resolutions").toInt()));
+          self->log(QStringLiteral("profile scan UI thread: longest block %1 ms (%2), %3 ms analysing in the studio, the rest waiting for the worker")
+                        .arg(scan.value("maxBlockMs").toDouble(), 0, 'f', 1).arg(scan.value("maxBlockWhere").toString())
+                        .arg(scan.value("analysisMs").toLongLong()));
           QFile out(QDir(self->work_dir).filePath("appearance-scan.json"));
           if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(scan)).toJson());
           // Up to three flagged NPCs to open: one per warning code first, then notes.
