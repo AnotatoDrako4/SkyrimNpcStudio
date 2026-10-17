@@ -318,8 +318,8 @@ internal sealed class CatalogStore : IDisposable
     }
 
     /// <summary>
-    /// Replaces the active load order, drops cached plugins no longer referenced and
-    /// recomputes the winner tables (highest load index wins).
+    /// Replaces the active load order and recomputes the winner tables (highest load index wins).
+    /// Cached plugin rows are retained because another indexer may already have selected them.
     /// </summary>
     public void ActivateLoadOrder(IReadOnlyList<LoadOrderRow> rows)
     {
@@ -344,8 +344,6 @@ internal sealed class CatalogStore : IDisposable
                 cmd.ExecuteNonQuery();
             }
         }
-
-        Exec(_db, "DELETE FROM plugin_files WHERE id NOT IN (SELECT plugin_id FROM load_order);", tx);
 
         // origin plugin = the ModKey part of the FormKey string "ID:Plugin.esp".
         Exec(_db, """

@@ -34,6 +34,23 @@ public sealed class CatalogStoreConcurrencyTests : IDisposable
         Assert.Equal(id, first.FindBySignature(signature)!.Id);
     }
 
+    [Fact]
+    public void ActivateLoadOrder_DoesNotDeleteAPluginAnotherIndexerIsAboutToActivate()
+    {
+        var db = Path.Combine(_dir, "catalog.sqlite");
+        using var first = CatalogStore.Open(db);
+        using var second = CatalogStore.Open(db);
+        var firstId = first.InsertPlugin("First.esp", "FIRST", Empty());
+        var secondId = second.InsertPlugin("Second.esp", "SECOND", Empty());
+
+        first.ActivateLoadOrder([Row(firstId, "First.esp")]);
+        Assert.NotNull(second.FindBySignature("SECOND"));
+        second.ActivateLoadOrder([Row(secondId, "Second.esp")]);
+    }
+
+    private static LoadOrderRow Row(long id, string fileName) =>
+        new(0, id, fileName, false, false, "00", fileName, []);
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
