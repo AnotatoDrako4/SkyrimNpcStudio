@@ -222,6 +222,11 @@ int main(int argc, char* argv[]) {
   const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
                          cli.isSet(stress_opt) || cli.isSet(forge_preview_opt) ||
                          cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt);
+  // Automation starts in Character Creator unless told otherwise: the workspace the user left last
+  // (restored from the preferences) must not change what a smoke run or a check loads.
+  if (automated && !cli.isSet(workspace_opt) && main_window) {
+    if (auto* tabs = main_window->findChild<QObject*>("workspaceTabs")) tabs->setProperty("currentIndex", 0);
+  }
   const auto finish = [&](int code) {
     if (cli.isSet(shot_opt)) {
       if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {

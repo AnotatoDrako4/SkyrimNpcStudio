@@ -67,6 +67,11 @@ struct Check : std::enable_shared_from_this<Check> {
   }
 
   QQuickItem* item(const QString& name) const { return window->findChild<QQuickItem*>(name); }
+  // The Character Creator viewer (Outfit Studio has another "characterViewport" of its own).
+  QQuickItem* creator_viewport() const {
+    auto* split = item("creatorSplit");
+    return split ? split->findChild<QQuickItem*>("characterViewport") : nullptr;
+  }
   qreal width_of(const QString& name) const { auto* i = item(name); return i ? i->width() : -1; }
   bool shown(const QString& name) const { auto* i = item(name); return i && i->isVisible(); }
   WorkspaceLayout* layout(const char* ws) const { return wb->layout(QString::fromLatin1(ws)); }
@@ -139,7 +144,7 @@ struct Check : std::enable_shared_from_this<Check> {
     steps.push_back([this] {
       left0 = width_of("creatorLeftPanel");
       right0 = width_of("creatorRightPanel");
-      viewport = item("creatorViewport");
+      viewport = creator_viewport();
       check(left0 > 0 && right0 > 0 && viewport, QStringLiteral("creator panels found (left %1, right %2, viewer %3)")
                                                      .arg(left0).arg(right0).arg(viewport ? viewport->width() : -1));
       capture("creator-initial");
@@ -201,7 +206,7 @@ struct Check : std::enable_shared_from_this<Check> {
       check(layout("creator")->maximized(), "F11 focuses the viewer");
       check(!shown("creatorLeftPanel") && !shown("creatorRightPanel") && !shown("bottomPanel"),
             "focus hides explorer, inspector and console");
-      check(viewport && item("creatorViewport") == viewport.data(), "the same viewer item stays (no second viewer)");
+      check(viewport && creator_viewport() == viewport.data(), "the same viewer item stays (no second viewer)");
       check(viewport && split && viewport->width() >= split->width() - 1,
             QStringLiteral("viewer takes the whole width: %1 of %2 px").arg(viewport ? viewport->width() : -1).arg(split ? split->width() : -1));
       check(layout("creator")->left_width() == stored_left1 && layout("creator")->right_width() == stored_right1,
@@ -213,7 +218,7 @@ struct Check : std::enable_shared_from_this<Check> {
       check(!layout("creator")->maximized(), "F11 again leaves the focus");
       check(near(width_of("creatorLeftPanel"), left_shown, 1) && near(width_of("creatorRightPanel"), right_shown, 1),
             QStringLiteral("previous layout back: left %1, right %2").arg(width_of("creatorLeftPanel")).arg(width_of("creatorRightPanel")));
-      check(viewport && item("creatorViewport") == viewport.data(), "viewer item unchanged after focus");
+      check(viewport && creator_viewport() == viewport.data(), "viewer item unchanged after focus");
       key(Qt::Key_Plus, Qt::ControlModifier);
     });
     steps.push_back([this] {
