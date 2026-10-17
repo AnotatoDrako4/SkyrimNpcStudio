@@ -94,11 +94,14 @@ Rectangle {
             ToolTip.visible: hovered
         }
 
-        Rectangle { width: 1; height: 20; color: Theme.border }
+        Rectangle { visible: compareBtn.visible; width: 1; height: Theme.px(20); color: Theme.border }
 
         // Comparador Antes / Después
         Button {
             id: compareBtn
+            // Same switch as "✨ Mod / 👁 Original" on the viewer overlay, which is always there: this
+            // larger copy only shows when the row has room for it.
+            visible: root.width >= 760 * Theme.fontFactor
             implicitHeight: Theme.controlHeight
             checkable: true
             checked: root.studio.scene.original

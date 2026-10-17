@@ -13,7 +13,9 @@ param(
     [string]$MO2Profile = 'Default',
     [string]$Npc = '002B6C:Dawnguard.esm',   # Serana
     [string]$Preset = 'debug',
-    [string]$Label = "workbench-$Size"
+    # Windows display scale to emulate for this app only (Qt's own High-DPI path): 1.25, 1.5, 2.
+    [string]$DisplayScale,
+    [string]$Label = "workbench-$Size$(if ($DisplayScale) { "-dpi$DisplayScale" })"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +27,8 @@ if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 $settings = Join-Path $out 'settings'
 New-Item -ItemType Directory -Force $settings | Out-Null
 $env:SNS_SETTINGS_DIR = $settings
+$previousScale = $env:QT_SCALE_FACTOR
+if ($DisplayScale) { $env:QT_SCALE_FACTOR = $DisplayScale }
 
 function Invoke-Run([string]$name, [string[]]$extra) {
     $log = Join-Path $out "$name.log"
@@ -43,6 +47,7 @@ try {
                                      '--workbench-expect', "`"$(Join-Path $out 'run1\expect.json')`"")
 } finally {
     Remove-Item Env:\SNS_SETTINGS_DIR -ErrorAction SilentlyContinue
+    $env:QT_SCALE_FACTOR = $previousScale
 }
 if ($first -ne 0 -or $second -ne 0) { throw "workbench check failed (run1=$first, restart=$second)" }
 Write-Host "Workbench check passed; captures in $out"
