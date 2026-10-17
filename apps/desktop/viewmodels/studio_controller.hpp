@@ -165,7 +165,10 @@ class StudioController : public QObject {
   struct AppearanceScan;
   void scan_page(int offset);
   void scan_next();
+  void scan_singles();
+  void request_scan_npc(const std::shared_ptr<AppearanceScan>& scan, const QString& form_key);
   void scan_record(const QVariantMap& details);
+  void scan_record_report(const QVariantMap& details, const appearance::ControlReport& report);
   void scan_finish();
 
   WorkerClient* worker_;

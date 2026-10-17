@@ -86,6 +86,18 @@ struct FaceResolution {
   std::vector<std::string> load_after;
   std::string label;   // "Usar el rostro de «X»"
   std::string detail;  // what the patch does, in Spanish
+  // Consequences, from the chain, shown before exporting (Spanish). Attributions that rest on copies
+  // (copied_from) are inferences from identical values and say so.
+  std::string explanation;                // one sentence: whose face, whose record
+  std::vector<std::string> keeps;         // "«P» (mod): f1, f2": tracked non-face values of the winner, by the version that set them
+  std::vector<std::string> replaced;      // "Field: valor de «P»": face values that stop applying
+  std::vector<std::string> pending;       // other warnings of the map this patch does not resolve
+  std::vector<std::string> alternatives;  // other mods with a FaceGen and a version of the NPC: the user picks the face
+  // Versions whose OWN face edits (values they introduced, not copies of an earlier version) the patch
+  // would discard. Empty: the discarded values are copies (typically a later mod built on an older copy
+  // of the record putting the vanilla face back) -- a clear accidental revert. Not empty: ambiguous, the
+  // edits may be deliberate (a fix without a new FaceGen); the user must decide.
+  std::vector<std::string> discards_own_edits;
 };
 
 struct ControlReport {

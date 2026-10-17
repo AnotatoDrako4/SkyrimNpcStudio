@@ -104,6 +104,20 @@ facial. Los NPC de una sola versión se analizan sin consultar al worker; los de
 La lista muestra primero los avisos y abre el NPC al pulsarlo. En el perfil de prueba (1308 NPC únicos)
 tarda unos 38 s en Debug; ver `docs/plans/next-generation-development.md`.
 
+## Resolución asistida: evidencia y decisión
+
+- La «copia» de un valor (`copiedFrom`) se infiere por igualdad con una versión anterior de la cadena
+  cargada; la interfaz lo muestra como «inferido».
+- Hay desajuste si cualquier campo de geometría del ganador tiene otro valor que la versión del mod del
+  FaceGen, aunque la versión más reciente siga siendo de ese mod (reversión parcial a vanilla).
+- Una resolución es **clara** si los valores que descarta son copias (reversión accidental) y **ambigua** si
+  descarta ediciones propias de un mod: se ofrece con «Decisión necesaria» y nunca se aplica sola.
+- Antes de exportar se explica: rostro elegido, campos que cambian, valores que se conservan (por versión),
+  valores que dejan de aplicarse, pendientes y otros rostros disponibles.
+- Al exportar: el mod del FaceGen se localiza de nuevo en MO2 y debe ser el del plugin de origen; sin
+  proveedor conocido se rechaza; el parche se rechaza si, comparado sobre los registros releídos, le falta
+  algún campo facial del origen.
+
 ## Límites conocidos
 
 - No se ejecuta Skyrim: «encaja» significa que los archivos son coherentes (mismo mod o desviación

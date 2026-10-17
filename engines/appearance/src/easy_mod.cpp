@@ -32,6 +32,9 @@ EasyModPlan plan_face_resolution(const EasyModInputs& in, EasyModPlan plan) {
   plan.changes.push_back({"face-resolution", EasyModState::Ok, r.label, r.detail});
   plan.changes.push_back({"fields", EasyModState::Ok, "Campos copiados: " + joined(r.fields, ", "),
                           "Copiados tal cual de «" + r.source_plugin + "»; el resto del registro es el de «" + r.winner_plugin + "»."});
+  if (!r.explanation.empty()) plan.changes.push_back({"consequence", EasyModState::Ok, "Resultado", r.explanation});
+  if (!r.keeps.empty()) plan.changes.push_back({"keeps", EasyModState::Ok, "Se conserva", joined(r.keeps, "; ")});
+  if (!r.replaced.empty()) plan.changes.push_back({"replaced", EasyModState::Info, "Deja de aplicarse", joined(r.replaced, "; ")});
 
   const bool edits = in.face_kind != FaceBuildKind::Unchanged || in.height_changed || in.outfit_changed;
   if (in.face_kind == FaceBuildKind::WaitForAnalysis) {
@@ -47,6 +50,13 @@ EasyModPlan plan_face_resolution(const EasyModInputs& in, EasyModPlan plan) {
     check("high-poly", EasyModState::Info, "Protección facial activa para esta cabeza",
           "Sigue bloqueando editar y regenerar el rostro. Este parche no edita ni regenera: copia los valores que corresponden al "
           "FaceGen que ya usa el juego.");
+  }
+  for (std::size_t i = 0; i < r.pending.size(); ++i) {
+    check("pending-" + std::to_string(i), EasyModState::Warning, "Sigue pendiente después del parche", r.pending[i]);
+  }
+  if (!r.alternatives.empty()) {
+    check("alternatives", EasyModState::Info, "Otros rostros disponibles",
+          joined(r.alternatives, "; ") + ". El parche usa el que gana en MO2; elige tú cuál conservar.");
   }
   check("load-order", EasyModState::Info, "Se carga después de " + joined(r.load_after, " y "),
         "Quedan declarados como masters del plugin; si un plugin posterior vuelve a cambiar este NPC, gana él.");

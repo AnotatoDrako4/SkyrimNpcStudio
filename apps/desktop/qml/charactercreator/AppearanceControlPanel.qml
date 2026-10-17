@@ -196,11 +196,28 @@ ScrollView {
                     font.pixelSize: Theme.small
                 }
                 Text {
+                    objectName: "faceResolutionExplanation"
                     Layout.fillWidth: true
-                    text: root.resolution ? root.resolution.detail : ""
+                    text: root.resolution ? (root.resolution.explanation || root.resolution.detail) : ""
                     color: Theme.text
                     font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
+                }
+                // Consequences before exporting: what stays, what stops applying, what is still pending.
+                Repeater {
+                    model: root.resolution ? [].concat(
+                        (root.resolution.keeps || []).map(l => qsTr("Se conserva: ") + l),
+                        (root.resolution.replaced || []).map(l => qsTr("Deja de aplicarse: ") + l),
+                        (root.resolution.pending || []).map(l => qsTr("Sigue pendiente: ") + l),
+                        (root.resolution.alternatives || []).map(l => qsTr("Otro rostro: ") + l)) : []
+                    delegate: Text {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        text: "· " + modelData
+                        color: modelData.startsWith(qsTr("Sigue pendiente")) ? Theme.warn : Theme.textDim
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                    }
                 }
                 Text {
                     Layout.fillWidth: true
