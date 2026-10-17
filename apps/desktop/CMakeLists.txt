@@ -18,6 +18,7 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
+  viewmodels/workbench_state.cpp viewmodels/workbench_state.hpp
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
   viewmodels/forge_asset_library.cpp viewmodels/forge_asset_library.hpp
   viewmodels/forge_blender_bridge.cpp viewmodels/forge_blender_bridge.hpp

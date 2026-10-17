@@ -51,6 +51,17 @@ if(SNS_BUILD_APP AND WIN32)
   target_link_libraries(sns_forge_asset_tests PRIVATE
     Qt6::Core sns::creation sns::gltf sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_forge_asset_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
+  # Workbench preferences (interface scale, fonts, panel layouts): pure Qt Core, no window needed.
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Qml)
+  add_executable(sns_workbench_tests
+    app/test_workbench_state.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/workbench_state.cpp)
+  set_target_properties(sns_workbench_tests PROPERTIES AUTOMOC ON)
+  target_include_directories(sns_workbench_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_workbench_tests PRIVATE Qt6::Core Qt6::Qml sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_workbench_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
   foreach(kind access-violation terminate abort)
     add_test(NAME "app:crash report and minidump (${kind})"
       COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:SkyrimNpcStudio> -DKIND=${kind}
