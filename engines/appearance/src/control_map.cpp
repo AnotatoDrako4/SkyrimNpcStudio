@@ -86,6 +86,31 @@ std::size_t last_writer(const std::vector<OverrideLink>& chain, const std::vecto
 
 std::string link_label(const OverrideLink& link) { return link.plugin + " (" + link.mod + ")"; }
 
+std::string joined(const std::vector<std::string>& items) {
+  std::string out;
+  for (const auto& i : items) out += (out.empty() ? "" : ", ") + i;
+  return out;
+}
+
+// Geometry fields whose value at the winner differs from the value at the last version provided by the
+// effective FaceGen's mod (compared through the versions that introduced each value). Empty when that
+// mod has no version of the record, or is the winner.
+std::vector<std::string> diverged_geometry(const ControlInputs& in) {
+  const auto& chain = in.chain;
+  std::vector<std::string> out;
+  if (chain.size() < 2 || !in.facegen.found || in.facegen.winner_mod.empty()) return out;
+  std::size_t source = chain.size();
+  for (std::size_t i = chain.size(); i-- > 0;) {
+    if (chain[i].mod == in.facegen.winner_mod) { source = i; break; }
+  }
+  const std::size_t winner = chain.size() - 1;
+  if (source >= winner) return out;
+  for (const auto& f : geometry_fields()) {
+    if (introducer(chain, source, f) != introducer(chain, winner, f)) out.push_back(f);
+  }
+  return out;
+}
+
 std::string quoted(const std::string& s) { return "«" + s + "»"; }
 
 // «Usar el rostro de X»: X is the last version of the chain provided by the mod of the effective FaceGen.
@@ -118,6 +143,61 @@ std::optional<FaceResolution> plan_resolution(const ControlInputs& in) {
   r.detail = "Crea un parche que copia de " + quoted(r.source_plugin) + " solo los campos faciales (" + fields + ") sobre el registro de " +
              quoted(r.winner_plugin) + ", que conserva todo lo demás, y se carga después de ambos. No copia ni regenera FaceGen: el de " +
              quoted(r.source_mod) + " ya es el que usa el juego.";
+
+  // What stays: every tracked non-face value the winner carries, by the version that wrote it.
+  std::vector<std::vector<std::string>> kept(chain.size());
+  std::vector<std::string> seen;
+  for (const auto& link : chain) {
+    for (const auto& f : link.changed_fields) {
+      if (contains(kResolutionFields, f) || contains(seen, f)) continue;
+      seen.push_back(f);
+      if (const auto w = writer_of(chain, f); w > 0) kept[w].push_back(f);
+    }
+  }
+  for (std::size_t i = 1; i < chain.size(); ++i) {
+    if (kept[i].empty()) continue;
+    std::string list;
+    for (const auto& f : kept[i]) list += (list.empty() ? "" : ", ") + f;
+    r.keeps.push_back(quoted(chain[i].plugin) + " (" + chain[i].mod + "): " + list);
+  }
+  // What stops applying: the value each copied field has now, and who wrote it.
+  std::vector<std::string> own_fields;
+  for (const auto& f : r.fields) {
+    const auto w = writer_of(chain, f);
+    std::string line = f + ": valor " + (w == 0 ? "original de " : "de ") + quoted(chain[w].plugin);
+    if (const auto copy = chain[w].copied_from.find(f); copy != chain[w].copied_from.end()) {
+      line += " (inferido: el mismo valor que " + quoted(copy->second) + ")";
+    } else if (w > 0) {
+      // A value this version introduced itself: discarding it is a choice, not a repair.
+      if (!contains(r.discards_own_edits, chain[w].plugin)) r.discards_own_edits.push_back(chain[w].plugin);
+      own_fields.push_back(f);
+    }
+    r.replaced.push_back(line);
+  }
+  if (!r.discards_own_edits.empty()) {
+    std::string who, what;
+    for (const auto& p : r.discards_own_edits) who += (who.empty() ? "" : ", ") + quoted(p);
+    for (const auto& f : own_fields) what += (what.empty() ? "" : ", ") + f;
+    r.pending.push_back("Decisión necesaria: " + who + " cambió por su cuenta " + what +
+                        " sin traer FaceGen propio; puede ser una corrección intencionada. En el juego se ve el FaceGen de " +
+                        quoted(r.source_mod) + "; el parche hace que el registro coincida con él descartando esos cambios.");
+  }
+  // Other faces the user could prefer: mods whose loose FaceGen loses in MO2 and that have a version of the NPC.
+  for (const auto& m : in.facegen.loose_mods) {
+    if (m == in.facegen.winner_mod) continue;
+    const auto other = std::find_if(chain.begin(), chain.end(), [&](const OverrideLink& l) { return l.mod == m; });
+    if (other != chain.end()) {
+      r.alternatives.push_back(quoted(m) + " (" + quoted(other->plugin) + ") también trae FaceGen para este NPC, pero pierde en MO2");
+    }
+  }
+  r.explanation = "Se usará el rostro de " + quoted(r.source_mod) + " (" + quoted(r.source_plugin) + ") y se conservará el resto del registro de " +
+                  quoted(r.winner_plugin);
+  if (!kept.back().empty()) {
+    std::string list;
+    for (const auto& f : kept.back()) list += (list.empty() ? "" : ", ") + f;
+    r.explanation += ", incluidos sus cambios de " + list;
+  }
+  r.explanation += ".";
   return r;
 }
 
@@ -184,18 +264,25 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
     finding("warning", "NoFaceGen", "El NPC no tiene FaceGen en el perfil.",
             "Skyrim construye la cabeza al cargar el NPC; con frecuencia sale la «cara oscura» o un rostro distinto.",
             "Exporta el rostro con el estudio (genera un FaceGen coherente con el registro) o instala el FaceGen del mod que cambia su cara.");
-  } else if (!report.face_mod.empty() && report.face_mod != in.facegen.winner_mod) {
+  } else if (const auto diverged = diverged_geometry(in);
+             (!report.face_mod.empty() && report.face_mod != in.facegen.winner_mod) || !diverged.empty()) {
+    // diverged: the FaceGen's mod has a version of the record and some geometry field of the winner has
+    // another value than that version (e.g. a later mod puts back the vanilla morphs but keeps the head
+    // parts: the newest controller is still the FaceGen's mod, yet the face no longer matches it).
     // The face plugin is a file-for-file replacement (translation, cleaned copy) of a plugin that the
     // FaceGen mod ships: the FaceGen belongs to that plugin; only its winning copy comes from elsewhere.
     const auto face_link = std::find_if(chain.rbegin(), chain.rend(), [&](const OverrideLink& l) { return l.plugin == report.face_plugin; });
-    const bool replaced_copy = face_link != chain.rend() && contains(face_link->plugin_mods, in.facegen.winner_mod);
+    const bool by_controller = !report.face_mod.empty() && report.face_mod != in.facegen.winner_mod;
+    // Only when another mod controls the face: in the diverged case the face plugin is the FaceGen mod's own.
+    const bool replaced_copy = by_controller && face_link != chain.rend() && contains(face_link->plugin_mods, in.facegen.winner_mod);
     // Geometry fields whose value comes from another mod than the FaceGen. Only head parts, all of them
     // present in the FaceGen: the head the game shows has the record's pieces.
     std::vector<std::string> foreign;
     for (const auto& f : geometry_fields()) {
       if (chain[controller_of(chain, f, facegen_mod)].mod != in.facegen.winner_mod) foreign.push_back(f);
     }
-    const bool head_parts_only = foreign == std::vector<std::string>{"HeadParts"} && in.facegen_has_record_head_parts.value_or(false);
+    const bool head_parts_only = (by_controller ? foreign : diverged) == std::vector<std::string>{"HeadParts"} &&
+                                 in.facegen_has_record_head_parts.value_or(false);
     if (facegen_matches_record) {
       finding("ok", "FaceGenFromOtherModMatches",
               "La geometría FaceGen la aporta " + quoted(in.facegen.winner_mod) + " y los datos faciales " + quoted(report.face_plugin) +
@@ -233,9 +320,12 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
                      "; si no, exporta el rostro con el estudio para regenerarlo.";
       }
       finding("warning", "FaceGenRecordMismatch",
-              "Los datos faciales del registro los fija " + quoted(report.face_plugin) + " (" + report.face_mod +
-                  (report.face_via.empty() ? std::string() : ", copiados por " + quoted(report.face_via)) +
-                  ") y la geometría FaceGen la aporta " + quoted(in.facegen.winner_mod) + deviation_text + ".",
+              by_controller
+                  ? "Los datos faciales del registro los fija " + quoted(report.face_plugin) + " (" + report.face_mod +
+                        (report.face_via.empty() ? std::string() : ", copiados por " + quoted(report.face_via)) +
+                        ") y la geometría FaceGen la aporta " + quoted(in.facegen.winner_mod) + deviation_text + "."
+                  : "El registro ganador no conserva los datos faciales de " + quoted(in.facegen.winner_mod) + ", que aporta el FaceGen: " +
+                        joined(diverged) + " tienen otros valores" + deviation_text + ".",
               "Si no se hicieron juntos, la cabeza del juego no corresponde al registro: cara oscura, cuello de otro tono o un rostro distinto al del editor.",
               suggestion);
     }
@@ -282,6 +372,21 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
     finding("warning", "LostFaceEdits", "Campos faciales que cambió un plugin intermedio y el ganador no conserva: " + lost + ".",
             "Esa parte del rostro del mod intermedio no se ve en el juego.",
             "Revisa el orden de carga o crea un parche de compatibilidad para esos campos.");
+  }
+
+  // What the resolution leaves unresolved: every other warning of the map.
+  if (report.resolution) {
+    auto& r = *report.resolution;
+    for (const auto& f : report.findings) {
+      // Lost face edits are what the patch brings back: only those it does not copy stay pending.
+      if (f.severity != "warning" || f.code == "FaceGenRecordMismatch" || f.code == "LostFaceEdits") continue;
+      r.pending.push_back(f.message);
+    }
+    std::string unrecovered;
+    for (const auto& f : in.lost_fields) {
+      if (contains(face_fields(), f) && !contains(r.fields, f)) unrecovered += (unrecovered.empty() ? "" : ", ") + f;
+    }
+    if (!unrecovered.empty()) r.pending.push_back("Ediciones faciales perdidas que este parche no recupera: " + unrecovered + ".");
   }
 
   const bool warnings = std::any_of(report.findings.begin(), report.findings.end(), [](const ControlFinding& f) { return f.severity == "warning"; });
