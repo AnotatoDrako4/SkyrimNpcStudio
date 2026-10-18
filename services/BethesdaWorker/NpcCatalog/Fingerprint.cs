@@ -19,6 +19,11 @@ internal static class Fingerprint
 {
     private const int MaxDepth = 6;
 
+    // Plugin names are case-insensitive in the game (and in Mutagen's ModKey): an override that lists its master
+    // as "ccbgssse025-advdsgs.esm" links the same records as the master's own "ccBGSSSE025-AdvDSGS.esm".
+    private static void AppendFormKey(StringBuilder sb, FormKey key) =>
+        sb.Append(key.ID.ToString("X6", CultureInfo.InvariantCulture)).Append(':').Append(key.ModKey.FileName.String.ToUpperInvariant());
+
     public static string Of(object? value)
     {
         var sb = new StringBuilder();
@@ -53,14 +58,17 @@ internal static class Fingerprint
                 sb.Append(c.ToString(CultureInfo.InvariantCulture));
                 return;
             case FormKey fk:
-                sb.Append(fk.ToString());
+                AppendFormKey(sb, fk);
                 return;
             // Not a Mutagen getter: without this every color (QNAM, TINC) had the same fingerprint.
             case System.Drawing.Color color:
                 sb.Append('#').Append(color.ToArgb().ToString("X8", CultureInfo.InvariantCulture));
                 return;
             case IFormLinkGetter link:
-                sb.Append(link.FormKeyNullable?.ToString() ?? "null");
+                if (link.FormKeyNullable is { } key)
+                    AppendFormKey(sb, key);
+                else
+                    sb.Append("null");
                 return;
             case ReadOnlyMemorySlice<byte> bytes:
                 sb.Append(Convert.ToHexString(bytes));

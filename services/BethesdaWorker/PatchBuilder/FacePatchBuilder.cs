@@ -771,7 +771,8 @@ internal static partial class FacePatchBuilder
         // Safe patch: every NPC_ field of every override (not only the face ones) against the winner.
         semanticDiffs = NpcSafePatch.CheckAll(session, patchKey, npcs.Values, allowedByNpc, "this face/outfit export");
         // A copied face was not edited: say where each value comes from.
-        var sources = expectations.Where(e => e.Face.CopyFaceFrom is not null).ToDictionary(e => e.Npc.ToString(), e => e.Face.CopyFaceFrom!);
+        var sources = expectations.Where(e => e.Face.CopyFaceFrom is not null)
+            .ToDictionary(e => e.Npc.ToString(), e => e.Face.CopyFaceFrom!, StringComparer.OrdinalIgnoreCase);
         semanticDiffs = semanticDiffs.Select(d => sources.TryGetValue(d.Npc, out var from)
             ? d with { Changes = d.Changes.Select(c => c with { Reason = $"Copiado de {from}: el rostro del FaceGen que ya usa el juego" }).ToList() }
             : d).ToList();

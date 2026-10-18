@@ -10,7 +10,7 @@ namespace SkyrimNpcStudio.Worker.NpcCatalog;
 internal static class RecordExtractor
 {
     /// <summary>Bump whenever extraction output changes, so cached plugin rows are rebuilt.</summary>
-    public const int Version = 7;
+    public const int Version = 8;  // 8: FormKeys fingerprinted without the master's letter case
 
     /// <summary>
     /// Localized names live in separate .STRINGS files (loose or in BSAs). When they cannot be read

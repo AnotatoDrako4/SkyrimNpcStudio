@@ -204,6 +204,11 @@ class AppearanceEditor : public QObject {
   // `plugin` is the winner; set by the studio, which owns the profile facts the map needs.
   using ControlProjector = std::function<QVariantMap(const QVariantMap& chain, const QString& plugin)>;
   void set_control_projector(ControlProjector projector) { control_projector_ = std::move(projector); }
+  // Individual review (D1) of an ambiguous resolution: why it cannot be exported yet (empty when it
+  // can). `fresh` re-reads the profile first. Set by the studio, which owns the review book; without
+  // it an ambiguous resolution is never exportable.
+  using ReviewGate = std::function<QString(const std::string& form_key, const appearance::FaceResolution& resolution, bool fresh)>;
+  void set_review_gate(ReviewGate gate) { review_gate_ = std::move(gate); }
 
  signals:
   void targetChanged();
@@ -289,6 +294,7 @@ class AppearanceEditor : public QObject {
   std::optional<appearance::FaceResolution> resolution_;
   std::string resolution_npc_;
   ControlProjector control_projector_;
+  ReviewGate review_gate_;
   mutable std::optional<std::vector<face::MorphExtension>> extensions_cache_;
   mutable SnapshotPtr extensions_snapshot_;
 };

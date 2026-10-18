@@ -212,7 +212,9 @@ SceneViewModel::SceneViewModel(WorkerClient* worker, OutfitEditor* outfit, Appea
   debounce_.setInterval(reload_delay_ms_);
   connect(&debounce_, &QTimer::timeout, this, &SceneViewModel::reload);
   // Outfit edits need the worker (ARMA/ARMO resolution); face edits arrive as regenerated FaceGen.
-  connect(outfit_, &OutfitEditor::changed, this, [this] { schedule(reload_delay_ms_); });
+  connect(outfit_, &OutfitEditor::changed, this, [this] {
+    if (npc_override_.isEmpty()) schedule(reload_delay_ms_);
+  });
   if (appearance_) {
     connect(appearance_, &AppearanceEditor::faceGenChanged, this, &SceneViewModel::on_face_changed);
     // The hair color shows at once; the FaceGen patch that matches it follows in the background.
@@ -286,6 +288,7 @@ void SceneViewModel::setActive(bool active) {
 }
 
 QString SceneViewModel::effective_npc() const {
+  if (!npc_override_.isEmpty()) return npc_override_;
   QString npc = outfit_->npc_form_key();
   if (npc.isEmpty() && armor_preview_) npc = QStringLiteral("000A2C8E:Skyrim.esm");
   return npc;
@@ -390,9 +393,9 @@ void SceneViewModel::reload() {
                             .arg(task).arg(effective, armor_preview_ ? "armor-preview" : "main",
                                            preview.npc_form_key.empty() ? "record" : "draft")
                             .arg(preview.geometry_revision).toStdString());
-  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, cancel = cancel_](const Json& data) {
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective] {
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, own_cache, portrait] {
       auto prepared = std::make_shared<Prepared>();
       prepared->task = task;
       prepared->preview = preview;
@@ -419,7 +422,12 @@ void SceneViewModel::reload() {
         options.apply_skinning = true;
         options.pose_name = current_pose.toStdString();
         options.cancelled = cancelled;
-        options.cache = context->scene_cache;
+        options.cache = own_cache ? own_cache : context->scene_cache;
+        if (portrait) {
+          options.head_only = true;
+          options.diffuse_max_dimension = 512;
+          options.normal_max_dimension = 512;
+        }
         options.overlay = preview.overlay;
         op.stage("build_character_scene");
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
@@ -584,6 +592,10 @@ void SceneViewModel::install(Prepared& prepared) {
   uv_pool_ = std::move(uv_pool);
   texture_pool_ = std::move(texture_pool);
   op.succeed();
+}
+void SceneViewModel::set_npc_override(const QString& form_key) {
+  npc_override_ = form_key;
+  reload();
 }
 void SceneViewModel::select(const QString& id) { selected_ = id; emit selectionChanged(); }
 void SceneViewModel::setVisible(const QString& id, bool visible) {

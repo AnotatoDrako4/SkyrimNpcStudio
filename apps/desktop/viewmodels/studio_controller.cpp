@@ -14,7 +14,11 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QDateTime>
+#include <QFile>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThreadPool>
@@ -88,6 +92,9 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
       npc_results_(new VariantListModel({"formKey", "formId", "name", "editorId", "race", "sex", "originPlugin",
                                          "winningPlugin", "winningMod", "overrideCount", "isUnique", "usesTemplate"},
                                         this)),
+      donor_results_(new VariantListModel({"formKey", "formId", "name", "editorId", "race", "sex", "originPlugin",
+                                           "winningPlugin", "winningMod", "overrideCount", "isUnique", "usesTemplate"},
+                                          this)),
       armor_results_(new VariantListModel({"formKey", "formId", "name", "editorId", "originPlugin", "winningPlugin",
                                            "winningMod", "slots", "slotMask", "armorType", "nonPlayable", "maleModel",
                                            "femaleModel", "addonCount", "nifFound", "hasSmp"},
@@ -114,8 +121,18 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
     details["conflicts"] = chain.value("conflicts");
     return control_report_map(appearance::analyze_appearance_control(control_inputs(details)));
   });
+  appearance_->set_review_gate([this](const std::string& form_key, const appearance::FaceResolution& resolution, bool fresh) {
+    return review_block_reason(form_key, resolution, fresh);
+  });
   scene_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this);
   armor_preview_ = new SceneViewModel(worker_, outfit_, appearance_, [this] { return snapshot_; }, this, true);
+  // NPC gallery portraits: a scene of their own (fixed NPC, skin only, the record's face) with a resource
+  // cache of its own, which is the memory limit of the portraits.
+  portrait_scene_ = new SceneViewModel(worker_, outfit_, nullptr, [this] { return snapshot_; }, this);
+  portrait_scene_->set_scene_cache(std::make_shared<rendering::SceneCache>(96ull * 1024 * 1024));
+  portrait_scene_->set_portrait_mode(true);
+  portrait_scene_->setPreviewArmor(QVariant::fromValue(QStringList{}));
+  portraits_ = new PortraitRenderer(portrait_scene_, this);
   forge_ = new CharacterForgeViewModel([this] {
     creation::ForgeEnvironment env;
     env.instance_name = ss(instance_name_);
@@ -240,6 +257,11 @@ void StudioController::loadProfile(const QString& profile) {
   set_phase(Phase::Scanning);
   scene_->clear();
   armor_preview_->clear();
+  // Portraits of the previous profile stop now (queue, current head, states); the new one starts its own.
+  portraits_->set_profile(nullptr, {});
+  if (npc_more_cancel_) *npc_more_cancel_ = true;  // a page of the old profile is never appended
+  npc_more_cancel_ = nullptr;
+  ++npc_search_serial_;
   snapshot_.reset();
   // A profile scan belongs to the previous snapshot: its pending answers are dropped.
   if (scan_) {
@@ -355,6 +377,8 @@ void StudioController::start_index() {
   const auto key_source = instance_path_.toLower() + "|" + qs(s.profile.name);
   const auto hash = QCryptographicHash::hash(key_source.toUtf8(), QCryptographicHash::Sha1).toHex().left(10);
   const auto profile_key = instance_name_ + "-" + qs(s.profile.name) + "-" + QString::fromLatin1(hash);
+  load_review_book(profile_key);
+  portraits_->set_profile(snapshot_, profile_key);
   const auto cache = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/cache";
   QDir().mkpath(cache);
 
@@ -581,23 +605,108 @@ QVariantMap StudioController::npc_row(const QVariantMap& item) const {
 void StudioController::searchNpcs(const QString& text, const QString& sex, const QString& kind, const QString& plugin) {
   if (phase_ != Phase::Ready) return;
   if (npc_search_cancel_) *npc_search_cancel_ = true;
-  Json params = {{"limit", 500}};
+  if (npc_more_cancel_) *npc_more_cancel_ = true;  // a page of the previous search must not be appended
+  npc_more_cancel_ = nullptr;
+  Json params = {{"limit", kNpcPage}};
   if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
   if (!sex.isEmpty()) params["sex"] = ss(sex);
   if (!kind.isEmpty()) params["kind"] = ss(kind);
   if (!plugin.trimmed().isEmpty()) params["plugin"] = ss(plugin.trimmed());
+  npc_query_ = params;
+  npc_query_.erase("limit");
   const int serial = ++npc_search_serial_;
   npc_search_cancel_ = worker_->call(method::kSearchNpcs, params, 30s, this, [this, serial](const Json& r) {
     if (serial != npc_search_serial_) return;  // a newer search superseded this one
     QList<QVariantMap> rows;
     for (const auto& item : r.value("items", Json::array())) rows.push_back(npc_row(to_map(item)));
-    npc_results_->reset(rows);
+    npc_rows_ = std::move(rows);
+    apply_npc_filter();
     npc_total_ = r.value("total", 0);
     emit npcResultsChanged();
   }, [this](int code, const QString& message, const Json&) {
     if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Búsqueda de NPC: %1").arg(message));
   });
 }
+
+namespace {
+// "0A2C8E:Skyrim.esm" and "000A2C8E:skyrim.esm" name the same record.
+QString scan_key(const QString& form_key) {
+  const auto colon = form_key.indexOf(':');
+  bool ok = false;
+  const auto id = form_key.left(colon).toUInt(&ok, 16);
+  return colon < 0 || !ok ? form_key.toLower() : QString::number(id, 16) + ':' + form_key.mid(colon + 1).toLower();
+}
+}  // namespace
+
+void StudioController::loadMoreNpcs() {
+  if (phase_ != Phase::Ready || npc_more_cancel_ || npc_rows_.isEmpty() || npc_rows_.size() >= npc_total_) return;
+  Json params = npc_query_;
+  params["limit"] = kNpcPage;
+  params["offset"] = static_cast<int>(npc_rows_.size());
+  const int serial = npc_search_serial_;
+  const auto expected = npc_rows_.size();
+  npc_more_cancel_ = worker_->call(method::kSearchNpcs, params, 30s, this, [this, serial, expected](const Json& r) {
+    npc_more_cancel_ = nullptr;
+    // Another search, or other rows meanwhile: this page belongs to nothing on screen.
+    if (serial != npc_search_serial_ || npc_rows_.size() != expected) {
+      emit npcResultsChanged();
+      return;
+    }
+    QList<QVariantMap> rows;
+    for (const auto& item : r.value("items", Json::array())) rows.push_back(npc_row(to_map(item)));
+    npc_rows_.append(rows);
+    npc_total_ = r.value("total", npc_total_);
+    // Appended, not reset: the views keep their scroll position, cards and current item.
+    npc_results_->append(filtered_npc_rows(rows));
+    emit npcResultsChanged();
+  }, [this](int code, const QString& message, const Json&) {
+    npc_more_cancel_ = nullptr;
+    emit npcResultsChanged();
+    if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Búsqueda de NPC (página siguiente): %1").arg(message));
+  });
+  emit npcResultsChanged();
+}
+
+void StudioController::searchDonors(const QString& text) {
+  if (phase_ != Phase::Ready) return;
+  if (donor_search_cancel_) *donor_search_cancel_ = true;
+  Json params = {{"limit", 200}};
+  if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
+  const int serial = ++donor_search_serial_;
+  donor_search_cancel_ = worker_->call(method::kSearchNpcs, params, 30s, this, [this, serial](const Json& r) {
+    if (serial != donor_search_serial_) return;
+    QList<QVariantMap> rows;
+    for (const auto& item : r.value("items", Json::array())) rows.push_back(npc_row(to_map(item)));
+    donor_results_->reset(std::move(rows));
+  }, [this](int code, const QString& message, const Json&) {
+    if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Búsqueda de donantes: %1").arg(message));
+  });
+}
+
+QList<QVariantMap> StudioController::filtered_npc_rows(const QList<QVariantMap>& rows) const {
+  if (appearance_filter_.isEmpty()) return rows;
+  QList<QVariantMap> shown;
+  for (const auto& row : rows) {
+    const auto state = scan_states_.value(scan_key(row.value("formKey").toString()));
+    const bool keep = appearance_filter_ == QLatin1String("warning")    ? state.value("worst").toString() == QLatin1String("warning")
+                      : appearance_filter_ == QLatin1String("review")   ? state.value("requiresReview").toBool()
+                      : appearance_filter_ == QLatin1String("unanalysed") ? state.isEmpty()
+                                                                         : true;
+    if (keep) shown << row;
+  }
+  return shown;
+}
+
+void StudioController::apply_npc_filter() { npc_results_->reset(filtered_npc_rows(npc_rows_)); }
+
+void StudioController::setAppearanceFilter(const QString& filter) {
+  if (filter == appearance_filter_) return;
+  appearance_filter_ = filter;
+  apply_npc_filter();
+  emit npcResultsChanged();
+}
+
+QVariantMap StudioController::appearanceStateOf(const QString& form_key) const { return scan_states_.value(scan_key(form_key)); }
 
 void StudioController::selectNpc(const QString& form_key) {
   if (phase_ != Phase::Ready || form_key.isEmpty()) return;
@@ -771,6 +880,12 @@ appearance::ControlInputs build_control_inputs(const SnapshotPtr& snapshot, cons
   return in;
 }
 
+// SHA-256 of the canonical identity of a resolution's inputs (review D1). Thread-safe.
+QString review_digest(const std::string& form_key, const appearance::ControlInputs& in, const appearance::FaceResolution& resolution) {
+  const auto identity = appearance::review_identity(form_key, in, resolution);
+  return QString::fromLatin1(QCryptographicHash::hash(QByteArray::fromStdString(identity), QCryptographicHash::Sha256).toHex());
+}
+
 }  // namespace
 
 appearance::ControlInputs StudioController::control_inputs(const QVariantMap& details) const {
@@ -784,6 +899,7 @@ void StudioController::refresh_appearance_control() {
   timer.start();
   QVariantMap out;
   control_resolution_.reset();
+  control_review_digest_.clear();
   if (snapshot_ && !npc_.isEmpty()) {
     auto in = control_inputs(npc_);
     // The facial analysis counts only if it examined this NPC's FaceGen (it may still be the previous one).
@@ -799,7 +915,14 @@ void StudioController::refresh_appearance_control() {
     const auto report = appearance::analyze_appearance_control(in);
     control_resolution_ = report.resolution;
     out = control_report_map(report);
-    out["formKey"] = npc_.value("summary").toMap().value("formKey");
+    const auto form_key = npc_.value("summary").toMap().value("formKey").toString();
+    out["formKey"] = form_key;
+    if (report.resolution) {
+      control_review_digest_ = review_digest(ss(form_key), in, *report.resolution);
+      auto resolution = out.value("resolution").toMap();
+      resolution.insert(review_fields(ss(form_key), *report.resolution, control_review_digest_));
+      out["resolution"] = resolution;
+    }
     out["deviation"] = in.regeneration_deviation ? QVariant(*in.regeneration_deviation) : QVariant();
   }
   // faceGenChanged fires on every rebuild: notify only when the map itself changed.
@@ -836,6 +959,11 @@ struct StudioController::AppearanceScan {
   qint64 max_block_us = 0;
   QString max_block_where;
   qint64 analysis_us = 0;
+  QStringList listing_pages;  // per listing page on the UI thread: slices, longest slice, JSON conversion, FaceGen lookups
+  struct Page {
+    int slices = 0;
+    qint64 total_ns = 0, longest_ns = 0, json_ns = 0, locate_ns = 0;
+  } page;  // the listing page being recorded
   void note_block(const QElapsedTimer& t, const char* where) {
     if (const auto us = t.nsecsElapsed() / 1000; us > max_block_us) {
       max_block_us = us;
@@ -856,7 +984,7 @@ QVariantMap StudioController::appearance_scan() const {
   return {{"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
           {"total", s.total},         {"pending", static_cast<int>(s.pending.size())},       {"rpcCalls", s.rpc_calls},
           {"errors", s.errors},       {"listingMs", s.listing_ms},
-          {"maxBlockMs", s.max_block_us / 1000.0}, {"maxBlockWhere", s.max_block_where}, {"analysisMs", s.analysis_us / 1000},  {"resolutions", s.resolutions},
+          {"maxBlockMs", s.max_block_us / 1000.0}, {"maxBlockWhere", s.max_block_where}, {"listingPages", s.listing_pages}, {"analysisMs", s.analysis_us / 1000},  {"resolutions", s.resolutions},
           {"elapsedMs", s.running ? s.timer.elapsed() : s.elapsed_ms},
           {"counts", counts},         {"codes", codes},
           // The rows are published once, when the scan ends: handing QML the growing list on every progress
@@ -875,10 +1003,147 @@ bool StudioController::prepareFaceResolution() {
   return true;
 }
 
+// ------------------------------------------------------------------ individual review (D1)
+
+void StudioController::load_review_book(const QString& profile_key) {
+  const auto dir = qEnvironmentVariableIsSet("SNS_REVIEW_DIR")
+                       ? qEnvironmentVariable("SNS_REVIEW_DIR")
+                       : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/review";
+  QDir().mkpath(dir);
+  auto file_name = profile_key;
+  file_name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")), QStringLiteral("_"));
+  review_book_path_ = QDir(dir).filePath(file_name + ".json");
+  review_book_ = {};
+  review_book_.profile_key = ss(profile_key);
+  review_book_unreadable_ = false;
+  QFile file(review_book_path_);
+  if (!file.exists()) return;
+  if (!file.open(QIODevice::ReadOnly)) {
+    review_book_unreadable_ = true;
+    log("error", tr("No se pudo abrir el registro de revisiones %1: %2").arg(review_book_path_, file.errorString()));
+    return;
+  }
+  try {
+    review_book_ = appearance::review_book_from_json(file.readAll().toStdString());
+    review_book_.profile_key = ss(profile_key);
+  } catch (const std::exception& e) {
+    // Never treat an unreadable book as empty and overwrite it: decisions stay blocked until it is fixed.
+    review_book_ = {};
+    review_book_.profile_key = ss(profile_key);
+    review_book_unreadable_ = true;
+    log("error", tr("El registro de revisiones %1 no se puede leer (%2); no se sobrescribe y las resoluciones ambiguas quedan bloqueadas.")
+                     .arg(review_book_path_, QString::fromUtf8(e.what())));
+  }
+}
+
+bool StudioController::save_review_book(QString* error) const {
+  if (review_book_unreadable_) {
+    *error = tr("el registro existente no se puede leer; no se sobrescribe");
+    return false;
+  }
+  QSaveFile file(review_book_path_);
+  if (!file.open(QIODevice::WriteOnly)) {
+    *error = file.errorString();
+    return false;
+  }
+  const auto json = QByteArray::fromStdString(appearance::review_book_to_json(review_book_));
+  if (file.write(json) != json.size() || !file.commit()) {
+    *error = file.errorString();
+    return false;
+  }
+  return true;
+}
+
+QVariantMap StudioController::review_fields(const std::string& form_key, const appearance::FaceResolution& resolution,
+                                            const QString& digest) const {
+  const auto gate = appearance::review_gate(resolution, form_key, ss(digest), review_book_);
+  QVariantMap out{{"requiresReview", appearance::requires_review(resolution)},
+                  {"reviewState", qs(gate.state)},
+                  {"reviewReason", review_book_unreadable_ && appearance::requires_review(resolution)
+                                       ? tr("El registro de revisiones no se puede leer: %1").arg(review_book_path_)
+                                       : qs(gate.reason)},
+                  {"inputDigest", digest}};
+  if (const auto it = review_book_.records.find(form_key); it != review_book_.records.end()) {
+    out["reviewDecision"] = qs(std::string(appearance::to_string(it->second.decision)));
+    out["reviewDecidedAt"] = qs(it->second.decided_at);
+    out["reviewNotes"] = qs(it->second.notes);
+  }
+  return out;
+}
+
+bool StudioController::setReviewDecision(const QString& decision, const QString& notes) {
+  const auto form_key = appearance_control_.value("formKey").toString();
+  const auto parsed = appearance::review_decision_from(ss(decision));
+  if (!control_resolution_ || form_key.isEmpty() || control_review_digest_.isEmpty() || !appearance::requires_review(*control_resolution_)) {
+    log("warning", tr("Este NPC no tiene una resolución ambigua que revisar."));
+    return false;
+  }
+  if (!parsed || *parsed == appearance::ReviewDecision::Pending) {
+    log("warning", tr("Decisión de revisión desconocida: %1").arg(decision));
+    return false;
+  }
+  const auto key = ss(form_key);
+  const auto existing = review_book_.records.find(key);
+  const auto previous = existing != review_book_.records.end() ? std::optional<appearance::ReviewRecord>(existing->second) : std::nullopt;
+  const auto now = QDateTime::currentDateTime();  // with its UTC offset: an audit date must be unambiguous
+  review_book_.records[key] = {key, *parsed, ss(control_review_digest_),
+                               ss(now.toOffsetFromUtc(now.offsetFromUtc()).toString(Qt::ISODateWithMs)), ss(notes.trimmed())};
+  QString error;
+  if (!save_review_book(&error)) {
+    // Only persisted decisions count: undo the change in memory.
+    if (previous) review_book_.records[key] = *previous;
+    else review_book_.records.erase(key);
+    log("error", tr("No se pudo guardar la revisión de %1: %2").arg(form_key, error));
+    return false;
+  }
+  diag::record("studio", "review " + key + " " + ss(decision) + " digest " + ss(control_review_digest_.left(16)));
+  // The scan list shows the new state of this NPC (its row keeps the digest it was analysed with).
+  if (scan_) {
+    const auto& r = review_book_.records.at(key);
+    for (auto& row : scan_->rows) {
+      auto m = row.toMap();
+      if (m.value("formKey").toString() != form_key || !m.value("requiresReview").toBool()) continue;
+      const bool current = r.input_digest == ss(m.value("inputDigest").toString());
+      m["reviewState"] = r.decision == appearance::ReviewDecision::Approve ? (current ? "approved" : "stale")
+                         : r.decision == appearance::ReviewDecision::Reject ? "rejected"
+                                                                            : "deferred";
+      row = m;
+    }
+    if (auto it = scan_states_.find(scan_key(form_key)); it != scan_states_.end() && it->value("requiresReview").toBool()) {
+      const bool current = r.input_digest == ss(it->value("inputDigest").toString());
+      (*it)["reviewState"] = r.decision == appearance::ReviewDecision::Approve ? (current ? "approved" : "stale")
+                             : r.decision == appearance::ReviewDecision::Reject ? "rejected"
+                                                                                : "deferred";
+    }
+    emit appearanceScanChanged();
+  }
+  appearance_control_.clear();  // force the notification: the review fields changed, not the analysis
+  refresh_appearance_control();
+  emit appearance_->easyModChanged();
+  return true;
+}
+
+QString StudioController::review_block_reason(const std::string& form_key, const appearance::FaceResolution& resolution, bool fresh) {
+  if (!appearance::requires_review(resolution)) return {};
+  if (fresh) refresh_appearance_control();  // re-read the effective FaceGen and the inputs right before exporting
+  if (appearance_control_.value("formKey").toString() != qs(form_key) || !control_resolution_) {
+    return tr("No hay un mapa de control vigente para este NPC: abre la pestaña Origen para revisarlo.");
+  }
+  const auto& now = *control_resolution_;
+  if (now.source_plugin != resolution.source_plugin || now.winner_plugin != resolution.winner_plugin || now.fields != resolution.fields ||
+      now.discards_own_edits != resolution.discards_own_edits) {
+    return tr("La propuesta cambió desde que se preparó (orden de carga o FaceGen): vuelve a revisarla en la pestaña Origen.");
+  }
+  if (review_book_unreadable_) return tr("El registro de revisiones no se puede leer: %1").arg(review_book_path_);
+  const auto gate = appearance::review_gate(now, form_key, ss(control_review_digest_), review_book_);
+  return gate.allowed ? QString() : qs(gate.reason);
+}
+
 void StudioController::scanAppearanceControl() {
   if (phase_ != Phase::Ready || !snapshot_ || (scan_ && scan_->running)) return;
   diag::record("studio", "appearance scan");
   scan_ = std::make_shared<AppearanceScan>();
+  scan_states_.clear();
   scan_->timer.start();
   emit appearanceScanChanged();
   scan_page(0);
@@ -896,47 +1161,8 @@ void StudioController::scan_page(int offset) {
   worker_->call(method::kSearchNpcs, Json{{"limit", 250}, {"offset", offset}, {"kind", "unique"}}, 60s, this,
                 [this, scan, offset](const Json& r) {
     if (scan != scan_ || !scan->running) return;
-    QElapsedTimer block;
-    block.start();
     scan->total = r.value("total", 0);
-    const auto items = r.value("items", Json::array());
-    const auto ctx = ResourceContext::for_snapshot(snapshot_);
-    for (const auto& item : items) {
-      const auto summary = to_map(item);
-      const auto form_key = summary.value("formKey").toString();
-      ++scan->listed;
-      // FaceGen files are named after the origin plugin and the plugin-local FormID (as the worker's
-      // FaceGenFor); a race with any such file uses FaceGen.
-      const auto colon = form_key.indexOf(':');
-      const auto plugin = form_key.mid(colon + 1);
-      const auto id = form_key.left(colon).toUpper().rightJustified(8, '0');
-      const auto geometry = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\%1\\%2.nif").arg(plugin, id);
-      if (ctx && ctx->resolver && ctx->resolver->locate(ss(geometry))) scan->races.insert(summary.value("raceFormKey").toString().toLower());
-      if (summary.value("overrideCount").toInt() > 1) {
-        scan->pending << form_key;
-        continue;
-      }
-      // One record version: the chain is the origin alone.
-      const QVariantMap origin{{"plugin", plugin}, {"mod", providerOf(plugin)}, {"isOrigin", true}, {"isWinner", true}, {"changedFields", QVariantList{}}};
-      scan->singles << QVariantMap{{"summary", summary},
-                                   {"overrides", QVariantList{origin}},
-                                   {"faceGen", QVariantMap{{"geometryPath", geometry},
-                                                           {"tintPath", QStringLiteral("textures\\actors\\character\\facegendata\\facetint\\%1\\%2.dds").arg(plugin, id)}}}};
-    }
-    const int next = offset + static_cast<int>(items.size());
-    if (!items.empty() && next < scan->total) {
-      scan->note_block(block, "listing page");
-      scan_page(next);
-      return;
-    }
-    races_with_facegen_ = scan->races;
-    scan->note_block(block, "listing");
-    scan->listing_ms = scan->timer.elapsed();
-    scan->stage = QStringLiteral("analysing");
-    emit appearanceScanChanged();
-    // The worker starts on the multi-version NPCs while the studio analyses the single-version ones.
-    scan_next();
-    scan_singles();
+    scan_list_slice(scan, offset, std::make_shared<const Json>(r.value("items", Json::array())), 0);
   }, [this, scan](int, const QString& message, const Json&) {
     if (scan != scan_ || !scan->running) return;
     log("error", tr("Análisis del perfil: %1").arg(message));
@@ -946,15 +1172,84 @@ void StudioController::scan_page(int offset) {
   });
 }
 
-// Single-version NPCs: analysed 40 at a time, one slice per pass of the event loop (one slice of all of
-// them blocked the interface for 0.8 s on the test profile).
+// A listing page is recorded 50 NPCs per pass of the event loop, so the interface keeps repainting: a whole
+// page of 250 (JSON conversion and FaceGen lookups across the profile's archives) blocked it ~100 ms per page
+// on the test profile (debug build).
+void StudioController::scan_list_slice(const std::shared_ptr<AppearanceScan>& scan, int offset, const std::shared_ptr<const Json>& items,
+                                       std::size_t from) {
+  if (scan != scan_ || !scan->running) return;
+  QElapsedTimer block;
+  block.start();
+  if (from == 0) scan->page = {};
+  const auto ctx = ResourceContext::for_snapshot(snapshot_);
+  QElapsedTimer part;
+  const auto end = std::min<std::size_t>(from + 50, items->size());
+  for (auto i = from; i < end; ++i) {
+    part.start();
+    const auto summary = to_map((*items)[i]);
+    scan->page.json_ns += part.nsecsElapsed();
+    const auto form_key = summary.value("formKey").toString();
+    ++scan->listed;
+    // FaceGen files are named after the origin plugin and the plugin-local FormID (as the worker's
+    // FaceGenFor); a race with any such file uses FaceGen.
+    const auto colon = form_key.indexOf(':');
+    const auto plugin = form_key.mid(colon + 1);
+    const auto id = form_key.left(colon).toUpper().rightJustified(8, '0');
+    const auto geometry = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\%1\\%2.nif").arg(plugin, id);
+    part.start();
+    const bool has_facegen = ctx && ctx->resolver && ctx->resolver->locate(ss(geometry));
+    scan->page.locate_ns += part.nsecsElapsed();
+    if (has_facegen) scan->races.insert(summary.value("raceFormKey").toString().toLower());
+    if (summary.value("overrideCount").toInt() > 1) {
+      scan->pending << form_key;
+      continue;
+    }
+    // One record version: the chain is the origin alone.
+    const QVariantMap origin{{"plugin", plugin}, {"mod", providerOf(plugin)}, {"isOrigin", true}, {"isWinner", true}, {"changedFields", QVariantList{}}};
+    scan->singles << QVariantMap{{"summary", summary},
+                                 {"overrides", QVariantList{origin}},
+                                 {"faceGen", QVariantMap{{"geometryPath", geometry},
+                                                         {"tintPath", QStringLiteral("textures\\actors\\character\\facegendata\\facetint\\%1\\%2.dds").arg(plugin, id)}}}};
+  }
+  const auto ns = block.nsecsElapsed();
+  scan->page.total_ns += ns;
+  scan->page.longest_ns = std::max(scan->page.longest_ns, ns);
+  ++scan->page.slices;
+  scan->note_block(block, "listing slice");
+  if (end < items->size()) {
+    QTimer::singleShot(0, this, [this, scan, offset, items, end] { scan_list_slice(scan, offset, items, end); });
+    return;
+  }
+  scan->listing_pages << QStringLiteral("@%1: %2 slices, longest %3 ms, total %4 ms (json %5 ms, FaceGen lookups %6 ms, %7 NPCs)")
+                             .arg(offset).arg(scan->page.slices).arg(scan->page.longest_ns / 1e6, 0, 'f', 1).arg(scan->page.total_ns / 1e6, 0, 'f', 1)
+                             .arg(scan->page.json_ns / 1e6, 0, 'f', 1).arg(scan->page.locate_ns / 1e6, 0, 'f', 1).arg(items->size());
+  const int next = offset + static_cast<int>(items->size());
+  if (!items->empty() && next < scan->total) {
+    scan_page(next);
+    return;
+  }
+  races_with_facegen_ = scan->races;
+  scan->listing_ms = scan->timer.elapsed();
+  scan->stage = QStringLiteral("analysing");
+  emit appearanceScanChanged();
+  // The worker starts on the multi-version NPCs while the studio analyses the single-version ones.
+  scan_next();
+  scan_singles();
+}
+
+// Single-version NPCs: analysed in slices, one per pass of the event loop (one slice of all of them blocked
+// the interface for 0.8 s on the test profile).
 void StudioController::scan_singles() {
   auto scan = scan_;
   if (!scan || !scan->running) return;
   QElapsedTimer block;
   block.start();
-  const int end = std::min<int>(scan->next_single + 40, static_cast<int>(scan->singles.size()));
-  for (; scan->next_single < end; ++scan->next_single) scan_record(scan->singles[scan->next_single].toMap());
+  // About 20 ms per pass, at least one NPC: a fixed slice of 40 still blocked it ~100 ms (debug build), and an
+  // analysis that reads a FaceGen out of a BSA costs more than one that does not.
+  while (scan->next_single < scan->singles.size()) {
+    scan_record(scan->singles[scan->next_single++].toMap());
+    if (block.elapsed() >= 20) break;
+  }
   scan->note_block(block, "single-version NPCs (slice)");
   if (scan->next_single < scan->singles.size()) {
     QTimer::singleShot(0, this, [this] { scan_singles(); });
@@ -1001,17 +1296,20 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
                                           races = races_with_facegen_] {
       QElapsedTimer analysis;
       analysis.start();
-      auto report = std::make_shared<const appearance::ControlReport>(
-          appearance::analyze_appearance_control(build_control_inputs(snapshot, races, details)));
+      const auto inputs = build_control_inputs(snapshot, races, details);
+      auto report = std::make_shared<const appearance::ControlReport>(appearance::analyze_appearance_control(inputs));
+      const auto digest = report->resolution
+                              ? review_digest(ss(details.value("summary").toMap().value("formKey").toString()), inputs, *report->resolution)
+                              : QString();
       const qint64 us = analysis.nsecsElapsed() / 1000;
       QMetaObject::invokeMethod(
           self.data(),
-          [self, scan, details, report, us] {
+          [self, scan, details, report, digest, us] {
             if (!self || scan != self->scan_ || !scan->running) return;
             --scan->in_flight;
             QElapsedTimer record;
             record.start();
-            self->scan_record_report(details, *report);
+            self->scan_record_report(details, *report, digest);
             scan->analysis_us += us;
             scan->note_block(record, "recording a row");
             self->scan_next();
@@ -1030,12 +1328,17 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
 void StudioController::scan_record(const QVariantMap& details) {
   QElapsedTimer analysis;
   analysis.start();
-  const auto report = appearance::analyze_appearance_control(control_inputs(details));
+  const auto inputs = control_inputs(details);
+  const auto report = appearance::analyze_appearance_control(inputs);
+  const auto digest = report.resolution
+                          ? review_digest(ss(details.value("summary").toMap().value("formKey").toString()), inputs, *report.resolution)
+                          : QString();
   scan_->analysis_us += analysis.nsecsElapsed() / 1000;
-  scan_record_report(details, report);
+  scan_record_report(details, report, digest);
 }
 
-void StudioController::scan_record_report(const QVariantMap& details, const appearance::ControlReport& report) {
+void StudioController::scan_record_report(const QVariantMap& details, const appearance::ControlReport& report,
+                                          const QString& input_digest) {
   auto& scan = *scan_;
   QString worst = QStringLiteral("ok");
   QString message;
@@ -1061,7 +1364,13 @@ void StudioController::scan_record_report(const QVariantMap& details, const appe
       if (c.key == "facegen") facegen_mod = qs(c.mod);
     }
     const auto name = summary.value("name").toString();
+    // Review case (D1): ambiguous resolutions carry the digest of their inputs and their review state.
+    const auto review = report.resolution ? review_fields(ss(summary.value("formKey").toString()), *report.resolution, input_digest)
+                                          : QVariantMap{};
     scan.rows << QVariantMap{{"formKey", summary.value("formKey")},
+                             {"requiresReview", review.value("requiresReview", false)},
+                             {"reviewState", review.value("reviewState")},
+                             {"inputDigest", input_digest},
                              {"name", name.isEmpty() ? summary.value("editorId").toString() : name},
                              {"worst", worst},
                              {"codes", codes},
@@ -1074,6 +1383,17 @@ void StudioController::scan_record_report(const QVariantMap& details, const appe
                              {"resolutionFields", report.resolution ? string_list(report.resolution->fields) : QStringList()},
                              {"resolutionKeeps", report.resolution ? string_list(report.resolution->keeps) : QStringList()},
                              {"resolutionDiscardsOwn", report.resolution ? string_list(report.resolution->discards_own_edits) : QStringList()}};
+  }
+  {
+    const auto form_key = details.value("summary").toMap().value("formKey").toString();
+    QVariantMap state{{"worst", worst}, {"codes", codes}, {"resolution", report.resolution.has_value()}};
+    if (report.resolution) {
+      const auto review = review_fields(ss(form_key), *report.resolution, input_digest);
+      state["requiresReview"] = review.value("requiresReview");
+      state["reviewState"] = review.value("reviewState");
+      state["inputDigest"] = input_digest;
+    }
+    scan_states_.insert(scan_key(form_key), state);
   }
   if (++scan.since_emit >= 250) {
     scan.since_emit = 0;
@@ -1097,6 +1417,10 @@ void StudioController::scan_finish() {
                   .arg(scan.stage).arg(scan.analysed).arg(scan.counts.value("warning")).arg(scan.counts.value("info"))
                   .arg(scan.errors).arg(scan.elapsed_ms / 1000.0, 0, 'f', 1));
   emit appearanceScanChanged();
+  if (!appearance_filter_.isEmpty()) {
+    apply_npc_filter();
+    emit npcResultsChanged();
+  }
 }
 
 void StudioController::searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type, bool smp_only) {

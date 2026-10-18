@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using SkyrimNpcStudio.Worker.Contracts;
 
 namespace SkyrimNpcStudio.Worker.NpcCatalog;
 
@@ -19,9 +20,14 @@ internal sealed record LoadOrderRow(int LoadIndex, long PluginId, string FileNam
 /// </summary>
 internal sealed class CatalogStore : IDisposable
 {
-    public const int SchemaVersion = 3;
+    // 4: FormKey columns COLLATE NOCASE (a plugin may spell a master with another letter case), winners keyed
+    //    by the origin's spelling.
+    public const int SchemaVersion = 4;
 
     private readonly SqliteConnection _db;
+
+    // Digest of the load order this store activated (meta 'active_load_order'); null until then.
+    private string? _activeLoadOrder;
 
     private CatalogStore(SqliteConnection db) => _db = db;
 
@@ -72,7 +78,7 @@ internal sealed class CatalogStore : IDisposable
 
             CREATE TABLE records(
                 plugin_id INTEGER NOT NULL REFERENCES plugin_files(id) ON DELETE CASCADE,
-                form_key TEXT NOT NULL,
+                form_key TEXT NOT NULL COLLATE NOCASE,
                 record_type TEXT NOT NULL,
                 editor_id TEXT,
                 name TEXT,
@@ -82,27 +88,27 @@ internal sealed class CatalogStore : IDisposable
 
             CREATE TABLE npc_records(
                 plugin_id INTEGER NOT NULL REFERENCES plugin_files(id) ON DELETE CASCADE,
-                form_key TEXT NOT NULL,
+                form_key TEXT NOT NULL COLLATE NOCASE,
                 editor_id TEXT, name TEXT, search_text TEXT NOT NULL,
-                race TEXT, female INTEGER NOT NULL, is_unique INTEGER NOT NULL, is_preset INTEGER NOT NULL,
-                template TEXT, template_flags INTEGER NOT NULL,
-                default_outfit TEXT, sleeping_outfit TEXT,
+                race TEXT COLLATE NOCASE, female INTEGER NOT NULL, is_unique INTEGER NOT NULL, is_preset INTEGER NOT NULL,
+                template TEXT COLLATE NOCASE, template_flags INTEGER NOT NULL,
+                default_outfit TEXT COLLATE NOCASE, sleeping_outfit TEXT COLLATE NOCASE,
                 data TEXT NOT NULL, fingerprints TEXT NOT NULL,
                 PRIMARY KEY(plugin_id, form_key)) WITHOUT ROWID;
             CREATE INDEX npc_records_form_key ON npc_records(form_key);
 
             CREATE TABLE npc_factions(
                 plugin_id INTEGER NOT NULL REFERENCES plugin_files(id) ON DELETE CASCADE,
-                form_key TEXT NOT NULL, faction TEXT NOT NULL, rank INTEGER NOT NULL);
+                form_key TEXT NOT NULL COLLATE NOCASE, faction TEXT NOT NULL COLLATE NOCASE, rank INTEGER NOT NULL);
             CREATE INDEX npc_factions_key ON npc_factions(plugin_id, form_key);
             CREATE INDEX npc_factions_faction ON npc_factions(faction);
 
             CREATE TABLE npc_locations(
                 plugin_id INTEGER NOT NULL REFERENCES plugin_files(id) ON DELETE CASCADE,
-                form_key TEXT NOT NULL,
-                npc_form_key TEXT NOT NULL,
+                form_key TEXT NOT NULL COLLATE NOCASE,
+                npc_form_key TEXT NOT NULL COLLATE NOCASE,
                 editor_id TEXT,
-                cell_form_key TEXT,
+                cell_form_key TEXT COLLATE NOCASE,
                 cell_name TEXT,
                 cell_editor_id TEXT,
                 PRIMARY KEY(plugin_id, form_key)) WITHOUT ROWID;
@@ -110,7 +116,7 @@ internal sealed class CatalogStore : IDisposable
 
             CREATE TABLE armor_records(
                 plugin_id INTEGER NOT NULL REFERENCES plugin_files(id) ON DELETE CASCADE,
-                form_key TEXT NOT NULL,
+                form_key TEXT NOT NULL COLLATE NOCASE,
                 editor_id TEXT, name TEXT, search_text TEXT NOT NULL,
                 slot_mask INTEGER NOT NULL, armor_type TEXT NOT NULL, non_playable INTEGER NOT NULL,
                 male_model TEXT, female_model TEXT, addons TEXT NOT NULL,
@@ -128,13 +134,13 @@ internal sealed class CatalogStore : IDisposable
                 masters TEXT NOT NULL);
 
             CREATE TABLE record_winner(
-                form_key TEXT PRIMARY KEY, record_type TEXT NOT NULL, plugin_id INTEGER NOT NULL,
+                form_key TEXT PRIMARY KEY COLLATE NOCASE, record_type TEXT NOT NULL, plugin_id INTEGER NOT NULL,
                 load_index INTEGER NOT NULL, winning_plugin TEXT NOT NULL, override_count INTEGER NOT NULL) WITHOUT ROWID;
             CREATE TABLE npc_winner(
-                form_key TEXT PRIMARY KEY, plugin_id INTEGER NOT NULL, load_index INTEGER NOT NULL,
+                form_key TEXT PRIMARY KEY COLLATE NOCASE, plugin_id INTEGER NOT NULL, load_index INTEGER NOT NULL,
                 winning_plugin TEXT NOT NULL, origin_plugin TEXT NOT NULL, override_count INTEGER NOT NULL) WITHOUT ROWID;
             CREATE TABLE armor_winner(
-                form_key TEXT PRIMARY KEY, plugin_id INTEGER NOT NULL, load_index INTEGER NOT NULL,
+                form_key TEXT PRIMARY KEY COLLATE NOCASE, plugin_id INTEGER NOT NULL, load_index INTEGER NOT NULL,
                 winning_plugin TEXT NOT NULL, origin_plugin TEXT NOT NULL, override_count INTEGER NOT NULL) WITHOUT ROWID;
             """);
     }
@@ -345,35 +351,80 @@ internal sealed class CatalogStore : IDisposable
             }
         }
 
-        // origin plugin = the ModKey part of the FormKey string "ID:Plugin.esp".
+        // One winner per record whatever letter case each plugin spells its master with (the form_key columns
+        // are NOCASE; the partitions say so too): the winner is the highest load index, the key keeps the
+        // origin's spelling (lowest load index) and origin plugin = the ModKey part of that key "ID:Plugin.esp".
         Exec(_db, """
-            INSERT INTO record_winner
-            SELECT form_key, record_type, plugin_id, load_index, file_name, cnt FROM (
-                SELECT r.form_key, r.record_type, r.plugin_id, lo.load_index, lo.file_name,
-                       ROW_NUMBER() OVER (PARTITION BY r.form_key ORDER BY lo.load_index DESC) AS rn,
-                       COUNT(*) OVER (PARTITION BY r.form_key) AS cnt
+            INSERT INTO record_winner(form_key, record_type, plugin_id, load_index, winning_plugin, override_count)
+            SELECT origin_key, record_type, plugin_id, load_index, file_name, cnt FROM (
+                SELECT r.record_type, r.plugin_id, lo.load_index, lo.file_name,
+                       FIRST_VALUE(r.form_key) OVER (PARTITION BY r.form_key COLLATE NOCASE ORDER BY lo.load_index) AS origin_key,
+                       ROW_NUMBER() OVER (PARTITION BY r.form_key COLLATE NOCASE ORDER BY lo.load_index DESC) AS rn,
+                       COUNT(*) OVER (PARTITION BY r.form_key COLLATE NOCASE) AS cnt
                 FROM records r JOIN load_order lo ON lo.plugin_id = r.plugin_id)
             WHERE rn = 1;
 
-            INSERT INTO npc_winner
-            SELECT form_key, plugin_id, load_index, file_name, substr(form_key, instr(form_key, ':') + 1), cnt FROM (
-                SELECT n.form_key, n.plugin_id, lo.load_index, lo.file_name,
-                       ROW_NUMBER() OVER (PARTITION BY n.form_key ORDER BY lo.load_index DESC) AS rn,
-                       COUNT(*) OVER (PARTITION BY n.form_key) AS cnt
+            INSERT INTO npc_winner(form_key, plugin_id, load_index, winning_plugin, origin_plugin, override_count)
+            SELECT origin_key, plugin_id, load_index, file_name, substr(origin_key, instr(origin_key, ':') + 1), cnt FROM (
+                SELECT n.plugin_id, lo.load_index, lo.file_name,
+                       FIRST_VALUE(n.form_key) OVER (PARTITION BY n.form_key COLLATE NOCASE ORDER BY lo.load_index) AS origin_key,
+                       ROW_NUMBER() OVER (PARTITION BY n.form_key COLLATE NOCASE ORDER BY lo.load_index DESC) AS rn,
+                       COUNT(*) OVER (PARTITION BY n.form_key COLLATE NOCASE) AS cnt
                 FROM npc_records n JOIN load_order lo ON lo.plugin_id = n.plugin_id)
             WHERE rn = 1;
 
-            INSERT INTO armor_winner
-            SELECT form_key, plugin_id, load_index, file_name, substr(form_key, instr(form_key, ':') + 1), cnt FROM (
-                SELECT a.form_key, a.plugin_id, lo.load_index, lo.file_name,
-                       ROW_NUMBER() OVER (PARTITION BY a.form_key ORDER BY lo.load_index DESC) AS rn,
-                       COUNT(*) OVER (PARTITION BY a.form_key) AS cnt
+            INSERT INTO armor_winner(form_key, plugin_id, load_index, winning_plugin, origin_plugin, override_count)
+            SELECT origin_key, plugin_id, load_index, file_name, substr(origin_key, instr(origin_key, ':') + 1), cnt FROM (
+                SELECT a.plugin_id, lo.load_index, lo.file_name,
+                       FIRST_VALUE(a.form_key) OVER (PARTITION BY a.form_key COLLATE NOCASE ORDER BY lo.load_index) AS origin_key,
+                       ROW_NUMBER() OVER (PARTITION BY a.form_key COLLATE NOCASE ORDER BY lo.load_index DESC) AS rn,
+                       COUNT(*) OVER (PARTITION BY a.form_key COLLATE NOCASE) AS cnt
                 FROM armor_records a JOIN load_order lo ON lo.plugin_id = a.plugin_id)
             WHERE rn = 1;
             """, tx);
 
+        var digest = LoadOrderDigest(rows);
+        using (var cmd = _db.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "INSERT OR REPLACE INTO meta(key, value) VALUES ('active_load_order', $d)";
+            cmd.Parameters.AddWithValue("$d", digest);
+            cmd.ExecuteNonQuery();
+        }
+
         tx.Commit();
+        _activeLoadOrder = digest;
         Exec(_db, "PRAGMA optimize;");
+    }
+
+    /// <summary>
+    /// Fails when another process activated a different load order in this cache after this store did:
+    /// the winner tables would then answer with that load order while this worker's plugin session still
+    /// reflects its own. A store that activated the same load order shares the digest, so it is not a
+    /// conflict. Before ActivateLoadOrder there is nothing of this store's to protect.
+    /// </summary>
+    public void EnsureActiveLoadOrder()
+    {
+        if (_activeLoadOrder is null)
+        {
+            return;
+        }
+
+        var current = Scalar<string>(_db, "SELECT value FROM meta WHERE key = 'active_load_order'");
+        if (!string.Equals(current, _activeLoadOrder, StringComparison.Ordinal))
+        {
+            throw new WorkerException(ErrorCodes.IndexReplaced,
+                "Another Skyrim NPC Studio process indexed a different load order of this profile in the shared cache; re-index the profile (catalog.index) before reading.");
+        }
+    }
+
+    /// <summary>Identity of a load order: index, cached plugin row, file name and flags of every entry.</summary>
+    internal static string LoadOrderDigest(IReadOnlyList<LoadOrderRow> rows)
+    {
+        var text = string.Join('\n', rows.OrderBy(r => r.LoadIndex).Select(r => string.Join('|',
+            r.LoadIndex.ToString(CultureInfo.InvariantCulture), r.PluginId.ToString(CultureInfo.InvariantCulture),
+            r.FileName.ToUpperInvariant(), r.IsLight ? "L" : "-", r.IsMaster ? "M" : "-")));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
     }
 
     public static string SearchText(string? editorId, string? name) =>

@@ -500,6 +500,17 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   REQUIRE(hair_part.tint.has_value()); CHECK(hair_part.tint->g == Catch::Approx(0.25f));
   CHECK(std::none_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) { return i.severity == "error"; }));
 
+  // Portraits: only the FaceGen head is read and built, with the same FaceGen tint composite; no outfit.
+  sns::rendering::SceneOptions head_only;
+  head_only.head_only = true;
+  const auto portrait = sns::rendering::build_character_scene(a, resolver, head_only);
+  CHECK_FALSE(portrait.parts.empty());
+  CHECK(std::all_of(portrait.parts.begin(), portrait.parts.end(), [](const auto& p) { return p.group == "head"; }));
+  CHECK(std::none_of(portrait.parts.begin(), portrait.parts.end(), [](const auto& p) { return p.shape_name == "Plate"; }));
+  CHECK(part_named(portrait, "Head").diffuse == head_part.diffuse);
+  CHECK(part_named(portrait, "Hair").tint.has_value());
+  CHECK(portrait.texture_info.count("textures\\test\\plate_d.dds") == 0);
+
   // Missing XML is a dependency warning; the NIF still loads in its reference pose.
   std::filesystem::remove(dir.path() / "Base Mod/meshes/test/armor.xml");
   const auto missing_vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}, {"Override Mod", dir.path() / "Override Mod"}});

@@ -57,6 +57,8 @@ internal sealed class WorkerState : IDisposable
                 throw new WorkerException(ErrorCodes.NotIndexed, "No load order has been indexed yet (call catalog.index).");
             }
 
+            // The winner tables live in a cache shared with other studio processes on the same profile.
+            _catalog.Store.EnsureActiveLoadOrder();
             return query(_catalog);
         }
     }

@@ -44,6 +44,14 @@ EasyModPlan plan_face_resolution(const EasyModInputs& in, EasyModPlan plan) {
           "El parche solo copia el rostro de «" + r.source_plugin +
               "». Deshaz o exporta antes las ediciones (el color de cabello se exporta con Hair Color Safe Mode).");
   }
+  if (in.review_required) {
+    if (!in.review_block.empty()) {
+      check("review", EasyModState::Blocked, "Revisión individual del NPC", in.review_block);
+    } else {
+      check("review", EasyModState::Ok, "Aprobado en la revisión individual",
+            "La aprobación corresponde a las entradas actuales: cadena del registro, FaceGen efectivo y propuesta.");
+    }
+  }
   check("facegen", EasyModState::Ok, "FaceGen: se mantiene el de «" + r.source_mod + "»",
         "El mod no trae FaceGen: ni se copia ni se regenera, y el archivo del perfil no se toca (FaceGen Integrity Guard: nada que comparar).");
   if (blocked(in, "face-morphs") || blocked(in, "head-parts") || blocked(in, "skin-tone")) {

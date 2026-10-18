@@ -265,8 +265,9 @@ internal static partial class OutfitPatchBuilder
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: override of {assignment.Npc} does not use the new outfit.");
             }
 
-            var items = outfits[assignment.Outfit].Items?.Select(i => i.FormKey.ToString()).ToArray() ?? [];
-            if (!items.SequenceEqual(assignment.Armors.Select(a => a.FormKey)))
+            // FormKeys, not their strings: the written MAST list may spell a master with another letter case.
+            var items = outfits[assignment.Outfit].Items?.Select(i => i.FormKey).ToArray() ?? [];
+            if (!items.SequenceEqual(assignment.Armors.Select(a => FormKey.Factory(a.FormKey))))
             {
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: outfit {assignment.Outfit} items differ from the request.");
             }
@@ -281,8 +282,8 @@ internal static partial class OutfitPatchBuilder
         {
             if (!outfits.TryGetValue(item.Outfit, out var outfit))
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: standalone outfit {item.Outfit} is absent.");
-            var items = outfit.Items?.Select(i => i.FormKey.ToString()).ToArray() ?? [];
-            if (!items.SequenceEqual(item.Armors.Select(a => a.FormKey)))
+            var items = outfit.Items?.Select(i => i.FormKey).ToArray() ?? [];
+            if (!items.SequenceEqual(item.Armors.Select(a => FormKey.Factory(a.FormKey))))
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: standalone outfit {item.Outfit} items differ from the request.");
             if (esl && item.Outfit.ID is < LightRangeMin or > LightRangeMax)
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: {item.Outfit} is outside the ESL range.");

@@ -86,6 +86,14 @@ class SceneViewModel : public QObject {
   Q_INVOKABLE void setPreviewArmor(const QVariant& formKeys);
   Q_INVOKABLE void selectArmor(const QString& formKey);
   Q_INVOKABLE void setPreviewMode(const QString& mode);
+  // Portrait renderer: this scene shows one fixed NPC, independent of the editors (empty: it follows the
+  // outfit editor again), and builds with a resource cache of its own, so rendering many NPCs neither
+  // grows nor evicts the main viewer's cache.
+  void set_npc_override(const QString& form_key);
+  void set_scene_cache(std::shared_ptr<rendering::SceneCache> cache) { own_cache_ = std::move(cache); }
+  // Portraits: only the head is built, with textures no larger than a portrait needs.
+  void set_portrait_mode(bool on) { portrait_mode_ = on; }
+  [[nodiscard]] QString npc_override() const { return npc_override_; }
  signals:
   void changed();
   void visibilityChanged();
@@ -134,6 +142,9 @@ class SceneViewModel : public QObject {
   QString status_;
   QString selected_;
   std::optional<QStringList> preview_armor_;
+  QString npc_override_;
+  std::shared_ptr<rendering::SceneCache> own_cache_;
+  bool portrait_mode_ = false;
   QVariantList parts_, issues_;
   QVariantMap stats_;
   QVariantMap visibility_;

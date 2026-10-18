@@ -1,4 +1,4 @@
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
 qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(SkyrimNpcStudio WIN32
@@ -18,6 +18,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
+  viewmodels/portrait_cache.cpp viewmodels/portrait_cache.hpp
+  viewmodels/portrait_renderer.cpp viewmodels/portrait_renderer.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
   viewmodels/workbench_state.cpp viewmodels/workbench_state.hpp
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
@@ -41,6 +43,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/Theme.qml
     qml/WelcomeOverlay.qml
     qml/NpcBrowser.qml
+    qml/PortraitStage.qml
     qml/ModBrowser.qml
     qml/ArmorCatalog.qml
     qml/NpcOverview.qml
@@ -100,6 +103,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
+  Qt6::GuiPrivate  # rhi/qrhi.h: the portrait renderer reads its off-screen texture back (QRhi, semi-public API)
   Qt6::Test  # QTest::mouseClick for the --forge-preview automation (platform input path)
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face

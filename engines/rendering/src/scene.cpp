@@ -888,14 +888,14 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
           outfit[i]->name + " is not shown: " + by + " comes later in the outfit and uses the same slot "
           "(the game keeps only the last item equipped per slot)", outfit[i]->armor_form_key);
   }
-  for (std::size_t i = 0; i < outfit.size(); ++i) {
+  for (std::size_t i = 0; i < outfit.size() && !options.head_only; ++i) {
     if (!equipped[i]) continue;
     for (const auto& addon : outfit[i]->addons) {
       append_mesh(addon.mesh, "outfit", outfit[i]->name, outfit[i]->armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);
     }
   }
   for (const auto& piece : appearance.pieces) {
-    if (piece.source != "skin") continue;
+    if (piece.source != "skin" || options.head_only) continue;
     for (const auto& addon : piece.addons) {
       if (is_covered(addon.slot_mask, covered)) continue;
       append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);

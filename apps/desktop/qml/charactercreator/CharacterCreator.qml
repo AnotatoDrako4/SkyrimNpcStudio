@@ -52,7 +52,9 @@ Item {
                     Layout.fillHeight: true
 
                     NpcBrowser {
+                        objectName: "creatorNpcBrowser"
                         studio: root.studio
+                        onEditRequested: rightTabs.currentIndex = 1  // Rostro
                     }
 
                     ArmorCatalog {
@@ -95,17 +97,17 @@ Item {
                                 Layout.fillWidth: true
                                 placeholderText: qsTr("Buscar NPC donante…")
                                 onTextChanged: donorDebounce.restart()
-                                onAccepted: root.studio.searchNpcs(text, "", "", "")
+                                onAccepted: root.studio.searchDonors(text)
                             }
-                            Timer { id: donorDebounce; interval: 250; onTriggered: root.studio.searchNpcs(donorFilter.text, "", "", "") }
+                            Timer { id: donorDebounce; interval: 250; onTriggered: root.studio.searchDonors(donorFilter.text) }
 
                             ListView {
                                 id: donorList
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 clip: true
-                                // The NPC search results (shared with the NPC list); it never had its own model.
-                                model: root.studio.npcResults
+                                // Donor search results: a model of its own, so the NPC browser keeps its rows.
+                                model: root.studio.donorResults
                                 delegate: Rectangle {
                                     id: donorRow
                                     required property string formKey

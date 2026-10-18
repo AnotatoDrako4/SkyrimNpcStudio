@@ -37,6 +37,13 @@ ApplicationWindow {
 
     readonly property bool ready: studio.phase === StudioController.Ready
 
+    // Stage of the NPC gallery portraits: a component the renderer creates inside its own off-screen window
+    // (never in this one, whose viewer would lose its Quick 3D resources). The renderer gives it its scene.
+    Component {
+        id: portraitStageComponent
+        PortraitStage {}
+    }
+
     // Panels of the workspace on screen (each workspace keeps its own; see WorkbenchState).
     readonly property var workspaceKeys: ["creator", "outfit", "forge"]
     readonly property WorkspaceLayout layout: Workbench.layout(workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
@@ -106,6 +113,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         Theme.advancedMode = windowSettings.advancedMode
+        window.studio.portraits.attachStage(portraitStageComponent)
         if (!ready) welcome.open()
     }
 
@@ -450,7 +458,10 @@ ApplicationWindow {
                             }
 
                             NpcBrowser {
+                                objectName: "outfitNpcBrowser"
                                 studio: window.studio
+                                // The editor of the selected NPC is the character workspace.
+                                onEditRequested: workspaceTabs.currentIndex = 0
                             }
 
                             ModBrowser {

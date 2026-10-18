@@ -189,6 +189,31 @@ TEST_CASE("Easy Mod Creator: a face resolution is its own minimal export", "[app
   CHECK(plan.summary.find("sin FaceGen") != std::string::npos);
 }
 
+TEST_CASE("Easy Mod Creator: an ambiguous resolution needs an individual approval", "[appearance][easymod][resolution][review]") {
+  auto in = loaded();
+  in.face_resolution = riften_resolution();
+  in.face_resolution->discards_own_edits = {"AI Overhaul.esp"};
+  in.review_required = true;
+
+  in.review_block = "Revisión individual pendiente: este parche descartaría ediciones propias de «AI Overhaul.esp».";
+  const auto blocked = plan_easy_mod(in);
+  CHECK(blocked.mode == EasyModMode::FaceResolution);
+  CHECK_FALSE(blocked.can_export);
+  REQUIRE(find(blocked.checks, "review"));
+  CHECK(find(blocked.checks, "review")->state == EasyModState::Blocked);
+  CHECK(find(blocked.checks, "review")->detail == in.review_block);
+
+  in.review_block.clear();  // approved for the current inputs
+  const auto approved = plan_easy_mod(in);
+  CHECK(approved.can_export);
+  REQUIRE(find(approved.checks, "review"));
+  CHECK(find(approved.checks, "review")->state == EasyModState::Ok);
+
+  // A clear resolution has no review check at all.
+  in.review_required = false;
+  CHECK_FALSE(find(plan_easy_mod(in).checks, "review"));
+}
+
 TEST_CASE("Easy Mod Creator: a face resolution never mixes with editor changes", "[appearance][easymod][resolution]") {
   auto in = loaded();
   in.face_resolution = riften_resolution();

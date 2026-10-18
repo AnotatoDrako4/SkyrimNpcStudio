@@ -229,7 +229,7 @@ internal static class ModPackager
         masters = built.Masters.Select(m => new
         {
             plugin = m.FileName.String,
-            providedBy = pluginProviders?.GetValueOrDefault(m.FileName.String),
+            providedBy = ProviderOf(pluginProviders, m.FileName.String),
             loadIndex = session.Find(m)?.LoadIndex,
         }),
         // Plugins this one must load after (declared as masters although no record links to them).
@@ -363,7 +363,7 @@ internal static class ModPackager
         sb.AppendLine("Deben estar activos y cargarse ANTES de este plugin:").AppendLine();
         foreach (var master in built.Masters)
         {
-            var provider = pluginProviders?.GetValueOrDefault(master.FileName.String);
+            var provider = ProviderOf(pluginProviders, master.FileName.String);
             sb.AppendLine(provider is null ? $"- {master.FileName}" : $"- {master.FileName} — mod de MO2 \"{provider}\"");
         }
 
@@ -551,4 +551,17 @@ internal static class ModPackager
 
     public static string WorkerVersion { get; } =
         typeof(ModPackager).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "0.0.0";
+
+    // The MO2 mod of a plugin; a master may be written with another letter case than the provider map's key.
+    private static string? ProviderOf(IReadOnlyDictionary<string, string>? providers, string plugin)
+    {
+        if (providers is null)
+        {
+            return null;
+        }
+
+        return providers.TryGetValue(plugin, out var exact)
+            ? exact
+            : providers.FirstOrDefault(p => string.Equals(p.Key, plugin, StringComparison.OrdinalIgnoreCase)).Value;
+    }
 }

@@ -192,11 +192,11 @@ ScrollView {
                 id: donorSearchField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Buscar NPC donante por nombre...")
-                onAccepted: root.studio.searchNpcs(text, "", "", "")
+                onAccepted: root.studio.searchDonors(text)
             }
             Button {
                 text: qsTr("Buscar")
-                onClicked: root.studio.searchNpcs(donorSearchField.text, "", "", "")
+                onClicked: root.studio.searchDonors(donorSearchField.text)
             }
         }
 
@@ -204,7 +204,7 @@ ScrollView {
             Layout.fillWidth: true
             implicitHeight: Math.min(200, count * 40)
             clip: true
-            model: root.studio.npcResults
+            model: root.studio.donorResults
             boundsBehavior: Flickable.StopAtBounds
 
             delegate: Rectangle {

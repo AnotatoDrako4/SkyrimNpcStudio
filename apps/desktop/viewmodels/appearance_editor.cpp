@@ -17,6 +17,7 @@
 #include "outfit_editor.hpp"
 #include "resource_context.hpp"
 #include "sns/appearance/easy_mod.hpp"
+#include "sns/appearance/review_case.hpp"
 #include "sns/core/file_io.hpp"
 #include "sns/core/text.hpp"
 #include "sns/face/face_tint.hpp"
@@ -838,6 +839,11 @@ QVariantMap AppearanceEditor::easy_mod_plan() const {
   for (const auto& b : compatibility_.value("blocked").toList()) in.blocked_operations.push_back(ss(b.toMap().value("op").toString()));
   in.provenance_conflict = ss(compatibility_.value("provenance").toMap().value("conflict").toString());
   if (resolution_ && resolution_npc_ == target_.form_key) in.face_resolution = resolution_;
+  if (in.face_resolution && appearance::requires_review(*in.face_resolution)) {
+    in.review_required = true;
+    in.review_block = review_gate_ ? ss(review_gate_(target_.form_key, *in.face_resolution, false))
+                                   : ss(tr("La revisión individual no está disponible en esta ventana."));
+  }
 
   const auto plan = appearance::plan_easy_mod(in);
   auto items = [](const std::vector<appearance::EasyModItem>& list) {
@@ -1571,6 +1577,17 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
   if (!resolution_ || resolution_npc_ != target_.form_key) {
     finish_export(false, tr("No hay ninguna resolución preparada para este NPC (pestaña Origen)."), {}, {}, {});
     return;
+  }
+  // Ambiguous case (D1): re-read the profile (chain, effective FaceGen) and check the individual approval
+  // against those inputs right before writing anything.
+  if (appearance::requires_review(*resolution_)) {
+    const auto reason = review_gate_ ? review_gate_(target_.form_key, *resolution_, true)
+                                     : tr("La revisión individual no está disponible en esta ventana.");
+    if (!reason.isEmpty()) {
+      diag::record("export", "face resolution blocked by review: " + target_.form_key);
+      finish_export(false, tr("El parche de resolución no se puede crear: %1").arg(reason), {}, {}, {});
+      return;
+    }
   }
   // The same checks the assistant shows: no pending editor changes, analysis finished.
   const auto plan = easy_mod_plan();

@@ -223,7 +223,9 @@ internal static partial class NpcSafePatch
         return value switch
         {
             null => "",
-            IFormLinkGetter link => link.IsNull ? "" : link.FormKey.ToString(),
+            // A link names the same record whatever letter case its master is written with (Mutagen's FormKey
+            // equality ignores it; ToString keeps it).
+            IFormLinkGetter link => link.IsNull ? "" : $"{link.FormKey.ID:X6}:{link.FormKey.ModKey.FileName.String.ToUpperInvariant()}",
             string text => text,
             IEnumerable items and not string => string.Join("|", items.Cast<object?>().Select(Fingerprint)),
             _ => Whitespace().Replace(value.ToString() ?? "", " ").Trim(),

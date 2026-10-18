@@ -18,7 +18,8 @@ add_executable(sns_engine_tests
   unit/engines/test_outfit_presets.cpp
   unit/engines/test_compatibility_guardian.cpp
   unit/engines/test_control_map.cpp
-  unit/engines/test_easy_mod.cpp)
+  unit/engines/test_easy_mod.cpp
+  unit/engines/test_review_case.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
 target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)
@@ -32,6 +33,15 @@ if(CMAKE_GENERATOR MATCHES "Ninja")
   add_test(NAME "build:header dependencies recorded"
     COMMAND ${CMAKE_COMMAND} -DNINJA=${CMAKE_MAKE_PROGRAM} -DBUILD_DIR=${CMAKE_BINARY_DIR}
             -P ${PROJECT_SOURCE_DIR}/cmake/CheckHeaderDeps.cmake)
+endif()
+
+# ---- Scripts: test run manifest (D3/D22) records a run and refuses stale or altered evidence ----
+find_program(SNS_PWSH NAMES pwsh)
+if(SNS_PWSH)
+  add_test(NAME "scripts:test run manifest records a run and verifies its evidence"
+    COMMAND ${SNS_PWSH} -NoProfile -NonInteractive -File ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_run_manifest.tests.ps1
+            -Work ${CMAKE_CURRENT_BINARY_DIR}/test-run-manifest-selftest)
+  set_tests_properties("scripts:test run manifest records a run and verifies its evidence" PROPERTIES TIMEOUT 120)
 endif()
 
 # ---- Desktop app: the crash handler writes a report and a minidump ----------------------------
@@ -61,6 +71,16 @@ if(SNS_BUILD_APP AND WIN32)
   target_include_directories(sns_workbench_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
   target_link_libraries(sns_workbench_tests PRIVATE Qt6::Core Qt6::Qml sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_workbench_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
+  # Portrait cache of the NPC gallery: entries, validation against the profile, previous versions and Skyrim
+  # captures (Qt Gui only for QImageReader; no window).
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Gui)
+  add_executable(sns_portrait_cache_tests
+    app/test_portrait_cache.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/portrait_cache.cpp)
+  target_include_directories(sns_portrait_cache_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_portrait_cache_tests PRIVATE Qt6::Core Qt6::Gui sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_portrait_cache_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
 
   foreach(kind access-violation terminate abort)
     add_test(NAME "app:crash report and minidump (${kind})"

@@ -12,11 +12,13 @@
 #include "mo2_snapshot.hpp"
 #include "sns/appearance/appearance_draft.hpp"
 #include "sns/appearance/control_map.hpp"
+#include "sns/appearance/review_case.hpp"
 #include "outfit_editor.hpp"
 #include "appearance_editor.hpp"
 #include "variant_list_model.hpp"
 #include "worker_client.hpp"
 #include "scene_viewmodel.hpp"
+#include "portrait_renderer.hpp"
 
 namespace sns::app {
 
@@ -34,12 +36,24 @@ class StudioController : public QObject {
   Q_PROPERTY(EditHistory* history READ history CONSTANT)
   Q_PROPERTY(SceneViewModel* scene READ scene CONSTANT)
   Q_PROPERTY(SceneViewModel* armorPreview READ armor_preview CONSTANT)
+  // NPC gallery portraits: their renderer and the scene it builds them with (fixed NPC, skin only).
+  Q_PROPERTY(PortraitRenderer* portraits READ portraits CONSTANT)
+  Q_PROPERTY(SceneViewModel* portraitScene READ portrait_scene CONSTANT)
   Q_PROPERTY(VariantListModel* instances READ instances CONSTANT)
   Q_PROPERTY(VariantListModel* mods READ mods CONSTANT)
   Q_PROPERTY(VariantListModel* diagnostics READ diagnostics CONSTANT)
   Q_PROPERTY(VariantListModel* npcResults READ npc_results CONSTANT)
+  // Results of the donor searches (Character Creator donors, preset manager): never the NPC browser's rows.
+  Q_PROPERTY(VariantListModel* donorResults READ donor_results CONSTANT)
+  // True while the next page of the current NPC search is being fetched.
+  Q_PROPERTY(bool npcLoadingMore READ npc_loading_more NOTIFY npcResultsChanged)
   Q_PROPERTY(VariantListModel* armorResults READ armor_results CONSTANT)
   Q_PROPERTY(int npcTotal READ npc_total NOTIFY npcResultsChanged)
+  // Rows the last NPC search returned, before the appearance filter (npcResults holds the shown rows).
+  Q_PROPERTY(int npcLoaded READ npc_loaded NOTIFY npcResultsChanged)
+  // Appearance filter over the rows of the last search, from the profile scan: "" (all), "warning"
+  // (facial warnings), "review" (ambiguous case under individual review) or "unanalysed".
+  Q_PROPERTY(QString appearanceFilter READ appearance_filter WRITE setAppearanceFilter NOTIFY npcResultsChanged)
   Q_PROPERTY(int armorTotal READ armor_total NOTIFY armorResultsChanged)
   // Plugins that define or override armors, for the catalog's mod filter: {plugin, mod, armors},
   // sorted by MO2 mod name.
@@ -79,12 +93,18 @@ class StudioController : public QObject {
   [[nodiscard]] EditHistory* history() const { return history_; }
   [[nodiscard]] SceneViewModel* scene() const { return scene_; }
   [[nodiscard]] SceneViewModel* armor_preview() const { return armor_preview_; }
+  [[nodiscard]] PortraitRenderer* portraits() const { return portraits_; }
+  [[nodiscard]] SceneViewModel* portrait_scene() const { return portrait_scene_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
   [[nodiscard]] VariantListModel* diagnostics() const { return diagnostics_; }
   [[nodiscard]] VariantListModel* npc_results() const { return npc_results_; }
+  [[nodiscard]] VariantListModel* donor_results() const { return donor_results_; }
+  [[nodiscard]] bool npc_loading_more() const { return npc_more_cancel_ != nullptr; }
   [[nodiscard]] VariantListModel* armor_results() const { return armor_results_; }
   [[nodiscard]] int npc_total() const { return npc_total_; }
+  [[nodiscard]] int npc_loaded() const { return static_cast<int>(npc_rows_.size()); }
+  [[nodiscard]] QString appearance_filter() const { return appearance_filter_; }
   [[nodiscard]] int armor_total() const { return armor_total_; }
   [[nodiscard]] QVariantList armor_plugins() const { return armor_plugins_; }
   [[nodiscard]] QString instance_path() const { return instance_path_; }
@@ -116,12 +136,29 @@ class StudioController : public QObject {
   Q_INVOKABLE void cancel();
 
   Q_INVOKABLE void searchNpcs(const QString& text, const QString& sex, const QString& kind, const QString& plugin);
+  // Next page (kNpcPage rows) of the current search, appended in the same order; nothing when all are loaded.
+  Q_INVOKABLE void loadMoreNpcs();
+  Q_INVOKABLE void searchDonors(const QString& text);
+  static constexpr int kNpcPage = 500;
   Q_INVOKABLE void selectNpc(const QString& form_key);
+  Q_INVOKABLE void setAppearanceFilter(const QString& filter);
+  // What the last profile scan found for this NPC: {worst, codes, resolution, requiresReview, reviewState,
+  // inputDigest}; empty when it was not analysed (no scan yet, or not a unique NPC).
+  Q_INVOKABLE QVariantMap appearanceStateOf(const QString& form_key) const;
   Q_INVOKABLE void scanAppearanceControl();
   Q_INVOKABLE void cancelAppearanceScan();
   // Hands the control map's «Usar el rostro de X» of the selected NPC to the Easy Mod Creator, which
   // then plans (and exports) that patch. Returns false when the map offers no resolution.
   Q_INVOKABLE bool prepareFaceResolution();
+  // Individual review (D1) of the current NPC's ambiguous resolution: "approve", "reject" or "defer",
+  // bound to the digest of the inputs the map shows now. Persisted per profile with an atomic write.
+  Q_INVOKABLE bool setReviewDecision(const QString& decision, const QString& notes);
+  // Why the resolution of `form_key` cannot be exported yet (empty when it can). `fresh` re-reads the
+  // profile first (effective FaceGen, chain); `resolution` must still be the one the map proposes.
+  QString review_block_reason(const std::string& form_key, const appearance::FaceResolution& resolution, bool fresh);
+  // Where the review decisions of the current profile are kept (SNS_REVIEW_DIR overrides the folder).
+  Q_PROPERTY(QString reviewBookPath READ review_book_path NOTIFY appearanceControlChanged)
+  [[nodiscard]] QString review_book_path() const { return review_book_path_; }
   Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type = {}, bool smp_only = false);
   Q_INVOKABLE void filterMods(const QString& text, bool enabled_only);
   Q_INVOKABLE QVariantMap modDetails(const QString& mod_name) const;
@@ -154,6 +191,8 @@ class StudioController : public QObject {
   void rebuild_mod_rows();
   void refresh_plugin_counts();
   QVariantMap npc_row(const QVariantMap& item) const;
+  void apply_npc_filter();
+  [[nodiscard]] QList<QVariantMap> filtered_npc_rows(const QList<QVariantMap>& rows) const;
   // Recomputes appearance_control_ from npc_, the profile VFS and the facial analysis.
   void refresh_appearance_control();
   // Control map inputs from getNpc details (overrides with "mod", conflicts, faceGen paths), without the
@@ -164,11 +203,16 @@ class StudioController : public QObject {
   [[nodiscard]] bool facegen_expected(const QVariantMap& details) const;
   struct AppearanceScan;
   void scan_page(int offset);
+  void scan_list_slice(const std::shared_ptr<AppearanceScan>& scan, int offset, const std::shared_ptr<const Json>& items, std::size_t from);
   void scan_next();
   void scan_singles();
   void request_scan_npc(const std::shared_ptr<AppearanceScan>& scan, const QString& form_key);
   void scan_record(const QVariantMap& details);
-  void scan_record_report(const QVariantMap& details, const appearance::ControlReport& report);
+  void scan_record_report(const QVariantMap& details, const appearance::ControlReport& report, const QString& input_digest);
+  void load_review_book(const QString& profile_key);
+  bool save_review_book(QString* error) const;
+  // requiresReview / reviewState / reviewReason / inputDigest (+ decision, date, notes) for QML.
+  QVariantMap review_fields(const std::string& form_key, const appearance::FaceResolution& resolution, const QString& digest) const;
   void scan_finish();
 
   WorkerClient* worker_;
@@ -181,15 +225,21 @@ class StudioController : public QObject {
   AppearanceEditor* appearance_ = nullptr;
   SceneViewModel* scene_ = nullptr;
   SceneViewModel* armor_preview_ = nullptr;
+  SceneViewModel* portrait_scene_ = nullptr;
+  PortraitRenderer* portraits_ = nullptr;
   VariantListModel* instances_;
   VariantListModel* mods_;
   VariantListModel* diagnostics_;
   VariantListModel* npc_results_;
+  VariantListModel* donor_results_;
   VariantListModel* armor_results_;
   QList<QVariantMap> all_mod_rows_;
   QVariantList armor_plugins_;
   QHash<QString, QVariantMap> plugin_counts_;  // plugin (lower-case) -> {npcRecords, armorRecords, outfitRecords}
   int npc_total_ = 0;
+  QList<QVariantMap> npc_rows_;  // last NPC search, before the appearance filter
+  QString appearance_filter_;
+  QHash<QString, QVariantMap> scan_states_;  // scan_key(FormKey) -> appearanceStateOf(), every analysed NPC
   int armor_total_ = 0;
   QString instance_path_;
   QString game_path_;
@@ -203,6 +253,10 @@ class StudioController : public QObject {
   QVariantMap npc_;
   QVariantMap appearance_control_;
   std::optional<appearance::FaceResolution> control_resolution_;  // of appearance_control_
+  QString control_review_digest_;  // SHA-256 of review_identity of control_resolution_ and its inputs
+  appearance::ReviewBook review_book_;
+  QString review_book_path_;
+  bool review_book_unreadable_ = false;  // an existing book could not be read: never overwrite it
   std::shared_ptr<AppearanceScan> scan_;
   QSet<QString> races_with_facegen_;  // race FormKeys (lower-case) with a FaceGen file for some unique NPC
   bool npc_loading_ = false;
@@ -211,6 +265,10 @@ class StudioController : public QObject {
   std::shared_ptr<std::atomic<bool>> scan_cancel_;
   WorkerClient::CancelToken index_cancel_;
   WorkerClient::CancelToken npc_search_cancel_;
+  WorkerClient::CancelToken npc_more_cancel_;  // set while a next page is in flight
+  WorkerClient::CancelToken donor_search_cancel_;
+  Json npc_query_;  // filters of the current NPC search (no limit or offset)
+  int donor_search_serial_ = 0;
   WorkerClient::CancelToken armor_search_cancel_;
   int npc_search_serial_ = 0;
   int armor_search_serial_ = 0;

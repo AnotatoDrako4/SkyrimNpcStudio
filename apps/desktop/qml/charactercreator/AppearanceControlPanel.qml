@@ -46,6 +46,24 @@ ScrollView {
     function severityColor(severity) {
         return severity === "warning" ? Theme.warn : severity === "info" ? Theme.textDim : Theme.ok
     }
+    // Individual review (D1) of an ambiguous resolution.
+    function reviewStateText(state) {
+        return state === "approved" ? qsTr("aprobada para las entradas actuales")
+             : state === "rejected" ? qsTr("rechazada (no se exporta)")
+             : state === "deferred" ? qsTr("aplazada (no se exporta)")
+             : state === "stale" ? qsTr("caducada: las entradas cambiaron")
+             : qsTr("pendiente")
+    }
+    function reviewStateColor(state) {
+        return state === "approved" ? Theme.ok : state === "rejected" ? Theme.error : Theme.warn
+    }
+    function reviewSummary() {
+        const rows = (root.scan.rows || []).filter(r => r.requiresReview === true)
+        if (rows.length === 0) return ""
+        const count = s => rows.filter(r => r.reviewState === s).length
+        return qsTr("%1 casos ambiguos con revisión individual: %2 pendientes, %3 aprobados, %4 rechazados, %5 aplazados, %6 caducados")
+            .arg(rows.length).arg(count("pending")).arg(count("approved")).arg(count("rejected")).arg(count("deferred")).arg(count("stale"))
+    }
     function kindText(kind) {
         return kind === "loose" ? qsTr("archivo suelto") : kind === "bsa" ? qsTr("dentro de un BSA")
              : kind === "missing" ? qsTr("no existe en el perfil") : ""
@@ -227,6 +245,94 @@ ScrollView {
                     font.pixelSize: Theme.micro
                     wrapMode: Text.WrapAnywhere
                 }
+                // Individual review (D1): this patch would discard a mod's own face edits. It is exportable only
+                // after a human decision for this NPC, bound to the digest of the inputs shown here.
+                Rectangle {
+                    objectName: "faceReviewPanel"
+                    Layout.fillWidth: true
+                    visible: root.resolution !== null && root.resolution.requiresReview === true
+                    implicitHeight: reviewColumn.implicitHeight + 12
+                    color: Theme.panel
+                    radius: 3
+                    border.color: root.reviewStateColor(root.resolution ? root.resolution.reviewState : "")
+                    border.width: 1
+                    ColumnLayout {
+                        id: reviewColumn
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        spacing: 4
+                        Text {
+                            objectName: "faceReviewState"
+                            Layout.fillWidth: true
+                            text: qsTr("Revisión individual: %1").arg(root.reviewStateText(root.resolution ? root.resolution.reviewState : ""))
+                            color: root.reviewStateColor(root.resolution ? root.resolution.reviewState : "")
+                            font.bold: true
+                            font.pixelSize: Theme.small
+                            wrapMode: Text.WordWrap
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: text.length > 0
+                            text: root.resolution ? (root.resolution.reviewReason || "") : ""
+                            color: Theme.text
+                            font.pixelSize: Theme.micro
+                            wrapMode: Text.WordWrap
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: !!(root.resolution && root.resolution.reviewDecidedAt)
+                            text: root.resolution && root.resolution.reviewDecidedAt
+                                  ? qsTr("Última decisión: %1 (%2)%3").arg(root.resolution.reviewDecision).arg(root.resolution.reviewDecidedAt)
+                                        .arg(root.resolution.reviewNotes ? " — " + root.resolution.reviewNotes : "")
+                                  : ""
+                            color: Theme.textDim
+                            font.pixelSize: Theme.micro
+                            wrapMode: Text.WordWrap
+                        }
+                        TextField {
+                            id: reviewNotes
+                            objectName: "faceReviewNotes"
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Notas de la revisión (opcional)")
+                            font.pixelSize: Theme.small
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Button {
+                                objectName: "faceReviewApprove"
+                                Layout.fillWidth: true
+                                text: qsTr("Aprobar")
+                                enabled: !root.studio.appearance.exporting
+                                onClicked: if (root.studio.setReviewDecision("approve", reviewNotes.text)) reviewNotes.text = ""
+                            }
+                            Button {
+                                objectName: "faceReviewReject"
+                                Layout.fillWidth: true
+                                text: qsTr("Rechazar")
+                                enabled: !root.studio.appearance.exporting
+                                onClicked: if (root.studio.setReviewDecision("reject", reviewNotes.text)) reviewNotes.text = ""
+                            }
+                            Button {
+                                objectName: "faceReviewDefer"
+                                Layout.fillWidth: true
+                                text: qsTr("Aplazar")
+                                enabled: !root.studio.appearance.exporting
+                                onClicked: if (root.studio.setReviewDecision("defer", reviewNotes.text)) reviewNotes.text = ""
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Decide solo por este NPC y estas entradas (huella %1…). Si cambian el orden de carga, el FaceGen "
+                                     + "efectivo o la propuesta, la aprobación caduca. Registro: %2")
+                                      .arg(root.resolution && root.resolution.inputDigest ? root.resolution.inputDigest.slice(0, 12) : "?")
+                                      .arg(root.studio.reviewBookPath)
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.micro
+                            wrapMode: Text.WrapAnywhere
+                        }
+                    }
+                }
                 Button {
                     objectName: "faceResolutionButton"
                     Layout.fillWidth: true
@@ -350,6 +456,17 @@ ScrollView {
             font.pixelSize: Theme.micro
             wrapMode: Text.WordWrap
         }
+        Text {
+            objectName: "scanReviewSummary"
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            visible: text.length > 0
+            text: root.reviewSummary()
+            color: Theme.warn
+            font.pixelSize: Theme.micro
+            wrapMode: Text.WordWrap
+        }
         Repeater {
             model: (root.scan.rows || []).slice(0, root.scanRowsShown)
             delegate: Rectangle {
@@ -379,6 +496,14 @@ ScrollView {
                         color: Theme.textDim
                         font.pixelSize: Theme.micro
                         wrapMode: Text.WrapAnywhere
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: modelData.requiresReview === true
+                        text: qsTr("Caso ambiguo · revisión %1").arg(root.reviewStateText(modelData.reviewState))
+                        color: root.reviewStateColor(modelData.reviewState)
+                        font.pixelSize: Theme.micro
+                        wrapMode: Text.WordWrap
                     }
                 }
                 MouseArea {

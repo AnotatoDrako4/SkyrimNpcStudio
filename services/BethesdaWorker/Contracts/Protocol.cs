@@ -59,5 +59,11 @@ public static class ErrorCodes
     public const int Busy = 1007;
     public const int OutputExists = 1008;
     public const int InvalidArgument = 1009;
+
+    /// <summary>
+    /// Another process activated a different load order in this profile's shared index cache since this
+    /// worker indexed it: its winner tables are no longer this catalog's. Re-index (catalog.index).
+    /// </summary>
+    public const int IndexReplaced = 1010;
     public const int RequestCancelled = -32800;
 }

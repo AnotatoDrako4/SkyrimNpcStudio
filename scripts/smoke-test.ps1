@@ -47,6 +47,26 @@ $env:QT_QUICK_BACKEND = 'rhi'
 $env:QSG_RHI_BACKEND = 'd3d11'
 $env:QT_QPA_FONTDIR = Join-Path $env:WINDIR 'Fonts'
 $env:QT_FORCE_STDERR_LOGGING = '1'
+# Stress runs never read or write the user's review decisions (D1): the studio keeps them in a new,
+# temporary book next to the stress output unless SNS_REVIEW_DIR is already set.
+$temporaryReviewDir = $false
+if ($StressAppearance -and -not $env:SNS_REVIEW_DIR) {
+    $temporaryReviewDir = $true
+    $reviewBase = if ($StressWork) { $StressWork } else { Split-Path -Parent $Screenshot }
+    $env:SNS_REVIEW_DIR = Join-Path $reviewBase ('review-book-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmssfff'))
+    New-Item -ItemType Directory -Force $env:SNS_REVIEW_DIR | Out-Null
+    Write-Host "Review decisions of this run: $env:SNS_REVIEW_DIR"
+}
+# Gallery portraits of stress runs go to a new folder next to the stress output (never the user's cache),
+# unless SNS_PORTRAIT_CACHE_DIR is already set (a second run reuses a first run's folder on purpose).
+$temporaryPortraitDir = $false
+if ($StressAppearance -and -not $env:SNS_PORTRAIT_CACHE_DIR) {
+    $temporaryPortraitDir = $true
+    $portraitBase = if ($StressWork) { $StressWork } else { Split-Path -Parent $Screenshot }
+    $env:SNS_PORTRAIT_CACHE_DIR = Join-Path $portraitBase ('portraits-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmssfff'))
+    New-Item -ItemType Directory -Force $env:SNS_PORTRAIT_CACHE_DIR | Out-Null
+    Write-Host "Portraits of this run: $env:SNS_PORTRAIT_CACHE_DIR"
+}
 
 $arguments = @('--smoke-test', '--screenshot', "`"$Screenshot`"")
 if ($Instance) { $arguments += @('--instance', "`"$Instance`"") }
@@ -71,6 +91,9 @@ if ($CaptureSet) {
 
 $log = [IO.Path]::ChangeExtension($Screenshot, '.log')
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle $(if ($ShowWindow) { 'Normal' } else { 'Hidden' }) -PassThru -RedirectStandardError $log
+# The studio inherited the variable; a later run in this shell must not reuse this run's decisions.
+if ($temporaryReviewDir) { $env:SNS_REVIEW_DIR = $null }
+if ($temporaryPortraitDir) { $env:SNS_PORTRAIT_CACHE_DIR = $null }
 # Touch the handle now: without it .NET may not keep the exit code and ExitCode reads as $null.
 $null = $process.Handle
 if (-not $process.WaitForExit(15 * 60 * 1000)) { $process.Kill(); throw 'Smoke test timed out.' }

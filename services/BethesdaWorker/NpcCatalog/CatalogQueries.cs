@@ -630,7 +630,7 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = """
-            SELECT rw.record_type, r.editor_id, r.name, rw.winning_plugin FROM record_winner rw
+            SELECT rw.record_type, r.editor_id, r.name, rw.winning_plugin, rw.form_key FROM record_winner rw
             JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key WHERE rw.form_key = $k
             """;
         cmd.Parameters.AddWithValue("$k", formKey);
@@ -640,9 +640,10 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             return new RecordRef { FormKey = formKey, RecordType = "????", Resolved = false };
         }
 
+        // The catalog's spelling (the origin's): an override may link the record with its master in another letter case.
         return new RecordRef
         {
-            FormKey = formKey,
+            FormKey = r.GetString(4),
             RecordType = r.GetString(0),
             EditorId = Str(r, 1),
             Name = Str(r, 2),
