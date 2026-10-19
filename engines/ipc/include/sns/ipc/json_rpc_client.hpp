@@ -88,6 +88,23 @@ class JsonRpcClient {
   DisconnectHandler on_disconnect_;
 };
 
+// Read-only methods whose Busy answer (1007: an export or an index owns the worker's catalog, audit v2
+// F-14) is worth waiting for. Exports, indexing and shutdown are never repeated.
+[[nodiscard]] bool retries_when_busy(std::string_view method) noexcept;
+
+// Pauses between Busy retries: `first`, doubled after each retry up to `longest`.
+struct BusyBackoff {
+  std::chrono::milliseconds first{100};
+  std::chrono::milliseconds longest{1000};
+};
+
+// JsonRpcClient::call that, for retries_when_busy() methods, repeats the request after a Busy answer
+// until it succeeds, fails with another error, is cancelled (-32800) or `timeout` - shared by all the
+// attempts - runs out, which throws the last Busy error. Other methods behave exactly like call().
+Json call_retrying_busy(JsonRpcClient& client, std::string_view method, const Json& params,
+                        std::chrono::milliseconds timeout, const std::atomic<bool>* cancel = nullptr,
+                        BusyBackoff backoff = {});
+
 struct HandshakeResult {
   std::string worker_version;
   std::string mutagen_version;

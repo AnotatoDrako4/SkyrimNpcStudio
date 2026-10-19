@@ -229,6 +229,8 @@ struct SceneOptions {
   std::shared_ptr<SceneCache> cache;            // optional; enables reuse across builds
   bool apply_skinning = false;  // CPU-skin skinned shapes with the race skeleton (reference pose)
   bool include_skeleton = true;
+  // Only the FaceGen head (NPC portraits): body and outfit meshes are neither read nor built.
+  bool head_only = false;
   std::string pose_name = "reference";  // "reference", "apose", "relaxed", "combat"
   std::function<bool()> cancelled;
   // Preview texture policy: the DDS mip whose larger side fits is used (real file data, no

@@ -83,7 +83,7 @@ public sealed class FaceResolutionExportTests : IDisposable
         FaceGen = new FaceGenProvenance { Mode = "source-facegen", EffectiveFaceGenMod = faceGenMod },
     };
 
-    private ExportResponse Export(FaceAssignment face, string plugin = "SNS_LydiaFace.esp") =>
+    private ExportResponse Export(FaceAssignment face, string plugin = "SNS_LydiaFace.esp", IReadOnlyDictionary<string, string>? providers = null) =>
         _state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, new ExportFaceOverhaulRequest
         {
             PluginName = plugin,
@@ -91,7 +91,7 @@ public sealed class FaceResolutionExportTests : IDisposable
             EslFlag = true,
             CreateZip = true,
             Assignments = [face],
-            PluginProviders = Providers,
+            PluginProviders = providers ?? Providers,
         }, CancellationToken.None));
 
     private WorkerException Refused(FaceAssignment face, string plugin)
@@ -190,6 +190,8 @@ public sealed class FaceResolutionExportTests : IDisposable
         // LateAI's face (the vanilla values) is the edit that no longer shows.
         Assert.Contains(chain.Conflicts, c => c.Field == "FaceMorph" && c.LosingPlugins.SequenceEqual(["LateAI.esp"]));
         Assert.DoesNotContain(chain.Conflicts, c => c.Field == "AIData");
+        // Compared on the re-read records: the whole source face is there.
+        Assert.Empty(chain.RemainingFaceDifferences);
     }
 
     [Fact]
@@ -202,6 +204,30 @@ public sealed class FaceResolutionExportTests : IDisposable
         Assert.DoesNotContain(lydia.HeadParts, h => h.FormKey == SyntheticLoadOrder.EyesGreen);
         Assert.Equal(50f, lydia.Weight);
         Assert.Equal(["FaceMorph"], Assert.Single(response.SemanticDiff).Changes.Select(c => c.Field));
+        // The rest of FaceReplacer's face is not there, measured on the records (the studio refuses this).
+        Assert.Equal(["NAM7", "NAMA", "PNAM", "QNAM", "TINT"], Assert.Single(response.ProjectedChains).RemainingFaceDifferences.Order());
+    }
+
+    [Fact]
+    public void Resolution_RefusesWhenTheSourceProviderIsUnknown()
+    {
+        // Without the source plugin's MO2 mod the FaceGen check cannot be made: refused, not assumed.
+        var withoutSource = Providers.Where(p => p.Key != "FaceReplacer.esp").ToDictionary(p => p.Key, p => p.Value);
+        var error = Assert.Throws<WorkerException>(() => Export(Copy(), "SNS_NoProvider.esp", withoutSource));
+        Assert.Contains(error.Issues, i => i.Code == "FaceSourceProviderUnknown");
+        Assert.False(Directory.Exists(Path.Combine(_out, "SNS_NoProvider")));
+        var empty = Assert.Throws<WorkerException>(() => Export(Copy(), "SNS_NoProviders.esp", new Dictionary<string, string>()));
+        Assert.Contains(empty.Issues, i => i.Code == "FaceSourceProviderUnknown");
+    }
+
+    [Fact]
+    public void Resolution_MatchesTheSourceProviderWhateverTheCase()
+    {
+        // Plugin names are case-insensitive: the load order may spell them differently from the chain.
+        var lower = Providers.ToDictionary(p => p.Key.ToLowerInvariant(), p => p.Value);
+        Assert.Empty(Assert.Single(Export(Copy(), "SNS_Case.esp", lower).ProjectedChains).RemainingFaceDifferences);
+        var other = Providers.ToDictionary(p => p.Key.ToUpperInvariant(), p => p.Key == "FaceReplacer.esp" ? "Other Mod" : p.Value);
+        Assert.Contains(Assert.Throws<WorkerException>(() => Export(Copy(), "SNS_CaseOther.esp", other)).Issues, i => i.Code == "FaceSourceNotFaceGenMod");
     }
 
     [Fact]

@@ -146,12 +146,17 @@ WorkerClient::CancelToken WorkerClient::call(const QString& method, Json params,
 
   pool_.start([client, method = ss(method), params = std::move(params), timeout, cancel, ctx, on_result, on_error] {
     try {
-      auto result = client->call(method, params, timeout, cancel.get());
+      // Reads wait (within `timeout`) while an export or an index owns the worker's catalog (audit v2 F-14).
+      auto result = ipc::call_retrying_busy(*client, method, params, timeout, cancel.get());
       QMetaObject::invokeMethod(ctx, [ctx, on_result, result = std::move(result)] {
         if (ctx && on_result) on_result(result);
       }, Qt::QueuedConnection);
     } catch (const ipc::RpcError& e) {
-      const auto message = qs(e.what());
+      // Busy is only left for exports (never repeated) and reads that waited their whole timeout.
+      const auto message = e.code() == ipc::protocol::error::kBusy
+                               ? tr("Otra operación del worker está en curso (exportación o indexación); "
+                                    "inténtalo de nuevo cuando termine.")
+                               : qs(e.what());
       QMetaObject::invokeMethod(ctx, [ctx, on_error, code = e.code(), message, data = e.data()] {
         if (ctx && on_error) on_error(code, message, data);
       }, Qt::QueuedConnection);

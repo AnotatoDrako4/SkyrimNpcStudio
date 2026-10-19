@@ -42,19 +42,26 @@ try {
     Stop-Process -Name VBCSCompiler -Force -ErrorAction SilentlyContinue
 
     Write-Host '[1/4] Compilando (Release)...'
+    # Qt's rcc stores each resource file's modification time in the executable; a clean build
+    # recreates the generated QML files with new times, so two clean builds of one commit differed
+    # in SkyrimNpcStudio.exe. One fixed time for every resource keeps the package byte-reproducible.
+    $env:QT_RCC_SOURCE_DATE_OVERRIDE = '1704067200'   # 2024-01-01T00:00:00Z
     cmake --preset package | Out-Null
     if ($LASTEXITCODE) { throw "cmake configure failed ($LASTEXITCODE)" }
     # Builds launched from a CP850 console recorded no header dependencies (see dev-env.ps1), so the
     # objects of earlier packages may be stale: the first package after that fix is built clean.
     $packageDir = Join-Path $root 'build\package'
-    $marker = Join-Path $packageDir '.sns-header-deps-v1'
+    # v2: resources compiled before the fixed rcc time carry real file times; rebuild them once.
+    $marker = Join-Path $packageDir '.sns-header-deps-v2'
     $clean = @()
     if (-not (Test-Path $marker)) {
         Write-Host '      Reconstruccion completa (una sola vez): objetos de paquetes anteriores no fiables.'
         $clean = @('--clean-first')
     }
     cmake --build --preset package @clean
-    if ($LASTEXITCODE) { throw "cmake build failed ($LASTEXITCODE)" }
+    $buildExit = $LASTEXITCODE
+    Remove-Item Env:\QT_RCC_SOURCE_DATE_OVERRIDE -ErrorAction SilentlyContinue
+    if ($buildExit) { throw "cmake build failed ($buildExit)" }
     # Every first-party object must know its headers, or a later header change would leave it stale.
     cmake "-DNINJA=$((Get-Command ninja).Source)" "-DBUILD_DIR=$packageDir" -P (Join-Path $root 'cmake\CheckHeaderDeps.cmake')
     if ($LASTEXITCODE) { throw 'Hay objetos sin dependencias de cabeceras registradas: el paquete no seria fiable.' }

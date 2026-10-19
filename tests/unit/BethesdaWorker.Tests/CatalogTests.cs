@@ -33,6 +33,25 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
         Assert.DoesNotContain(r.Issues, i => i.Severity == "error");
     }
 
+    /// <summary>
+    /// Audit v2 F-20: the studio rebuilt the FaceGen file names from the FormKey with its own copy of
+    /// FaceGenFor's rule. Every search result now carries the paths, computed here once.
+    /// </summary>
+    [Fact]
+    public void SearchResults_CarryTheFaceGenPathsOfTheOriginPlugin()
+    {
+        var items = fixture.State.Read(c => c.Queries.SearchNpcs(new NpcSearchRequest { Limit = 200 })).Items;
+        Assert.NotEmpty(items);
+        foreach (var item in items)
+        {
+            Assert.Equal(NpcCatalog.CatalogQueries.FaceGenFor(Mutagen.Bethesda.Plugins.FormKey.Factory(item.FormKey)), item.FaceGen);
+        }
+
+        var lydia = Assert.Single(items, i => i.FormKey == LydiaKey);
+        Assert.Equal(@"meshes\actors\character\facegendata\facegeom\Skyrim.esm\000A2C8E.nif", lydia.FaceGen!.GeometryPath);
+        Assert.Equal(@"textures\actors\character\facegendata\facetint\Skyrim.esm\000A2C8E.dds", lydia.FaceGen.TintPath);
+    }
+
     [Theory]
     [InlineData("lydia")]
     [InlineData("HousecarlWhiterun")]
@@ -123,6 +142,13 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
 
         var cloak = fixture.State.Read(c => c.Queries.SearchArmors(new ArmorSearchRequest { Text = "cloak" }));
         Assert.Equal([46], Assert.Single(cloak.Items).Slots);
+
+        // Audit & Catalog fix: Armors without ARMO.WorldModel resolve wearable models from winning ARMA addons
+        Assert.NotNull(crimson.FemaleModel);
+        Assert.Contains("Crimson", crimson.FemaleModel);
+        var steel = body.Items.Single(i => i.Name == "Steel Armor");
+        Assert.NotNull(steel.MaleModel);
+        Assert.Contains("Steel", steel.MaleModel);
     }
 
     [Fact]

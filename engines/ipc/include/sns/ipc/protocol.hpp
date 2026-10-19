@@ -5,7 +5,7 @@
 namespace sns::ipc::protocol {
 
 inline constexpr int kMajor = 1;
-inline constexpr int kMinor = 4;
+inline constexpr int kMinor = 5;
 
 namespace method {
 inline constexpr const char* kHandshake = "system.handshake";
@@ -51,6 +51,8 @@ inline constexpr int kIoError = 1006;
 inline constexpr int kBusy = 1007;
 inline constexpr int kOutputExists = 1008;
 inline constexpr int kInvalidArgument = 1009;
+// Another process activated a different load order in the profile's shared index cache: re-index.
+inline constexpr int kIndexReplaced = 1010;
 // Client-side only, never sent on the wire.
 inline constexpr int kClientTimeout = -1;
 inline constexpr int kClientDisconnected = -2;

@@ -13,10 +13,12 @@
 #include <filesystem>
 
 #include "diagnostics/crash_diagnostics.hpp"
+#include "export_destination.hpp"
 #include "json_bridge.hpp"
 #include "outfit_editor.hpp"
 #include "resource_context.hpp"
 #include "sns/appearance/easy_mod.hpp"
+#include "sns/appearance/review_case.hpp"
 #include "sns/core/file_io.hpp"
 #include "sns/core/text.hpp"
 #include "sns/face/face_tint.hpp"
@@ -838,6 +840,11 @@ QVariantMap AppearanceEditor::easy_mod_plan() const {
   for (const auto& b : compatibility_.value("blocked").toList()) in.blocked_operations.push_back(ss(b.toMap().value("op").toString()));
   in.provenance_conflict = ss(compatibility_.value("provenance").toMap().value("conflict").toString());
   if (resolution_ && resolution_npc_ == target_.form_key) in.face_resolution = resolution_;
+  if (in.face_resolution && appearance::requires_review(*in.face_resolution)) {
+    in.review_required = true;
+    in.review_block = review_gate_ ? ss(review_gate_(target_.form_key, *in.face_resolution, false))
+                                   : ss(tr("La revisión individual no está disponible en esta ventana."));
+  }
 
   const auto plan = appearance::plan_easy_mod(in);
   auto items = [](const std::vector<appearance::EasyModItem>& list) {
@@ -1363,7 +1370,16 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
       return;
     }
   }
-  const auto output = QDir::toNativeSeparators(local_path(output_dir));
+  // The worker only accepts absolute output paths.
+  const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
+  {
+    const auto snap = snapshot_();
+    if (const auto refused = refused_export_directory(output, snap ? forbidden_roots_of(*snap) : std::vector<ForbiddenRoot>{});
+        !refused.isEmpty()) {
+      finish_export(false, refused, {}, {}, {});  // nothing created yet
+      return;
+    }
+  }
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
@@ -1571,6 +1587,17 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
     finish_export(false, tr("No hay ninguna resolución preparada para este NPC (pestaña Origen)."), {}, {}, {});
     return;
   }
+  // Ambiguous case (D1): re-read the profile (chain, effective FaceGen) and check the individual approval
+  // against those inputs right before writing anything.
+  if (appearance::requires_review(*resolution_)) {
+    const auto reason = review_gate_ ? review_gate_(target_.form_key, *resolution_, true)
+                                     : tr("La revisión individual no está disponible en esta ventana.");
+    if (!reason.isEmpty()) {
+      diag::record("export", "face resolution blocked by review: " + target_.form_key);
+      finish_export(false, tr("El parche de resolución no se puede crear: %1").arg(reason), {}, {}, {});
+      return;
+    }
+  }
   // The same checks the assistant shows: no pending editor changes, analysis finished.
   const auto plan = easy_mod_plan();
   if (plan.value("mode").toString() != QLatin1String("face-resolution") || !plan.value("canExport").toBool()) {
@@ -1587,7 +1614,16 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
   for (const auto& f : r.fields) {
     if (const auto* code = subrecord_of(f)) only.push_back(code);
   }
-  const auto output = QDir::toNativeSeparators(local_path(output_dir));
+  // The worker only accepts absolute output paths.
+  const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
+  {
+    const auto snap = snapshot_();
+    if (const auto refused = refused_export_directory(output, snap ? forbidden_roots_of(*snap) : std::vector<ForbiddenRoot>{});
+        !refused.isEmpty()) {
+      finish_export(false, refused, {}, {}, {});  // nothing created yet
+      return;
+    }
+  }
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
@@ -1595,13 +1631,23 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
                              .arg(qs(target_.form_key), qs(r.source_plugin), qs(r.winner_plugin), qs(only.dump()), plugin_name, output)
                              .toStdString());
 
+  // The FaceGen the game uses now, located again in MO2 (loose over BSA): the worker refuses the copy unless
+  // it belongs to the source plugin's mod, and refuses it when it cannot be located (empty).
+  std::string facegen_mod;
+  const auto& recipe = recipe_ ? recipe_ : base_recipe_;
+  if (const auto ctx = context(); ctx && ctx->resolver && recipe) {
+    if (const auto loc = ctx->resolver->locate(recipe->facegen_mesh_path)) {
+      facegen_mod = loc->kind == assets::AssetLocation::Kind::Archive && !loc->archive_provider.empty() ? loc->archive_provider : loc->provider;
+    }
+  }
+
   // No generated assets: the source mod's FaceGen is the one the game already loads.
   Json face_part{{"npcFormKey", target_.form_key},
                  {"copyFaceFrom", r.source_plugin},
                  {"onlyFields", only},
                  {"faceGen",
                   {{"mode", "source-facegen"},
-                   {"effectiveFaceGenMod", r.source_mod},
+                   {"effectiveFaceGenMod", facegen_mod},
                    {"parts", Json::array()},
                    {"derivedFrom", Json::array()},
                    {"installAbove", Json::array()}}}};
@@ -1636,6 +1682,9 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
                   }
                   if (chain.isEmpty()) {
                     problems << tr("El worker no devolvió la cadena del NPC con el parche");
+                  } else if (const auto remaining = chain.value("remainingFaceDifferences").toStringList(); !remaining.isEmpty()) {
+                    // Compared on the re-read records, not on fingerprints: the copy is incomplete.
+                    problems << tr("El parche no lleva todo el rostro de %1: siguen distintos %2").arg(qs(r.source_plugin), remaining.join(", "));
                   } else if (control_projector_) {
                     projected = control_projector_(chain, plugin_name);
                     QStringList codes;

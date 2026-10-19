@@ -2,6 +2,7 @@
 
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -79,6 +80,16 @@ class FakeServer {
     std::lock_guard lock(m_);
     return cancelled_;
   }
+  // The next `times` requests of `method` are answered Busy (1007), as the worker does while an export or
+  // an index owns its catalog; after that the method echoes its params.
+  void busy_for(const std::string& method, int times) {
+    std::lock_guard lock(m_);
+    busy_left_[method] = times;
+  }
+  int requests(const std::string& method) {
+    std::lock_guard lock(m_);
+    return requests_[method];
+  }
   void send(const Json& message) { pipe_->to_client.write(encode_frame(message.dump())); }
   void hang_up() { pipe_->to_client.close(); }
 
@@ -101,6 +112,10 @@ class FakeServer {
             cancelled_.push_back(id);
           }
           send({{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", -32800}, {"message", "Request was cancelled."}}}});
+        } else if (answer_busy(method)) {
+          send({{"jsonrpc", "2.0"},
+                {"id", req["id"]},
+                {"error", {{"code", protocol::error::kBusy}, {"message", "An export is using the catalog; retry when it finishes."}}}});
         } else if (method == "echo") {
           send({{"jsonrpc", "2.0"}, {"id", req["id"]}, {"result", req["params"]}});
         } else if (method == "fail") {
@@ -112,15 +127,28 @@ class FakeServer {
           send({{"jsonrpc", "2.0"}, {"id", req["id"]}, {"result", true}});
         } else if (method == "slow.method") {
           hanging.push_back(req);
+        } else if (method.find('.') != std::string::npos) {
+          send({{"jsonrpc", "2.0"}, {"id", req["id"]}, {"result", req.value("params", Json())}});
         }
       }
     }
+  }
+
+  bool answer_busy(const std::string& method) {
+    std::lock_guard lock(m_);
+    ++requests_[method];
+    auto it = busy_left_.find(method);
+    if (it == busy_left_.end() || it->second == 0) return false;
+    --it->second;
+    return true;
   }
 
   std::shared_ptr<Pipe> pipe_;
   std::thread thread_;
   std::mutex m_;
   std::vector<std::int64_t> cancelled_;
+  std::map<std::string, int> busy_left_;
+  std::map<std::string, int> requests_;
 };
 
 struct Harness {
@@ -223,4 +251,86 @@ TEST_CASE("Params must be an object", "[ipc][rpc]") {
   Harness h;
   h.client.start();
   CHECK_THROWS_AS(h.client.call_async("echo", Json::array({1, 2})), sns::Error);
+}
+
+// Audit v2 F-14: while an export or an index owns the worker's catalog, every read answers Busy at once
+// instead of queuing behind it. The studio waits for those reads (bounded by the caller's timeout) and
+// never repeats an export.
+TEST_CASE("Only reads are retried after Busy", "[ipc][rpc][busy]") {
+  for (const auto* read : {protocol::method::kListPlugins, protocol::method::kSearchNpcs, protocol::method::kGetNpc,
+                           protocol::method::kGetAppearance, protocol::method::kSearchArmors,
+                           protocol::method::kValidateOutfit, protocol::method::kSearchHeadParts,
+                           protocol::method::kGetFaceRecipe, protocol::method::kCreationValidateNpc,
+                           protocol::method::kCreationSearchRecords, protocol::method::kCatalogStatus}) {
+    INFO(read);
+    CHECK(retries_when_busy(read));
+  }
+  for (const auto* write : {protocol::method::kExportOutfitPatch, protocol::method::kExportFacePatch,
+                            protocol::method::kExportCompleteNpc, protocol::method::kCreationExportNpc,
+                            protocol::method::kCatalogIndex, protocol::method::kShutdown, protocol::method::kHandshake}) {
+    INFO(write);
+    CHECK_FALSE(retries_when_busy(write));
+  }
+  CHECK_FALSE(retries_when_busy("catalog.somethingNew"));
+}
+
+TEST_CASE("A read answered Busy is repeated until the worker answers it", "[ipc][rpc][busy]") {
+  Harness h;
+  h.client.start();
+  h.server.busy_for(protocol::method::kSearchNpcs, 2);
+  const auto params = Json{{"text", "Lydia"}};
+
+  CHECK(call_retrying_busy(h.client, protocol::method::kSearchNpcs, params, 5s, nullptr, {10ms, 40ms}) == params);
+  CHECK(h.server.requests(protocol::method::kSearchNpcs) == 3);
+}
+
+TEST_CASE("An export answered Busy is not repeated", "[ipc][rpc][busy]") {
+  Harness h;
+  h.client.start();
+  h.server.busy_for(protocol::method::kExportOutfitPatch, 1);
+  try {
+    call_retrying_busy(h.client, protocol::method::kExportOutfitPatch, Json{{"pluginName", "X.esp"}}, 5s, nullptr, {10ms, 40ms});
+    FAIL("expected Busy");
+  } catch (const RpcError& e) {
+    CHECK(e.code() == protocol::error::kBusy);
+  }
+  CHECK(h.server.requests(protocol::method::kExportOutfitPatch) == 1);
+}
+
+TEST_CASE("Busy retries end at the caller's timeout with the Busy error", "[ipc][rpc][busy]") {
+  Harness h;
+  h.client.start();
+  h.server.busy_for(protocol::method::kGetNpc, 1000);
+  const auto start = std::chrono::steady_clock::now();
+  try {
+    call_retrying_busy(h.client, protocol::method::kGetNpc, Json{{"formKey", "0A2C8E:Skyrim.esm"}}, 300ms, nullptr, {20ms, 50ms});
+    FAIL("expected Busy");
+  } catch (const RpcError& e) {
+    CHECK(e.code() == protocol::error::kBusy);
+    CHECK(std::string(e.what()).find("export") != std::string::npos);
+  }
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  CHECK(elapsed >= 250ms);
+  CHECK(elapsed < 2s);
+  CHECK(h.server.requests(protocol::method::kGetNpc) >= 3);
+}
+
+TEST_CASE("A cancel flag stops the Busy retries", "[ipc][rpc][busy]") {
+  Harness h;
+  h.client.start();
+  h.server.busy_for(protocol::method::kSearchNpcs, 100000);
+  std::atomic<bool> cancel{false};
+  std::thread canceller([&] {
+    std::this_thread::sleep_for(150ms);
+    cancel = true;
+  });
+  const auto start = std::chrono::steady_clock::now();
+  try {
+    call_retrying_busy(h.client, protocol::method::kSearchNpcs, Json::object(), 30s, &cancel, {20ms, 50ms});
+    FAIL("expected cancellation");
+  } catch (const RpcError& e) {
+    CHECK(e.code() == protocol::error::kRequestCancelled);
+  }
+  canceller.join();
+  CHECK(std::chrono::steady_clock::now() - start < 2s);
 }

@@ -34,18 +34,24 @@ Item {
             onOpenRequested: openDialog.open()
             onSaveRequested: root.save()
         }
-        SplitView {
+        WorkbenchSplit {
             id: panels
+            objectName: "forgeSplit"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            orientation: Qt.Horizontal
+            layout: Workbench.layout("forge")
+            leftPane: forgeLeftPanel
+            rightPane: forgeRightPanel
+            leftMinimum: 200
+            rightMinimum: 260
+            centerMinimum: 380
             Rectangle {
-                SplitView.preferredWidth: panels.width * 0.20
-                SplitView.minimumWidth: 210
+                id: forgeLeftPanel
+                objectName: "forgeLeftPanel"
                 color: Theme.panel
                 ScrollView {
                     anchors.fill: parent
-                    anchors.margins: 12
+                    anchors.margins: Theme.spacingLg
                     contentWidth: availableWidth
                     ForgeNavigation {
                         width: parent.width
@@ -60,17 +66,16 @@ Item {
             }
             ForgeViewport {
                 SplitView.fillWidth: true
-                SplitView.minimumWidth: 380
                 forge: root.forge
             }
             Rectangle {
-                SplitView.preferredWidth: panels.width * 0.25
-                SplitView.minimumWidth: 280
+                id: forgeRightPanel
+                objectName: "forgeRightPanel"
                 color: Theme.panel
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 8
+                    anchors.margins: Theme.spacingLg
+                    spacing: Theme.spacingMd
                     ScrollView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true

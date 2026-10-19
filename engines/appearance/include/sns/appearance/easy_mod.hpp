@@ -34,6 +34,11 @@ struct EasyModInputs {
   // «Usar el rostro de X» chosen in the control map (Origen): the guided export writes that patch
   // instead of the editors' changes, and only when there are none.
   std::optional<FaceResolution> face_resolution;
+  // Individual review (D1) of an ambiguous resolution (it discards a mod's own face edits): required, and
+  // why it cannot be exported yet (pending, rejected, deferred or stale; empty when approved for the
+  // current inputs). Computed by the studio from the review book and the inputs' digest.
+  bool review_required = false;
+  std::string review_block;
 };
 
 enum class EasyModState { Ok, Warning, Waiting, Blocked, Info };

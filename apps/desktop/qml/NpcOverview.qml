@@ -56,7 +56,7 @@ Rectangle {
                     Layout.margins: 10
                     ColumnLayout {
                         spacing: 2
-                        Text { text: root.summary.name || qsTr("(sin nombre)"); color: Theme.text; font.pixelSize: 22; font.bold: true }
+                        Text { text: root.summary.name || qsTr("(sin nombre)"); color: Theme.text; font.pixelSize: Theme.fs(22); font.bold: true }
                         Text {
                             text: (root.summary.editorId ?? "") + "   " + (root.summary.formKey ?? "") + "   FormID " + (root.summary.formId ?? "")
                             color: Theme.textDim

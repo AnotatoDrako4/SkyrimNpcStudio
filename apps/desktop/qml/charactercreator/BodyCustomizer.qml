@@ -45,7 +45,7 @@ ScrollView {
             text: qsTr("Proporciones Corporales")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 13
+            font.pixelSize: Theme.fs(13)
         }
 
         // Tarjeta de Detección de Malla y Físicas
@@ -68,13 +68,13 @@ ScrollView {
                     Text {
                         text: qsTr("Malla Corporal:")
                         color: Theme.textDim
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.micro
                     }
                     Text {
                         text: (root.studio.outfit.compatibilityReport.body?.name ?? qsTr("Vanilla"))
                         color: Theme.accent
                         font.bold: true
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                     }
                     Item { Layout.fillWidth: true }
                     Rectangle {
@@ -90,7 +90,7 @@ ScrollView {
                             anchors.centerIn: parent
                             text: qsTr("FSMP / SMP Activo")
                             color: "#5DADE2"
-                            font.pixelSize: 9
+                            font.pixelSize: Theme.micro
                             font.bold: true
                         }
                     }
@@ -99,7 +99,7 @@ ScrollView {
                 Text {
                     text: root.studio.outfit.compatibilityReport.body?.details ?? qsTr("Soporta morphs estándar de peso (0 a 100).")
                     color: Theme.textDim
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }
@@ -116,14 +116,14 @@ ScrollView {
                 Text {
                     text: qsTr("Peso (Morfología):")
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
                 Item { Layout.fillWidth: true }
                 Text {
                     text: root.studio.appearance.weight.toFixed(1)
                     color: Theme.accent
                     font.bold: true
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
             }
 
@@ -138,9 +138,9 @@ ScrollView {
 
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: qsTr("Delgado (0)"); color: Theme.textDim; font.pixelSize: 9 }
+                Text { text: qsTr("Delgado (0)"); color: Theme.textDim; font.pixelSize: Theme.micro }
                 Item { Layout.fillWidth: true }
-                Text { text: qsTr("Musculoso / Robusto (100)"); color: Theme.textDim; font.pixelSize: 9 }
+                Text { text: qsTr("Musculoso / Robusto (100)"); color: Theme.textDim; font.pixelSize: Theme.micro }
             }
         }
 
@@ -154,14 +154,14 @@ ScrollView {
                 Text {
                     text: qsTr("Estatura (Escala):")
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
                 Item { Layout.fillWidth: true }
                 Text {
                     text: root.studio.appearance.height.toFixed(2) + "x"
                     color: Theme.accent
                     font.bold: true
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                 }
             }
 
@@ -176,11 +176,11 @@ ScrollView {
 
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: "0.80x"; color: Theme.textDim; font.pixelSize: 9 }
+                Text { text: "0.80x"; color: Theme.textDim; font.pixelSize: Theme.micro }
                 Item { Layout.fillWidth: true }
-                Text { text: "1.00x (Normal)"; color: Theme.textDim; font.pixelSize: 9 }
+                Text { text: "1.00x (Normal)"; color: Theme.textDim; font.pixelSize: Theme.micro }
                 Item { Layout.fillWidth: true }
-                Text { text: "1.25x"; color: Theme.textDim; font.pixelSize: 9 }
+                Text { text: "1.25x"; color: Theme.textDim; font.pixelSize: Theme.micro }
             }
         }
 
@@ -191,7 +191,7 @@ ScrollView {
             text: qsTr("Tono y Pigmentación de Piel")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 13
+            font.pixelSize: Theme.fs(13)
         }
 
         RowLayout {
@@ -208,7 +208,7 @@ ScrollView {
                 text: root.studio.appearance.skinTone.toString().toUpperCase()
                 color: Theme.text
                 font.bold: true
-                font.pixelSize: 12
+                font.pixelSize: Theme.normal
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -246,7 +246,7 @@ ScrollView {
                         Text {
                             text: modelData.name
                             color: Theme.text
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.micro
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }

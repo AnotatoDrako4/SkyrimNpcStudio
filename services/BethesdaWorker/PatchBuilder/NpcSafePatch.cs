@@ -29,13 +29,48 @@ internal static partial class NpcSafePatch
     };
 
     /// <summary>
-    /// Record bookkeeping an override legitimately rewrites without changing the NPC: version stamps and
-    /// record flags (compression). Nothing else is ignored.
+    /// Record bookkeeping an override legitimately rewrites without changing the NPC: version stamps.
+    /// Nothing else is ignored; the record header flags are compared on their own (<see cref="RecordFlags"/>).
     /// </summary>
     private static readonly HashSet<string> Bookkeeping = new(StringComparer.Ordinal)
     {
-        "VersionControl", "FormVersion", "Version2", "SkyrimMajorRecordFlags", "MajorRecordFlagsRaw", "IsCompressed",
+        "VersionControl", "FormVersion", "Version2",
     };
+
+    /// <summary>
+    /// Mask members that are views of the record header flags. They are compared once, as the raw flags
+    /// without Compressed (audit v2 F-16: skipping them let an override mark the NPC Deleted or Ignored).
+    /// </summary>
+    private static readonly HashSet<string> RecordFlagViews = new(StringComparer.Ordinal)
+    {
+        "SkyrimMajorRecordFlags", "MajorRecordFlagsRaw", "IsCompressed", "IsDeleted",
+    };
+
+    /// <summary>Field name of a header flags difference in violations.</summary>
+    public const string RecordFlags = "RecordFlags";
+
+    /// <summary>How the record is stored (Mutagen decides whether to compress it), not what it says.</summary>
+    internal const int CompressedFlag = 0x40000;
+
+    private static readonly (int Bit, string Name)[] RecordFlagNames = [(0x20, "Deleted"), (0x1000, "Ignored")];
+
+    /// <summary>Header flag bits that differ between the two records, Compressed excluded.</summary>
+    internal static int ChangedRecordFlags(IMajorRecordGetter original, IMajorRecordGetter exported) =>
+        (original.MajorRecordFlagsRaw ^ exported.MajorRecordFlagsRaw) & ~CompressedFlag;
+
+    /// <summary>"Deleted 0x20, 0x800": the known name of every changed bit, and its value.</summary>
+    internal static string DescribeRecordFlags(int bits)
+    {
+        var parts = new List<string>();
+        for (var bit = 1; bit != 0; bit <<= 1)
+        {
+            if ((bits & bit) == 0) continue;
+            var name = RecordFlagNames.FirstOrDefault(n => n.Bit == bit).Name;
+            parts.Add(name is null ? $"0x{bit:X}" : $"{name} 0x{bit:X}");
+        }
+
+        return string.Join(", ", parts);
+    }
 
     private static readonly Dictionary<string, (string Subrecord, string Reason)> Known = new(StringComparer.Ordinal)
     {
@@ -138,8 +173,11 @@ internal static partial class NpcSafePatch
             var subrecord = known ? info.Subrecord : "";
             if (!allowed.Contains(name))
             {
+                var what = name == RecordFlags
+                    ? $"the record header flags ({DescribeRecordFlags(ChangedRecordFlags(original, exported))})"
+                    : $"{name}{(known ? $" ({subrecord})" : "")}";
                 violations.Add(Issue.Error("UnauthorizedNpcChange",
-                    $"The export changes {name}{(known ? $" ({subrecord})" : "")} of {original.EditorID ?? subject}, which {operation} does not ask for.",
+                    $"The export changes {what} of {original.EditorID ?? subject}, which {operation} does not ask for.",
                     subject));
                 continue;
             }
@@ -179,7 +217,7 @@ internal static partial class NpcSafePatch
         foreach (var (name, value) in members)
         {
             any = true;
-            if (Bookkeeping.Contains(name)) continue;
+            if (Bookkeeping.Contains(name) || RecordFlagViews.Contains(name)) continue;
             // null: the mask reported nothing for the member, so it is checked again on the values
             // themselves; a verdict that cannot be read counts as a difference (never assumed equal).
             var equal = MaskVerdict(value) ?? Fingerprint(Read(original, name)) == Fingerprint(Read(exported, name));
@@ -187,6 +225,7 @@ internal static partial class NpcSafePatch
         }
 
         if (!any) throw new InvalidOperationException("Mutagen's equality mask for NPC_ exposes no members; the safe patch check cannot run.");
+        if (ChangedRecordFlags(original, exported) != 0) differing.Add(RecordFlags);
         // A localized master (Skyrim.esm) stores a name as a string-table reference; a non-localized patch
         // stores the text the session resolved in the game's language. Same text, different storage:
         // what the game shows does not change, so it is not a change.
@@ -223,7 +262,9 @@ internal static partial class NpcSafePatch
         return value switch
         {
             null => "",
-            IFormLinkGetter link => link.IsNull ? "" : link.FormKey.ToString(),
+            // A link names the same record whatever letter case its master is written with (Mutagen's FormKey
+            // equality ignores it; ToString keeps it).
+            IFormLinkGetter link => link.IsNull ? "" : $"{link.FormKey.ID:X6}:{link.FormKey.ModKey.FileName.String.ToUpperInvariant()}",
             string text => text,
             IEnumerable items and not string => string.Join("|", items.Cast<object?>().Select(Fingerprint)),
             _ => Whitespace().Replace(value.ToString() ?? "", " ").Trim(),

@@ -41,12 +41,12 @@ Rectangle {
                 text: qsTr("Protección facial")
                 color: Theme.text
                 font.bold: true
-                font.pixelSize: 12
+                font.pixelSize: Theme.normal
             }
             Text {
                 text: root.appearance.analysing ? qsTr("Analizando…") : (root.compat.label || qsTr("Sin diagnóstico"))
                 color: Theme.textDim
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
@@ -63,7 +63,7 @@ Rectangle {
             visible: (root.provenance.conflict || "").length > 0
             text: "⚠ " + (root.provenance.conflict || "")
             color: Theme.warn
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
         }
 
@@ -77,7 +77,7 @@ Rectangle {
                 visible: root.appearance.analysing
                 text: qsTr("Comparando el FaceGen que carga el perfil con el registro del NPC. Las ediciones se activan al terminar.")
                 color: Theme.textDim
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
 
@@ -88,7 +88,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "✓ " + modelData.label + qsTr(" — permitida")
                     color: Theme.text
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                     wrapMode: Text.WordWrap
                 }
             }
@@ -99,7 +99,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "✕ " + modelData.label + qsTr(" — bloqueada: ") + modelData.reason
                     color: Theme.warn
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.small
                     wrapMode: Text.WordWrap
                 }
             }
@@ -112,7 +112,7 @@ Rectangle {
                         .arg((root.report.recoloredShapes || []).length).arg((root.report.recoloredShapes || []).join(", "))
                     : qsTr("Hair Color Safe Mode no aplicó el color: revisa el panel de problemas. El FaceGen original no se modificó.")
                 color: root.report.integrity === "hair-tint-only" ? Theme.text : Theme.warn
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
 
@@ -121,7 +121,7 @@ Rectangle {
                 visible: !root.appearance.analysing && root.compat.code !== undefined
                 text: qsTr("⚠ Pendiente de verificación en Skyrim: la exportación se comprueba en archivos, no dentro del juego.")
                 color: Theme.textDim
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
         }
@@ -134,7 +134,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: qsTr("Registro ganador: %1 (mod «%2»)").arg(root.provenance.winningPlugin || "?").arg(root.provenance.pluginProvider || "?")
                 color: Theme.textDim
-                font.pixelSize: 10
+                font.pixelSize: Theme.micro
                 wrapMode: Text.WrapAnywhere
             }
             Text {
@@ -143,7 +143,7 @@ Rectangle {
                     ? qsTr("FaceGen: %1 (%2)").arg(root.provenance.faceGen.provider).arg(root.provenance.faceGen.kind)
                     : qsTr("FaceGen: no existe en el perfil")
                 color: Theme.textDim
-                font.pixelSize: 10
+                font.pixelSize: Theme.micro
                 wrapMode: Text.WrapAnywhere
             }
             Text {
@@ -152,7 +152,7 @@ Rectangle {
                     ? qsTr("FaceTint: %1 (%2)").arg(root.provenance.faceTint.provider).arg(root.provenance.faceTint.kind)
                     : qsTr("FaceTint: no existe en el perfil")
                 color: Theme.textDim
-                font.pixelSize: 10
+                font.pixelSize: Theme.micro
                 wrapMode: Text.WrapAnywhere
             }
             Repeater {
@@ -162,7 +162,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "· " + modelData
                     color: Theme.textMuted
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     wrapMode: Text.WrapAnywhere
                 }
             }

@@ -98,7 +98,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
         Task.Run(() => Guard(() =>
         {
             Log.Info($"exporting outfit patch {request.PluginName} to {request.OutputDirectory}");
-            var response = state.Read(c => ModPackager.ExportOutfitPatch(c.Session, c.Queries, request, ct));
+            var response = state.Export(c => ModPackager.ExportOutfitPatch(c.Session, c.Queries, request, ct));
             Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
             return response;
         }), ct);
@@ -108,7 +108,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
         Task.Run(() => Guard(() =>
         {
             Log.Info($"exporting face overhaul {request.PluginName} to {request.OutputDirectory}");
-            var response = state.Read(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, ct));
+            var response = state.Export(c => ModPackager.ExportFaceOverhaul(c.Session, c.Queries, request, ct));
             Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
             return response;
         }), ct);
@@ -118,7 +118,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
         Task.Run(() => Guard(() =>
         {
             Log.Info($"exporting complete overhaul {request.PluginName} to {request.OutputDirectory}");
-            var response = state.Read(c => ModPackager.ExportCompleteOverhaul(c.Session, c.Queries, request, ct));
+            var response = state.Export(c => ModPackager.ExportCompleteOverhaul(c.Session, c.Queries, request, ct));
             Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
             return response;
         }), ct);
@@ -129,13 +129,13 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
 
     [JsonRpcMethod(Methods.CreationExportNpc)]
     public Task<CreationExportResponse> ExportNativeNpc(CreationExportRequest request, CancellationToken ct) =>
-        Task.Run(() => Guard(() => state.Read(c => NativeNpcBuilder.Export(c.Session, c.Queries, request, ct))), ct);
+        Task.Run(() => Guard(() => state.Export(c => NativeNpcBuilder.Export(c.Session, c.Queries, request, ct))), ct);
 
     [JsonRpcMethod(Methods.CreationSearchRecords)]
     public IReadOnlyList<CreationRecord> SearchCreationRecords(CreationSearchRequest request) =>
         Guard(() => state.Read(c => CreationRecordQueries.Search(c.Session, request)));
 
-    private static T Guard<T>(Func<T> body)
+    internal static T Guard<T>(Func<T> body)
     {
         try
         {
@@ -158,6 +158,13 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
         {
             Log.Error(ex.ToString());
             throw Fail(ErrorCodes.IoError, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            // A worker bug: StreamJsonRpc answers -32000 with the message alone, so the type and stack trace
+            // only reach the studio's console through this line (audit v2 F-18).
+            Log.Error(ex.ToString());
+            throw;
         }
     }
 

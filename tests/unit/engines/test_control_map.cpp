@@ -189,6 +189,29 @@ TEST_CASE("Control map: a translated copy of the plugin keeps the original mod's
   CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
 }
 
+// Audit F-11 (profile scenario): a damaged FaceGen no longer throws out of the scan thread; it reads as
+// "unreadable". The report must say so, instead of only "the FaceGen does not match the record".
+TEST_CASE("Control map: an unreadable FaceGen is reported as damaged", "[appearance][controlmap][facegen-unreadable]") {
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("unofficial skyrim special edition patch.esp", "USSEP Spanish", {"HeadParts"})});
+  in.facegen = bsa("<Game Data>");
+  in.facetint = bsa("<Game Data>");
+  in.facegen_readable = false;
+  const auto r = analyze_appearance_control(in);
+  const auto* damaged = finding(r, "FaceGenUnreadable");
+  REQUIRE(damaged);
+  CHECK(damaged->severity == "warning");
+  CHECK(damaged->message.find("<Game Data>") != std::string::npos);
+  CHECK(has_warning(r));
+
+  SECTION("a readable or unopened FaceGen has no such finding") {
+    in.facegen_readable = true;
+    CHECK_FALSE(finding(analyze_appearance_control(in), "FaceGenUnreadable"));
+    in.facegen_readable.reset();
+    CHECK_FALSE(finding(analyze_appearance_control(in), "FaceGenUnreadable"));
+  }
+}
+
 TEST_CASE("Control map: a head-parts-only change whose pieces are all in the FaceGen is a note", "[appearance][controlmap]") {
   // Shape of Aeri on the test profile: USSEP (translated) changes HeadParts only; FaceGen from the game BSA.
   ControlInputs in;
@@ -423,6 +446,55 @@ TEST_CASE("Control map: AI Overhaul over NITHI offers to use NITHI's face", "[ap
   CHECK(res.label == "Usar el rostro de «NITHI NPC Enhancement - Riften.esp»");
   CHECK(res.detail.find("No copia ni regenera FaceGen") != std::string::npos);
   CHECK(f->suggestion.find(res.label) != std::string::npos);
+  // Consequences before exporting: AI Overhaul keeps its own non-face change; its face values stop applying.
+  CHECK(res.explanation ==
+        "Se usará el rostro de «NITHI NPC Enhancement - Riften» («NITHI NPC Enhancement - Riften.esp») y se conservará el resto del registro de "
+        "«AI Overhaul.esp», incluidos sus cambios de Spells.");
+  CHECK(res.keeps == std::vector<std::string>{"«AI Overhaul.esp» (AI Overhaul 1.8): Spells"});
+  REQUIRE(res.replaced.size() == 4);
+  CHECK(res.replaced[0] == "FaceMorph: valor de «AI Overhaul.esp»");
+  CHECK(res.alternatives.empty());
+  // AI Overhaul's face values are its own here (no copies recorded): discarding them is a decision.
+  CHECK(res.discards_own_edits == std::vector<std::string>{"AI Overhaul.esp"});
+  REQUIRE(res.pending.size() == 1);
+  CHECK(res.pending[0].rfind("Decisión necesaria: «AI Overhaul.esp» cambió por su cuenta FaceMorph, FaceParts, TintLayers, TextureLighting", 0) == 0);
+
+  SECTION("values that are copies of an earlier version are an accidental revert, not a decision") {
+    // AI Overhaul puts the vanilla morphs back and keeps NITHI's head parts: the newest controller of the
+    // face is still NITHI, but the morphs no longer match its FaceGen (was a false negative).
+    auto revert = in;
+    for (const auto& field : revert.chain.back().changed_fields) revert.chain.back().copied_from[field] = "Skyrim.esm";
+    revert.chain.back().copied_from.erase("Spells");
+    const auto v = analyze_appearance_control(revert);
+    CHECK(v.face_mod == "NITHI NPC Enhancement - Riften");
+    const auto* mismatch = finding(v, "FaceGenRecordMismatch");
+    REQUIRE(mismatch);
+    CHECK(mismatch->message.find("no conserva los datos faciales de «NITHI NPC Enhancement - Riften»") != std::string::npos);
+    CHECK(mismatch->message.find("FaceMorph, FaceParts") != std::string::npos);
+    // The FaceGen mod's own plugin is not a "replaced copy" (Sybille Stentor and Ysolda on the test profile).
+    auto own_copy = revert;
+    own_copy.chain[1].plugin_mods = {"NITHI NPC Enhancement - Riften"};
+    CHECK_FALSE(finding(analyze_appearance_control(own_copy), "FaceGenFromReplacedPluginCopy"));
+    CHECK(finding(analyze_appearance_control(own_copy), "FaceGenRecordMismatch"));
+    REQUIRE(v.resolution);
+    CHECK(v.resolution->discards_own_edits.empty());
+    CHECK(v.resolution->pending.empty());
+  }
+
+  SECTION("a copied value is named as an inference; other warnings and faces are listed") {
+    auto copied = in;
+    copied.chain.back().copied_from["FaceMorph"] = "Skyrim.esm";
+    copied.facetint = loose("Skin Pack", {"NITHI NPC Enhancement - Riften", "Skin Pack"});
+    copied.chain.insert(copied.chain.begin() + 1, link("Other Face.esp", "Other Face", {"FaceParts"}));
+    copied.facegen.loose_mods = {"Other Face", "NITHI NPC Enhancement - Riften"};
+    const auto c = analyze_appearance_control(copied);
+    REQUIRE(c.resolution);
+    CHECK(c.resolution->replaced[0] == "FaceMorph: valor de «AI Overhaul.esp» (inferido: el mismo valor que «Skyrim.esm»)");
+    REQUIRE(c.resolution->pending.size() == 2);
+    CHECK(c.resolution->pending[0].rfind("Decisión necesaria", 0) == 0);
+    CHECK(c.resolution->pending[1].find("tinte FaceGen") != std::string::npos);
+    CHECK(c.resolution->alternatives == std::vector<std::string>{"«Other Face» («Other Face.esp») también trae FaceGen para este NPC, pero pierde en MO2"});
+  }
 
   SECTION("Weight is copied only when it differs") {
     auto heavier = in;

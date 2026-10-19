@@ -23,7 +23,7 @@ ScrollView {
                 text: qsTr("Estructura Facial")
                 color: Theme.text
                 font.bold: true
-                font.pixelSize: 14
+                font.pixelSize: Theme.large
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -35,7 +35,7 @@ ScrollView {
         Text {
             text: qsTr("Modifica los morphs anatómicos reales del NPC reconocidos por el motor de Skyrim.")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }

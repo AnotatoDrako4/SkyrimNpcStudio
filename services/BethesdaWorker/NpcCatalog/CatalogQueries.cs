@@ -169,11 +169,12 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
     private NpcSummary ReadSummary(SqliteDataReader r)
     {
         var formKey = r.GetString(0);
+        var key = FormKey.Factory(formKey);
         var race = Str(r, 3);
         return new NpcSummary
         {
             FormKey = formKey,
-            FormId = session.FormatFormId(FormKey.Factory(formKey)),
+            FormId = session.FormatFormId(key),
             EditorId = Str(r, 1),
             Name = Str(r, 2),
             RaceFormKey = race,
@@ -184,6 +185,7 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             OverrideCount = r.GetInt32(7),
             IsUnique = r.GetInt32(8) != 0,
             UsesTemplate = !r.IsDBNull(9),
+            FaceGen = FaceGenFor(key),
         };
     }
 
@@ -570,13 +572,18 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
         cmd.Parameters.AddWithValue("$limit", Math.Clamp(request.Limit, 1, MaxLimit));
         cmd.Parameters.AddWithValue("$offset", Math.Max(0, request.Offset));
         var items = new List<ArmorSummary>();
+        var allAddons = new List<string[]>();
         using (var r = cmd.ExecuteReader())
         {
             while (r.Read())
             {
-                items.Add(ReadArmor(r));
+                var (armor, addons) = ReadArmorWithAddons(r);
+                items.Add(armor);
+                allAddons.Add(addons);
             }
         }
+
+        PopulateMissingArmaModels(items, allAddons);
 
         return new ArmorSearchResponse { Total = total, Items = items };
     }
@@ -592,10 +599,15 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
         cmd.CommandText = ArmorSelect + " FROM armor_winner w JOIN armor_records a ON a.plugin_id = w.plugin_id AND a.form_key = w.form_key WHERE w.form_key = $k";
         cmd.Parameters.AddWithValue("$k", formKey);
         using var r = cmd.ExecuteReader();
-        return r.Read() ? ReadArmor(r) : null;
+        if (!r.Read()) return null;
+        var (armor, addons) = ReadArmorWithAddons(r);
+        r.Close();
+        var items = new List<ArmorSummary> { armor };
+        PopulateMissingArmaModels(items, new List<string[]> { addons });
+        return items[0];
     }
 
-    private ArmorSummary ReadArmor(SqliteDataReader r)
+    private (ArmorSummary armor, string[] addons) ReadArmorWithAddons(SqliteDataReader r)
     {
         var mask = (uint)r.GetInt64(5);
         var formKey = r.GetString(0);
@@ -603,9 +615,10 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
         var name = Str(r, 2);
         var male = Str(r, 8);
         var female = Str(r, 9);
+        var addons = JsonSerializer.Deserialize<string[]>(r.GetString(10)) ?? [];
         var combined = $"{editorId} {name} {male} {female}".ToLowerInvariant();
         var hasSmp = combined.Contains("smp") || combined.Contains("hdt") || combined.Contains("physics");
-        return new ArmorSummary
+        var summary = new ArmorSummary
         {
             FormKey = formKey,
             FormId = session.FormatFormId(FormKey.Factory(formKey)),
@@ -619,9 +632,88 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             NonPlayable = r.GetInt32(7) != 0,
             MaleModel = male,
             FemaleModel = female,
-            AddonCount = (JsonSerializer.Deserialize<string[]>(r.GetString(10)) ?? []).Length,
+            AddonCount = addons.Length,
             HasSmp = hasSmp,
         };
+        return (summary, addons);
+    }
+
+    private void PopulateMissingArmaModels(List<ArmorSummary> items, List<string[]> allAddons)
+    {
+        var neededAddons = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (string.IsNullOrEmpty(item.MaleModel) && string.IsNullOrEmpty(item.FemaleModel))
+            {
+                foreach (var addon in allAddons[i])
+                {
+                    neededAddons.Add(addon);
+                }
+            }
+        }
+
+        if (neededAddons.Count == 0) return;
+
+        var armaModels = new Dictionary<string, (string? Male, string? Female)>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = _db.CreateCommand())
+        {
+            var addonList = neededAddons.ToList();
+            for (int offset = 0; offset < addonList.Count; offset += 50)
+            {
+                var chunk = addonList.Skip(offset).Take(50).ToList();
+                cmd.Parameters.Clear();
+                var placeholders = new List<string>();
+                for (int c = 0; c < chunk.Count; c++)
+                {
+                    var paramName = "$a" + c;
+                    placeholders.Add(paramName);
+                    cmd.Parameters.AddWithValue(paramName, chunk[c]);
+                }
+                cmd.CommandText = $"SELECT rw.form_key, r.data FROM record_winner rw JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key WHERE rw.record_type = 'ARMA' AND rw.form_key IN ({string.Join(',', placeholders)})";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var fk = reader.GetString(0);
+                    if (!reader.IsDBNull(1))
+                    {
+                        var dataJson = reader.GetString(1);
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(dataJson);
+                            var root = doc.RootElement;
+                            string? m = root.TryGetProperty("maleModel", out var mProp) && mProp.ValueKind == JsonValueKind.String ? mProp.GetString() : null;
+                            string? f = root.TryGetProperty("femaleModel", out var fProp) && fProp.ValueKind == JsonValueKind.String ? fProp.GetString() : null;
+                            armaModels[fk] = (m, f);
+                        }
+                        catch (JsonException) { }
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            if (string.IsNullOrEmpty(item.MaleModel) && string.IsNullOrEmpty(item.FemaleModel))
+            {
+                foreach (var addon in allAddons[i])
+                {
+                    if (armaModels.TryGetValue(addon, out var models) && (!string.IsNullOrEmpty(models.Male) || !string.IsNullOrEmpty(models.Female)))
+                    {
+                        var modelText = $"{models.Male} {models.Female}".ToLowerInvariant();
+                        var addonHasSmp = modelText.Contains("smp") || modelText.Contains("hdt") || modelText.Contains("physics");
+                        items[i] = item with
+                        {
+                            MaleModel = models.Male,
+                            FemaleModel = models.Female,
+                            HasSmp = item.HasSmp || addonHasSmp
+                        };
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- records
@@ -630,7 +722,7 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = """
-            SELECT rw.record_type, r.editor_id, r.name, rw.winning_plugin FROM record_winner rw
+            SELECT rw.record_type, r.editor_id, r.name, rw.winning_plugin, rw.form_key FROM record_winner rw
             JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key WHERE rw.form_key = $k
             """;
         cmd.Parameters.AddWithValue("$k", formKey);
@@ -640,9 +732,10 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             return new RecordRef { FormKey = formKey, RecordType = "????", Resolved = false };
         }
 
+        // The catalog's spelling (the origin's): an override may link the record with its master in another letter case.
         return new RecordRef
         {
-            FormKey = formKey,
+            FormKey = r.GetString(4),
             RecordType = r.GetString(0),
             EditorId = Str(r, 1),
             Name = Str(r, 2),

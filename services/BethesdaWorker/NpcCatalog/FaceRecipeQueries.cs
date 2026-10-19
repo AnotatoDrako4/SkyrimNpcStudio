@@ -19,7 +19,7 @@ internal static partial class FaceRecipeQueries
         "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm",
     };
 
-    [GeneratedRegex(@"^cc[A-Za-z]{3}SSE\d{3}-", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^cc[A-Za-z]{3}SSE\d{3}-", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex CreationClub();
 
     /// <summary>Bethesda masters and Creation Club content: assets every Skyrim SE install has.</summary>

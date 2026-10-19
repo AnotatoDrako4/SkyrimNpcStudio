@@ -20,6 +20,11 @@ try {
     $commit = (git rev-parse --short=7 HEAD).Trim()
     $runDir = Join-Path $root ('out/local-review/{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $commit)
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    # The app runs below (smoke, forge preview): its preferences (window, panel layout, last workspace)
+    # go to an INI file of this run, never to the user's own settings.
+    $previousSettingsDir = $env:SNS_SETTINGS_DIR
+    $env:SNS_SETTINGS_DIR = Join-Path $runDir 'settings'
+    New-Item -ItemType Directory -Force -Path $env:SNS_SETTINGS_DIR | Out-Null
     $results = [ordered]@{}
     $summary = [ordered]@{
         sourceCommit = (git rev-parse HEAD).Trim()
@@ -131,5 +136,6 @@ try {
     Write-Host "Review evidence: $runDir"
     if (@($results.Values | Where-Object { $_ -ne 'passed' }).Count -gt 0) { exit 1 }
 } finally {
+    $env:SNS_SETTINGS_DIR = $previousSettingsDir
     Pop-Location
 }

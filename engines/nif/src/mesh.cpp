@@ -9,6 +9,7 @@
 
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
+#include "sns/nif/safe_load.hpp"
 
 namespace sns::nif {
 namespace {
@@ -49,14 +50,8 @@ Vec3 unit(const Vec3& v) {
   return len > 1e-12f ? Vec3{v.x / len, v.y / len, v.z / len} : Vec3{};
 }
 
-void load_nif(nifly::NifFile& nif, std::string_view bytes, std::string_view label) {
-  if (bytes.size() > 64ull * 1024 * 1024)
-    throw Error(ErrorKind::Parse, "NIF exceeds the 64 MiB parser limit");
-  std::istringstream in(std::string(bytes), std::ios::binary);
-  if (nif.Load(in) != 0 || !nif.IsValid()) {
-    throw Error(ErrorKind::Parse, "cannot read NIF " + std::string(label));
-  }
-}
+// Structural prevalidation, then nifly, every failure as Error(Parse) (audit F-10; see safe_load.hpp).
+void load_nif(nifly::NifFile& nif, std::string_view bytes, std::string_view label) { load_nifly(nif, bytes, label); }
 
 }  // namespace
 

@@ -1,6 +1,8 @@
 #include "sns/ipc/json_rpc_client.hpp"
 
+#include <algorithm>
 #include <array>
+#include <initializer_list>
 
 #include "sns/ipc/framing.hpp"
 #include "sns/ipc/protocol.hpp"
@@ -179,6 +181,45 @@ void JsonRpcClient::fail_all(int code, const std::string& reason) {
   }
   for (auto& [id, promise] : pending) {
     promise.set_exception(std::make_exception_ptr(RpcError(code, reason)));
+  }
+}
+
+bool retries_when_busy(std::string_view method) noexcept {
+  namespace m = protocol::method;
+  // An allow-list: a method added later is not repeated until someone decides it is a read.
+  for (const char* read : {m::kCatalogStatus, m::kListPlugins, m::kSearchNpcs, m::kGetNpc, m::kGetAppearance,
+                           m::kSearchArmors, m::kValidateOutfit, m::kSearchHeadParts, m::kGetFaceRecipe,
+                           m::kCreationValidateNpc, m::kCreationSearchRecords}) {
+    if (method == read) return true;
+  }
+  return false;
+}
+
+Json call_retrying_busy(JsonRpcClient& client, std::string_view method, const Json& params,
+                        std::chrono::milliseconds timeout, const std::atomic<bool>* cancel, BusyBackoff backoff) {
+  using Clock = std::chrono::steady_clock;
+  using std::chrono::milliseconds;
+  const auto deadline = Clock::now() + timeout;
+  const auto cancelled = [&] { return cancel && cancel->load(); };
+  auto pause = backoff.first;
+  for (;;) {
+    const auto left = std::chrono::duration_cast<milliseconds>(deadline - Clock::now());
+    try {
+      return client.call(method, params, std::max(left, milliseconds(1)), cancel);
+    } catch (const RpcError& e) {
+      if (e.code() != protocol::error::kBusy || !retries_when_busy(method)) throw;
+      // Waits out the export or index in short steps, so a cancel or the deadline is seen promptly.
+      const auto until = std::min(Clock::now() + pause, deadline);
+      while (!cancelled() && Clock::now() < until) {
+        std::this_thread::sleep_for(
+            std::min(milliseconds(10), std::chrono::duration_cast<milliseconds>(until - Clock::now())));
+      }
+      if (cancelled()) {
+        throw RpcError(protocol::error::kRequestCancelled, std::string(method) + " was cancelled while the worker was busy");
+      }
+      if (Clock::now() >= deadline) throw;  // the worker is still busy: its own error says with what
+      pause = std::min(pause * 2, backoff.longest);
+    }
   }
 }
 

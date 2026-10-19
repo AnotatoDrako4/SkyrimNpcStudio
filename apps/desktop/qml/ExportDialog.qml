@@ -13,12 +13,10 @@ Dialog {
     property var exportResult: null
     property string failure: ""
     property var failureIssues: []
-    property string installMessage: ""
-    property bool installSuccess: false
 
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: 620
+    width: Theme.px(620)
     title: standalone.checked ? qsTr("Guardar mod — outfit independiente") : qsTr("Guardar mod — parche de atuendo")
     standardButtons: Dialog.Close
 
@@ -28,8 +26,6 @@ Dialog {
         exportResult = null
         failure = ""
         failureIssues = []
-        installMessage = ""
-        installSuccess = false
         pluginName.text = outfit.suggestedPluginName
         standaloneName.text = outfit.npcLabel.length > 0 ? outfit.npcLabel.split(" (")[0] + " Outfit" : "Outfit personalizado"
         if (outputDir.text.length === 0) outputDir.text = prefs.lastDirectory.length > 0 ? prefs.lastDirectory : outfit.defaultExportDirectory
@@ -212,17 +208,13 @@ Dialog {
             RowLayout {
                 spacing: 8
                 Button { text: qsTr("Abrir carpeta"); onClicked: root.studio.openFolder(root.exportResult.modDirectory) }
-                Button {
-                    text: qsTr("Instalar en MO2 (mods/)…")
-                    highlighted: true
-                    enabled: root.studio.mo2ModsDirectory.length > 0 && !root.installSuccess
-                    onClicked: installConfirmDialog.open()
-                }
             }
+            // Audit P0-01: the studio no longer copies into MO2's mods/ folder (StudioController::installModToMo2
+            // refuses without touching the disk). The generated mod is installed with MO2's own installer.
             Text {
-                visible: root.installMessage.length > 0
-                text: root.installMessage
-                color: root.installSuccess ? Theme.ok : Theme.error
+                objectName: "exportMo2InstallUnavailable"
+                text: qsTr("Instalar en MO2: no disponible hasta completar la validación de destino. Usa «Instalar mod desde archivo» de Mod Organizer 2 con el ZIP generado; el estudio no escribe en mods/.")
+                color: Theme.textDim
                 wrapMode: Text.Wrap
                 font.pixelSize: Theme.small
                 Layout.fillWidth: true
@@ -234,51 +226,6 @@ Dialog {
             Layout.fillWidth: true
             Text { text: qsTr("✖ ") + root.failure; color: Theme.error; wrapMode: Text.Wrap; Layout.fillWidth: true }
             IssueList { issues: root.failureIssues; emptyText: "" }
-        }
-    }
-
-    Dialog {
-        id: installConfirmDialog
-        title: qsTr("Instalación asistida en MO2")
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: 480
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        ColumnLayout {
-            spacing: 8
-            width: parent.width
-            Text {
-                text: qsTr("¿Instalar el mod generado directamente en la carpeta mods/ de Mod Organizer 2?")
-                color: Theme.text
-                font.bold: true
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            Text {
-                text: qsTr("Destino: ") + root.studio.mo2ModsDirectory
-                color: Theme.textDim
-                font.pixelSize: Theme.small
-                font.family: Theme.mono
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            Text {
-                text: qsTr("Importante: Mod Organizer 2 debe estar cerrado antes de confirmar.")
-                color: Theme.warn
-                font.pixelSize: Theme.small
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-        }
-        onAccepted: {
-            const res = root.studio.installModToMo2(root.exportResult.modDirectory)
-            if (res.success) {
-                root.installSuccess = true
-                root.installMessage = qsTr("✔ Mod instalado en MO2: ") + res.destination + qsTr(" (actívalo en MO2 al volver a abrirlo)")
-            } else {
-                root.installSuccess = false
-                root.installMessage = qsTr("✖ ") + res.error
-            }
         }
     }
 }

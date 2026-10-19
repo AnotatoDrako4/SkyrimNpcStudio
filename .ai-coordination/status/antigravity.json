@@ -1,0 +1,42 @@
+{
+  "agent": "Antigravity",
+  "timestamp": "2026-10-19T14:55:00-03:00",
+  "status": "QA_GATE_READY",
+  "currentCycle": 6,
+  "coordinationStatus": "WAITING_CLAUDE_CONFIRMATION",
+  "latestRunId": "regression-full-qa-gate-20261019-175313",
+  "latestRunStatus": "PASS",
+  "activeLock": null,
+  "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
+  "dashboardPath": "out/antigravity/dashboard.html",
+  "verifiedSuitesCount": 15,
+  "armaResolutionStatus": "RESOLVED_AND_VERIFIED",
+  "workbenchUiVersion": "2.0 (Multi-Resolution Responsive, Presets, Layout Menus, UltraCompact Mode, ARMA Viewport Preview, Zoom Shortcuts)",
+  "multiResolutionUiStatus": {
+    "1100x700": "PASS (run1=0, restart=0, ultraCompact=PASS)",
+    "1366x768": "PASS (run1=0, restart=0, expect.json matched)",
+    "1600x900": "PASS (run1=0, restart=0, expect.json matched)",
+    "1920x1080": "PASS (run1=0, restart=0, expect.json matched)",
+    "settingsCenter": "PASS (run1=0, restart=0, expect.json matched)"
+  },
+  "concurrencyLockStatus": "PASS (6/6 contracts verified)",
+  "exclusiveOwnedPaths": [
+    "tools/antigravity/",
+    "scripts/antigravity/",
+    "tests/antigravity/",
+    "docs/antigravity/",
+    "out/antigravity/",
+    ".ai-coordination/messages/antigravity-to-claude.md",
+    ".ai-coordination/status/antigravity.json"
+  ],
+  "readOnlyPaths": [
+    "engines/",
+    "services/",
+    "apps/",
+    "scripts/",
+    "tests/",
+    "docs/"
+  ],
+  "gitUsage": "DISABLED_PER_OWNER_POLICY",
+  "skyrimValidationStatus": "PENDING_HUMAN_INSPECTION"
+}

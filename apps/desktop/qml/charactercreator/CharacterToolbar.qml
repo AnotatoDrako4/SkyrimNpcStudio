@@ -8,27 +8,31 @@ Rectangle {
     required property StudioController studio
     property var viewport: null
 
-    implicitHeight: 40
+    implicitHeight: Theme.controlHeight + Theme.spacingLg
     color: Theme.header
     border.color: Theme.border
     border.width: 1
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 6
+        anchors.leftMargin: Theme.spacingMd
+        anchors.rightMargin: Theme.spacingMd
+        spacing: Theme.spacingSm
 
         // Cámara: Enfoques rápidos
         Text {
             text: qsTr("Cámara:")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
         }
 
         Button {
             text: qsTr("Rostro")
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
+            // Shrink (eliding) before the row runs out of a narrow viewer.
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
             onClicked: if (root.viewport) root.viewport.applyCameraPreset(4)
             ToolTip.text: qsTr("Enfocar rostro para detalle fino")
             ToolTip.visible: hovered
@@ -36,7 +40,11 @@ Rectangle {
 
         Button {
             text: qsTr("Cuerpo")
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
+            // Shrink (eliding) before the row runs out of a narrow viewer.
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
             onClicked: if (root.viewport) root.viewport.applyCameraPreset(0)
             ToolTip.text: qsTr("Enfocar cuerpo completo")
             ToolTip.visible: hovered
@@ -44,7 +52,11 @@ Rectangle {
 
         Button {
             text: qsTr("Frontal")
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
+            // Shrink (eliding) before the row runs out of a narrow viewer.
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
             onClicked: if (root.viewport) root.viewport.applyCameraPreset(1)
             ToolTip.text: qsTr("Vista frontal")
             ToolTip.visible: hovered
@@ -52,7 +64,11 @@ Rectangle {
 
         Button {
             text: qsTr("Lateral")
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
+            // Shrink (eliding) before the row runs out of a narrow viewer.
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
             onClicked: if (root.viewport) root.viewport.applyCameraPreset(2)
             ToolTip.text: qsTr("Vista lateral 90°")
             ToolTip.visible: hovered
@@ -60,7 +76,11 @@ Rectangle {
 
         Button {
             text: qsTr("Posterior")
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
+            // Shrink (eliding) before the row runs out of a narrow viewer.
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
             onClicked: if (root.viewport) root.viewport.applyCameraPreset(3)
             ToolTip.text: qsTr("Vista posterior 180°")
             ToolTip.visible: hovered
@@ -68,18 +88,21 @@ Rectangle {
 
         ToolButton {
             text: "↻"
-            implicitHeight: 28
+            implicitHeight: Theme.controlHeight
             onClicked: if (root.viewport) root.viewport.reset()
             ToolTip.text: qsTr("Restablecer cámara orbital")
             ToolTip.visible: hovered
         }
 
-        Rectangle { width: 1; height: 20; color: Theme.border }
+        Rectangle { visible: compareBtn.visible; width: 1; height: Theme.px(20); color: Theme.border }
 
         // Comparador Antes / Después
         Button {
             id: compareBtn
-            implicitHeight: 28
+            // Same switch as "✨ Mod / 👁 Original" on the viewer overlay, which is always there: this
+            // larger copy only shows when the row has room for it.
+            visible: root.width >= 760 * Theme.fontFactor
+            implicitHeight: Theme.controlHeight
             checkable: true
             checked: root.studio.scene.original
             text: checked ? qsTr("👁 Viendo: ORIGINAL") : qsTr("✨ Viendo: MODIFICADO")
@@ -108,7 +131,7 @@ Rectangle {
                     text: root.studio.appearance.faceSource
                     color: "#FFFFFF"
                     font.bold: true
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.micro
                     elide: Text.ElideRight
                 }
             }

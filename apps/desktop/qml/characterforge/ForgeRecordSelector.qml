@@ -27,7 +27,7 @@ ColumnLayout {
         id: picker
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: 500
+        width: Theme.px(500)
         height: 460
         modal: true
         title: root.title

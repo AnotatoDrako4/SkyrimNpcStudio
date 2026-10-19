@@ -118,6 +118,12 @@ TEST_CASE("First use case on synthetic data: Lydia's outfit exported as a mod", 
   const auto details = client.call(method::kGetNpc, Json{{"formKey", lydia["formKey"]}}, 10s);
   CHECK(details["defaultOutfit"]["outfit"]["editorId"] == "HousecarlOutfit");
   CHECK(details["overrides"].size() == 3);
+  // Audit v2 F-20: search results carry the FaceGen paths the worker computes (FaceGenFor); the studio no
+  // longer rebuilds them from the FormKey with a copy of that rule.
+  const auto face_gen = lydia.value("faceGen", Json());
+  REQUIRE(face_gen.is_object());
+  CHECK(face_gen == details["faceGen"]);
+  CHECK(face_gen.value("geometryPath", "").starts_with(R"(meshes\actors\character\facegendata\facegeom\)"));
 
   // 8-10. Pick pieces from different plugins and validate slots/dependencies.
   const Json pieces = Json::array({fixture["crimsonCuirass"], fixture["steelBoots"], fixture["crimsonCloak"]});

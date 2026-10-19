@@ -298,7 +298,10 @@ public sealed class SyntheticLoadOrder : IDisposable
         });
 
         master.Keywords.Add(new Keyword(VampireKeyword, SkyrimRelease.SkyrimSE) { EditorID = "Vampire" });
-        var vampireRace = new Race(NordRaceVampire, SkyrimRelease.SkyrimSE) { EditorID = "NordRaceVampire", Name = "Nord" };
+        var vampireRace = new Race(NordRaceVampire, SkyrimRelease.SkyrimSE)
+        {
+            EditorID = "NordRaceVampire", Name = "Nord", Height = new GenderedItem<float>(1.0f, 1.0f),
+        };
         vampireRace.MorphRace.SetTo(nordRace);
         vampireRace.Keywords = new ExtendedList<IFormLinkGetter<IKeywordGetter>> { new FormLink<IKeywordGetter>(VampireKeyword) };
         vampireRace.HeadData = nordRace.HeadData;
@@ -307,7 +310,9 @@ public sealed class SyntheticLoadOrder : IDisposable
 
     private static Race AddRace(SkyrimMod mod, FormKey key, string editorId, string name, Race? armorRace)
     {
-        var race = new Race(key, SkyrimRelease.SkyrimSE) { EditorID = editorId, Name = name };
+        // Every playable race of the game has a height (1.0 for Nords); 0 made the synthetic NPCs unrenderable,
+        // so the studio could not open them in a synthetic profile (audit F-11 profile scenario).
+        var race = new Race(key, SkyrimRelease.SkyrimSE) { EditorID = editorId, Name = name, Height = new GenderedItem<float>(1.0f, 1.0f) };
         if (armorRace is not null)
         {
             race.ArmorRace.SetTo(armorRace);

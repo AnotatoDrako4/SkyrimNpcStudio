@@ -50,7 +50,7 @@ ScrollView {
                 text: qsTr("Color de Cabello")
                 color: Theme.accent
                 font.bold: true
-                font.pixelSize: 13
+                font.pixelSize: Theme.fs(13)
             }
             // Same line, so nothing moves when the analysis ends: why the palette is disabled.
             Text {
@@ -58,7 +58,7 @@ ScrollView {
                 Layout.fillWidth: true
                 text: root.studio.appearance.analysing ? qsTr("· analizando el FaceGen…") : qsTr("· bloqueado (ver Protección facial)")
                 color: Theme.textDim
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 elide: Text.ElideRight
             }
         }
@@ -77,7 +77,7 @@ ScrollView {
                 text: root.studio.appearance.hairColor.toString().toUpperCase()
                 color: Theme.text
                 font.bold: true
-                font.pixelSize: 12
+                font.pixelSize: Theme.normal
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -115,7 +115,7 @@ ScrollView {
                         Text {
                             text: modelData.name
                             color: Theme.text
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.micro
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
@@ -133,13 +133,13 @@ ScrollView {
             text: qsTr("Ojos y Cejas")
             color: Theme.accent
             font.bold: true
-            font.pixelSize: 13
+            font.pixelSize: Theme.fs(13)
         }
 
         Text {
             text: qsTr("Partes de Cabeza (HeadParts) asignadas:")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
         }
 
         // Lista de HeadParts actuales
@@ -162,14 +162,14 @@ ScrollView {
                         text: modelData.type || qsTr("Parte")
                         color: Theme.accent
                         font.bold: true
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         Layout.preferredWidth: 60
                     }
 
                     Text {
                         text: (modelData.editorId || modelData.formKey) + (modelData.meshPath ? " (" + modelData.meshPath + ")" : "")
                         color: Theme.text
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.small
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
@@ -192,7 +192,7 @@ ScrollView {
         Text {
             text: qsTr("Cambiar pieza de cabeza")
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
         }
         RowLayout {
             Layout.fillWidth: true
@@ -218,7 +218,7 @@ ScrollView {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             color: Theme.textDim
-            font.pixelSize: 11
+            font.pixelSize: Theme.small
             text: root.studio.appearance.analysing ? qsTr("Disponible cuando termine el análisis del FaceGen.")
                                                    : qsTr("Bloqueado para esta cabeza: ver «Protección facial».")
         }
@@ -234,7 +234,7 @@ ScrollView {
                 required property var modelData
                 width: ListView.view.width
                 height: 26
-                font.pixelSize: 11
+                font.pixelSize: Theme.small
                 text: (modelData.editorId || modelData.formKey) + "  ·  " + modelData.plugin
                 onClicked: root.studio.appearance.setHeadPart(modelData.formKey, modelData.type)
             }

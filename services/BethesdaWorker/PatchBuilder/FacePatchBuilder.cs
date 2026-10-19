@@ -84,7 +84,7 @@ internal static partial class FacePatchBuilder
         // Plugins the patch must load after although none of its links points at them: for a face copied
         // from another version, the source and the winning plugin (declared as masters).
         var loadAfter = new HashSet<ModKey>();
-        var projected = new List<FormKey>();
+        var projected = new List<(FormKey Npc, string Source)>();
 
         foreach (var item in assignments)
         {
@@ -160,7 +160,7 @@ internal static partial class FacePatchBuilder
                 }
                 if (face.CopyFaceFrom is not null)
                 {
-                    projected.Add(npcKey);
+                    projected.Add((npcKey, face.CopyFaceFrom));
                 }
                 else
                 {
@@ -299,7 +299,13 @@ internal static partial class FacePatchBuilder
         {
             issues.Add(Issue.Error("FaceSourceFaceGenUnknown", "The mod of the FaceGen the game uses was not given (FaceGen.EffectiveFaceGenMod).", subject));
         }
-        else if (providers?.GetValueOrDefault(sourcePlugin) is { } provider && !string.Equals(provider, faceGenMod, StringComparison.OrdinalIgnoreCase))
+        else if (ProviderOf(providers, sourcePlugin) is not { } provider)
+        {
+            // Without the source plugin's MO2 mod the FaceGen check cannot be made: refuse, never assume.
+            issues.Add(Issue.Error("FaceSourceProviderUnknown",
+                $"The MO2 mod that provides '{sourcePlugin}' was not given (PluginProviders): the FaceGen the game uses cannot be checked against it.", subject));
+        }
+        else if (!string.Equals(provider, faceGenMod, StringComparison.OrdinalIgnoreCase))
         {
             issues.Add(Issue.Error("FaceSourceNotFaceGenMod",
                 $"'{sourcePlugin}' comes from «{provider}» but the FaceGen the game uses comes from «{faceGenMod}»: the copied face would not match it.", subject));
@@ -329,9 +335,14 @@ internal static partial class FacePatchBuilder
         return npc.HairColor.FormKeyNullable;
     }
 
+    /// <summary>MO2 mod of a plugin; plugin file names are case-insensitive on Windows.</summary>
+    private static string? ProviderOf(IReadOnlyDictionary<string, string>? providers, string plugin) =>
+        providers?.FirstOrDefault(p => string.Equals(p.Key, plugin, StringComparison.OrdinalIgnoreCase)).Value is { Length: > 0 } mod ? mod : null;
+
     /// <summary>Each NPC's override chain with the written plugin loaded last, from the re-read file.</summary>
     private static IReadOnlyList<ProjectedChain> ProjectChains(
-        LoadOrderSession session, CatalogQueries queries, string pluginPath, ModKey patchKey, string pluginName, IReadOnlyList<FormKey> npcs)
+        LoadOrderSession session, CatalogQueries queries, string pluginPath, ModKey patchKey, string pluginName,
+        IReadOnlyList<(FormKey Npc, string Source)> npcs)
     {
         if (npcs.Count == 0)
         {
@@ -342,7 +353,7 @@ internal static partial class FacePatchBuilder
             new ModPath(patchKey, pluginPath), SkyrimRelease.SkyrimSE,
             new BinaryReadParameters { MasterFlagsLookup = session.MasterStyles });
         var chains = new List<ProjectedChain>();
-        foreach (var key in npcs)
+        foreach (var (key, sourcePlugin) in npcs)
         {
             if (!written.Npcs.RecordCache.TryGetValue(key, out var npc))
             {
@@ -357,7 +368,12 @@ internal static partial class FacePatchBuilder
                 fingerprints["Name"] = name;
             }
 
-            chains.Add(queries.ProjectChain(key, pluginName, fingerprints));
+            // Face fields still different from the source version, compared on the records themselves (not on
+            // the catalog fingerprints the control map uses): empty when the record now carries the source face.
+            var remaining = session.Find(ModKey.FromFileName(sourcePlugin)) is { } plugin && plugin.Mod.Npcs.RecordCache.TryGetValue(key, out var source)
+                ? ChangedFields(source, npc).Intersect(SourceFaceFields, StringComparer.Ordinal).ToArray()
+                : SourceFaceFields.ToArray();
+            chains.Add(queries.ProjectChain(key, pluginName, fingerprints) with { RemainingFaceDifferences = remaining });
         }
 
         return chains;
@@ -755,7 +771,8 @@ internal static partial class FacePatchBuilder
         // Safe patch: every NPC_ field of every override (not only the face ones) against the winner.
         semanticDiffs = NpcSafePatch.CheckAll(session, patchKey, npcs.Values, allowedByNpc, "this face/outfit export");
         // A copied face was not edited: say where each value comes from.
-        var sources = expectations.Where(e => e.Face.CopyFaceFrom is not null).ToDictionary(e => e.Npc.ToString(), e => e.Face.CopyFaceFrom!);
+        var sources = expectations.Where(e => e.Face.CopyFaceFrom is not null)
+            .ToDictionary(e => e.Npc.ToString(), e => e.Face.CopyFaceFrom!, StringComparer.OrdinalIgnoreCase);
         semanticDiffs = semanticDiffs.Select(d => sources.TryGetValue(d.Npc, out var from)
             ? d with { Changes = d.Changes.Select(c => c with { Reason = $"Copiado de {from}: el rostro del FaceGen que ya usa el juego" }).ToList() }
             : d).ToList();

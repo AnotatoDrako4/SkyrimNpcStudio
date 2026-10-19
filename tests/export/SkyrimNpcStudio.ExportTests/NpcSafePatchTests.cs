@@ -231,6 +231,45 @@ public sealed class NpcSafePatchTests : IDisposable
         Assert.Empty(diff.Changes);
     }
 
+    /// <summary>
+    /// Audit v2 F-16: the record header flags were skipped as bookkeeping, so an override that marked the
+    /// NPC Deleted or Ignored passed the check. Only Compressed (0x40000) is storage, not content.
+    /// </summary>
+    [Theory]
+    [InlineData(0x20, "Deleted")]
+    [InlineData(0x1000, "Ignored")]
+    [InlineData(0x800, "0x800")]
+    [InlineData(0x40020, "Deleted")]
+    public void AChangedRecordFlag_IsBlockedEvenForACompleteFace(int flag, string expected)
+    {
+        var winner = LydiaWinner();
+        var tampered = winner.DeepCopy();
+        tampered.MajorRecordFlagsRaw = winner.MajorRecordFlagsRaw ^ flag;
+
+        var violations = new List<Issue>();
+        var diff = NpcSafePatch.Check(winner, tampered, TestPatch, NpcSafePatch.FaceFields, "a face overhaul", violations);
+
+        var error = Assert.Single(violations);
+        Assert.Equal("UnauthorizedNpcChange", error.Code);
+        Assert.Contains(expected, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compressed", error.Message, StringComparison.Ordinal);
+        Assert.Empty(diff.Changes);
+    }
+
+    [Fact]
+    public void OnlyTheCompressedFlag_IsBookkeeping()
+    {
+        var winner = LydiaWinner();
+        var recompressed = winner.DeepCopy();
+        recompressed.MajorRecordFlagsRaw = winner.MajorRecordFlagsRaw ^ 0x40000;
+
+        var violations = new List<Issue>();
+        var diff = NpcSafePatch.Check(winner, recompressed, TestPatch, new HashSet<string>(), "nothing", violations);
+
+        Assert.Empty(violations);
+        Assert.Empty(diff.Changes);
+    }
+
     [Fact]
     public void ACompleteFaceAllowsFaceFieldsButStillBlocksTheOutfit()
     {

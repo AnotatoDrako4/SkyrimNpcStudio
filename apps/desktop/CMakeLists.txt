@@ -1,4 +1,4 @@
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
 qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(SkyrimNpcStudio WIN32
@@ -6,6 +6,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   components/viewport_verifier.cpp components/viewport_verifier.hpp
   components/appearance_stress.cpp components/appearance_stress.hpp
   components/forge_preview_check.cpp components/forge_preview_check.hpp
+  components/workbench_check.cpp components/workbench_check.hpp
+  components/settings_check.cpp components/settings_check.hpp
   diagnostics/crash_diagnostics.cpp diagnostics/crash_diagnostics.hpp
   viewmodels/json_bridge.hpp
   viewmodels/mo2_snapshot.hpp
@@ -14,10 +16,15 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/worker_client.cpp viewmodels/worker_client.hpp
   viewmodels/edit_history.cpp viewmodels/edit_history.hpp
   viewmodels/resource_context.cpp viewmodels/resource_context.hpp
+  viewmodels/export_destination.cpp viewmodels/export_destination.hpp
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
+  viewmodels/portrait_cache.cpp viewmodels/portrait_cache.hpp
+  viewmodels/portrait_renderer.cpp viewmodels/portrait_renderer.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
+  viewmodels/workbench_state.cpp viewmodels/workbench_state.hpp
+  viewmodels/settings_service.cpp viewmodels/settings_service.hpp
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
   viewmodels/forge_asset_library.cpp viewmodels/forge_asset_library.hpp
   viewmodels/forge_blender_bridge.cpp viewmodels/forge_blender_bridge.hpp
@@ -39,6 +46,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/Theme.qml
     qml/WelcomeOverlay.qml
     qml/NpcBrowser.qml
+    qml/PortraitStage.qml
     qml/ModBrowser.qml
     qml/ArmorCatalog.qml
     qml/NpcOverview.qml
@@ -50,6 +58,12 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/KeyValue.qml
     qml/components/IssueList.qml
     qml/components/StatusBadge.qml
+    qml/components/SplitHandleBar.qml
+    qml/components/WorkbenchSplit.qml
+    qml/components/ScalePreferencesDialog.qml
+    qml/components/PortraitThumb.qml
+    qml/settings/SettingControl.qml
+    qml/settings/SettingsCenter.qml
     qml/charactercreator/FaceSliderGroup.qml
     qml/charactercreator/FaceProtectionCard.qml
     qml/charactercreator/FaceCustomizer.qml
@@ -95,6 +109,7 @@ target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSIO
 target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
+  Qt6::GuiPrivate  # rhi/qrhi.h: the portrait renderer reads its off-screen texture back (QRhi, semi-public API)
   Qt6::Test  # QTest::mouseClick for the --forge-preview automation (platform input path)
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face
