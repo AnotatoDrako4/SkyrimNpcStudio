@@ -10,4 +10,4 @@ target_include_directories(sns_face PUBLIC include)
 # nifly stays private: no nifly type appears in the public headers.
 target_link_libraries(sns_face
   PUBLIC sns::core sns::textures nlohmann_json::nlohmann_json
-  PRIVATE sns::compile_options nifly)
+  PRIVATE sns::nif sns::compile_options nifly)

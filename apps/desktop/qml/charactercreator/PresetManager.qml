@@ -200,7 +200,112 @@ ScrollView {
             }
         }
 
+        // List or face gallery (remembered: Configuración › NPC y retratos). The gallery shows each donor's
+        // studio portrait; ones rendered in earlier sessions appear at once from the local cache.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Button {
+                objectName: "donorListModeButton"
+                Layout.fillWidth: true
+                text: qsTr("Lista")
+                checkable: true
+                checked: AppSettings.donorView === "list"
+                onClicked: AppSettings.donorView = "list"
+            }
+            Button {
+                objectName: "donorGalleryModeButton"
+                Layout.fillWidth: true
+                text: qsTr("Galería de rostros")
+                checkable: true
+                checked: AppSettings.donorView === "gallery"
+                onClicked: AppSettings.donorView = "gallery"
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: root.studio.donorResults.count === 0
+            text: qsTr("Busca un NPC por nombre para ver sus rostros.")
+            color: Theme.textMuted
+            font.pixelSize: Theme.small
+            wrapMode: Text.WordWrap
+        }
+
+        GridView {
+            id: donorGallery
+            objectName: "donorGallery"
+            visible: AppSettings.donorView === "gallery" && count > 0
+            Layout.fillWidth: true
+            implicitHeight: Math.min(cellHeight * 2.6, Math.ceil(count / columns) * cellHeight)
+            clip: true
+            model: AppSettings.donorView === "gallery" ? root.studio.donorResults : null
+            boundsBehavior: Flickable.StopAtBounds
+            readonly property int columns: Math.max(1, Math.floor(width / AppSettings.galleryCardWidth))
+            cellWidth: Math.floor(width / columns)
+            cellHeight: cellWidth - 10 + 74
+            cacheBuffer: cellHeight
+            ScrollBar.vertical: ScrollBar {}
+
+            delegate: Item {
+                id: donorCard
+                required property string formKey
+                required property string name
+                required property string editorId
+                required property string race
+                required property string sex
+                required property string winningPlugin
+                width: donorGallery.cellWidth
+                height: donorGallery.cellHeight
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    radius: 4
+                    color: donorHover.hovered ? Theme.panelAlt : Theme.panel
+                    border.color: Theme.border
+                    HoverHandler { id: donorHover }
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 5
+                        spacing: 1
+                        PortraitThumb {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: width
+                            portraits: root.studio.portraits
+                            formKey: donorCard.formKey
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: donorCard.name || donorCard.editorId || donorCard.formKey
+                            color: Theme.text
+                            font.bold: true
+                            font.pixelSize: Theme.small
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: (donorCard.race || "?") + " · " + (donorCard.sex === "female" ? "♀" : "♂") + " · " + donorCard.winningPlugin
+                            color: Theme.textDim
+                            font.pixelSize: Theme.micro
+                            elide: Text.ElideRight
+                        }
+                        Button {
+                            Layout.fillWidth: true
+                            implicitHeight: Theme.controlHeight - 4
+                            text: qsTr("Usar")
+                            font.pixelSize: Theme.small
+                            enabled: root.studio.appearance.donorBlockedReason.length === 0
+                            ToolTip.visible: hovered
+                            ToolTip.text: enabled ? qsTr("Aplicar el rostro de %1 (se regenera el FaceGen; no se copia el del donante)").arg(donorCard.name || donorCard.editorId)
+                                                  : root.studio.appearance.donorBlockedReason
+                            onClicked: root.studio.appearance.applyDonor(donorCard.formKey, donorCard.name || donorCard.editorId)
+                        }
+                    }
+                }
+            }
+        }
+
         ListView {
+            visible: AppSettings.donorView === "list"
             Layout.fillWidth: true
             implicitHeight: Math.min(200, count * 40)
             clip: true

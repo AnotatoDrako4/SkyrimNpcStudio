@@ -28,7 +28,9 @@
 #include "viewmodels/studio_controller.hpp"
 #include "components/appearance_stress.hpp"
 #include "components/forge_preview_check.hpp"
+#include "components/settings_check.hpp"
 #include "components/workbench_check.hpp"
+#include "viewmodels/settings_service.hpp"
 #include "viewmodels/workbench_state.hpp"
 #include "components/viewport_verifier.hpp"
 
@@ -178,6 +180,13 @@ int main(int argc, char* argv[]) {
   const QCommandLineOption workbench_expect_opt("workbench-expect",
                                                 "Check that the layout an earlier --workbench-check stored came back.", "file");
   cli.addOptions({workbench_opt, workbench_expect_opt});
+  const QCommandLineOption settings_opt("settings-check",
+                                        "Drive the Settings Center with real input (Ctrl+, search, theme, text, viewer, panels); "
+                                        "captures and expect.json here.",
+                                        "directory");
+  const QCommandLineOption settings_expect_opt("settings-expect", "Check that the settings an earlier --settings-check stored came back.",
+                                               "file");
+  cli.addOptions({settings_opt, settings_expect_opt});
   cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, workspace_opt, size_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
                   second_npc_opt, stress_work_opt, crash_opt, forge_preview_opt, forge_capture_opt});
   cli.process(app);
@@ -221,7 +230,8 @@ int main(int argc, char* argv[]) {
   // ---- automation: used by scripts/smoke-test.ps1 and handy for shortcuts.
   const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
                          cli.isSet(stress_opt) || cli.isSet(forge_preview_opt) ||
-                         cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt);
+                         cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt) || cli.isSet(settings_opt) ||
+                         cli.isSet(settings_expect_opt);
   // Automation starts in Character Creator unless told otherwise: the workspace the user left last
   // (restored from the preferences) must not change what a smoke run or a check loads.
   if (automated && !cli.isSet(workspace_opt) && main_window) {
@@ -278,6 +288,13 @@ int main(int argc, char* argv[]) {
         if (studio.scene()->parts().isEmpty()) { finish(5); return; }
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         const auto then_stress = [&, window] {
+          if (cli.isSet(settings_opt) || cli.isSet(settings_expect_opt)) {
+            auto* workbench = engine.singletonInstance<sns::app::WorkbenchState*>("SkyrimNpcStudio", "Workbench");
+            auto* settings = engine.singletonInstance<sns::app::SettingsService*>("SkyrimNpcStudio", "AppSettings");
+            sns::app::run_settings_check(window, settings, workbench, cli.value(settings_opt), cli.value(settings_expect_opt),
+                                         [&](bool ok) { finish(ok ? 0 : 12); });
+            return;
+          }
           if (cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt)) {
             auto* workbench = engine.singletonInstance<sns::app::WorkbenchState*>("SkyrimNpcStudio", "Workbench");
             sns::app::run_workbench_check(window, workbench, cli.value(workbench_opt), cli.value(workbench_expect_opt),

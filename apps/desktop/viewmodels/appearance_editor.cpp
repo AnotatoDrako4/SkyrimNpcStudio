@@ -13,6 +13,7 @@
 #include <filesystem>
 
 #include "diagnostics/crash_diagnostics.hpp"
+#include "export_destination.hpp"
 #include "json_bridge.hpp"
 #include "outfit_editor.hpp"
 #include "resource_context.hpp"
@@ -1371,6 +1372,14 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   }
   // The worker only accepts absolute output paths.
   const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
+  {
+    const auto snap = snapshot_();
+    if (const auto refused = refused_export_directory(output, snap ? forbidden_roots_of(*snap) : std::vector<ForbiddenRoot>{});
+        !refused.isEmpty()) {
+      finish_export(false, refused, {}, {}, {});  // nothing created yet
+      return;
+    }
+  }
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();
@@ -1607,6 +1616,14 @@ void AppearanceEditor::exportFaceResolution(const QString& plugin_name, const QS
   }
   // The worker only accepts absolute output paths.
   const auto output = QDir::toNativeSeparators(QFileInfo(local_path(output_dir)).absoluteFilePath());
+  {
+    const auto snap = snapshot_();
+    if (const auto refused = refused_export_directory(output, snap ? forbidden_roots_of(*snap) : std::vector<ForbiddenRoot>{});
+        !refused.isEmpty()) {
+      finish_export(false, refused, {}, {}, {});  // nothing created yet
+      return;
+    }
+  }
   QDir().mkpath(output);
   exporting_ = true;
   emit exportingChanged();

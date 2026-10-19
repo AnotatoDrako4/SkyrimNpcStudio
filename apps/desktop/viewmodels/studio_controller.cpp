@@ -560,37 +560,16 @@ bool StudioController::isMo2Running() const {
   return check_mo2_running();
 }
 
+// Direct installation into MO2's mods/ folder is disabled (audit P0-01): the old copy created the folder
+// over an existing mod, overwrote its files, followed links and had no rollback. Nothing here touches the
+// file system; the generated mod (folder or ZIP) is installed with MO2's own installer instead. It comes back
+// only as a new supervised flow (canonical destination, refuse an existing mod or a link, no overwrite,
+// rollback) with its own tests and the owner's approval.
 QVariantMap StudioController::installModToMo2(const QString& mod_dir) {
-  if (isMo2Running()) {
-    return {{"success", false},
-            {"error", tr("Mod Organizer 2 está abierto. Ciérralo antes de instalar en la carpeta mods/.")}};
-  }
-  if (!snapshot_ || snapshot_->config.mods_dir.empty()) {
-    return {{"success", false}, {"error", tr("No hay instancia de MO2 cargada o la carpeta mods/ no está configurada.")}};
-  }
-
-  const auto src_path = to_path(local_path(mod_dir));
-  if (!std::filesystem::exists(src_path) || !std::filesystem::is_directory(src_path)) {
-    return {{"success", false}, {"error", tr("La carpeta del mod exportado no existe: %1").arg(mod_dir)}};
-  }
-
-  const auto mod_name = src_path.filename();
-  const auto dest_path = snapshot_->config.mods_dir / mod_name;
-
-  std::error_code ec;
-  std::filesystem::create_directories(dest_path, ec);
-  if (ec) {
-    return {{"success", false}, {"error", tr("No se pudo crear la carpeta en MO2: %1").arg(QString::fromStdString(ec.message()))}};
-  }
-
-  std::filesystem::copy(src_path, dest_path, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
-  if (ec) {
-    return {{"success", false}, {"error", tr("Error copiando archivos a MO2: %1").arg(QString::fromStdString(ec.message()))}};
-  }
-
-  const auto dest_str = from_path(dest_path);
-  console_->append("info", "export", tr("Mod instalado con éxito en MO2: %1").arg(dest_str));
-  return {{"success", true}, {"destination", dest_str}};
+  console_->append("warning", "export", tr("Instalación directa en MO2 rechazada (desactivada hasta completar la validación de destino): %1").arg(mod_dir));
+  return {{"success", false},
+          {"error", tr("No disponible hasta completar la validación de destino. Instala el ZIP generado con «Instalar mod desde archivo» "
+                       "de Mod Organizer 2 (o copia la carpeta a mano); el estudio no escribe en mods/.")}};
 }
 
 // ------------------------------------------------------------------ NPCs and armors
@@ -865,7 +844,10 @@ appearance::ControlInputs build_control_inputs(const SnapshotPtr& snapshot, cons
     if (in.chain[at].mod != in.facegen.winner_mod) {
       if (const auto bytes = ctx->resolver->read(in.facegen.path)) {
         const auto info = face::inspect_facegen(*bytes);
-        bool all = info.readable;
+        // A damaged FaceGen is reported as such (FaceGenUnreadable); whether it has the record's pieces is then unknown.
+        in.facegen_readable = info.readable;
+        if (!info.readable) return in;
+        bool all = true;
         for (const auto& p : parts) {
           // A head part without a mesh (the "...00NoGash" / "NoBeard" placeholders) has no FaceGen shape.
           if (p.toMap().value("modelPath").toString().isEmpty()) continue;
@@ -1190,14 +1172,13 @@ void StudioController::scan_list_slice(const std::shared_ptr<AppearanceScan>& sc
     scan->page.json_ns += part.nsecsElapsed();
     const auto form_key = summary.value("formKey").toString();
     ++scan->listed;
-    // FaceGen files are named after the origin plugin and the plugin-local FormID (as the worker's
-    // FaceGenFor); a race with any such file uses FaceGen.
-    const auto colon = form_key.indexOf(':');
-    const auto plugin = form_key.mid(colon + 1);
-    const auto id = form_key.left(colon).toUpper().rightJustified(8, '0');
-    const auto geometry = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\%1\\%2.nif").arg(plugin, id);
+    // The worker names the FaceGen files (FaceGenFor, protocol 1.5); the studio keeps no copy of that rule
+    // (audit v2 F-20). A race with any such file uses FaceGen.
+    const auto plugin = summary.value("originPlugin").toString();
+    const auto face_gen = summary.value("faceGen").toMap();
+    const auto geometry = face_gen.value("geometryPath").toString();
     part.start();
-    const bool has_facegen = ctx && ctx->resolver && ctx->resolver->locate(ss(geometry));
+    const bool has_facegen = !geometry.isEmpty() && ctx && ctx->resolver && ctx->resolver->locate(ss(geometry));
     scan->page.locate_ns += part.nsecsElapsed();
     if (has_facegen) scan->races.insert(summary.value("raceFormKey").toString().toLower());
     if (summary.value("overrideCount").toInt() > 1) {
@@ -1208,8 +1189,7 @@ void StudioController::scan_list_slice(const std::shared_ptr<AppearanceScan>& sc
     const QVariantMap origin{{"plugin", plugin}, {"mod", providerOf(plugin)}, {"isOrigin", true}, {"isWinner", true}, {"changedFields", QVariantList{}}};
     scan->singles << QVariantMap{{"summary", summary},
                                  {"overrides", QVariantList{origin}},
-                                 {"faceGen", QVariantMap{{"geometryPath", geometry},
-                                                         {"tintPath", QStringLiteral("textures\\actors\\character\\facegendata\\facetint\\%1\\%2.dds").arg(plugin, id)}}}};
+                                 {"faceGen", face_gen}};
   }
   const auto ns = block.nsecsElapsed();
   scan->page.total_ns += ns;
@@ -1296,11 +1276,35 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
                                           races = races_with_facegen_] {
       QElapsedTimer analysis;
       analysis.start();
-      const auto inputs = build_control_inputs(snapshot, races, details);
-      auto report = std::make_shared<const appearance::ControlReport>(appearance::analyze_appearance_control(inputs));
-      const auto digest = report->resolution
-                              ? review_digest(ss(details.value("summary").toMap().value("formKey").toString()), inputs, *report->resolution)
-                              : QString();
+      // Audit F-11: an exception must not leave a pool thread (std::terminate closes the app). Reading the
+      // NPC's FaceGen (a damaged BSA entry, a loose file gone, a malformed NIF) may throw: that NPC becomes
+      // one error of the scan, like a failed getNpc, and the rest of the profile is still analysed.
+      std::shared_ptr<const appearance::ControlReport> report;
+      QString digest, failure;
+      try {
+        const auto inputs = build_control_inputs(snapshot, races, details);
+        report = std::make_shared<const appearance::ControlReport>(appearance::analyze_appearance_control(inputs));
+        if (report->resolution)
+          digest = review_digest(ss(details.value("summary").toMap().value("formKey").toString()), inputs, *report->resolution);
+      } catch (const std::exception& e) {
+        failure = QString::fromUtf8(e.what());
+      } catch (...) {
+        failure = QStringLiteral("unknown exception");
+      }
+      if (!report || !failure.isEmpty()) {  // report is null only when the analysis threw
+        const auto form_key = details.value("summary").toMap().value("formKey").toString();
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, scan, form_key, failure] {
+              if (!self || scan != self->scan_ || !scan->running) return;
+              --scan->in_flight;
+              ++scan->errors;
+              self->log("warning", tr("Análisis del perfil: %1 no se pudo analizar (%2)").arg(form_key, failure));
+              self->scan_next();
+            },
+            Qt::QueuedConnection);
+        return;
+      }
       const qint64 us = analysis.nsecsElapsed() / 1000;
       QMetaObject::invokeMethod(
           self.data(),
@@ -1453,14 +1457,22 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
       const auto effective_model = !female_model.isEmpty() ? female_model : male_model;
       bool nif_found = false;
       if (!effective_model.isEmpty()) {
+        const auto mesh_path = effective_model.startsWith("meshes/", Qt::CaseInsensitive) ||
+                               effective_model.startsWith("meshes\\", Qt::CaseInsensitive)
+                                   ? effective_model
+                                   : "meshes\\" + effective_model;
         if (resolver) {
-          const auto loc = resolver->locate(ss(effective_model));
+          auto loc = resolver->locate(ss(mesh_path));
+          if (!loc.has_value()) {
+            loc = resolver->locate(ss(effective_model));
+          }
           nif_found = loc.has_value();
           if (loc.has_value() && row.value("winningMod").toString().isEmpty()) {
             row["winningMod"] = qs(loc->provider);
           }
         } else if (snapshot_) {
-          nif_found = snapshot_->vfs.resolve(ss(effective_model)).has_value();
+          nif_found = snapshot_->vfs.resolve(ss(mesh_path)).has_value() ||
+                      snapshot_->vfs.resolve(ss(effective_model)).has_value();
         }
       }
       row["nifFound"] = nif_found;

@@ -23,6 +23,22 @@ BSA cargados          ─┼─> AssetResolver (Data\…; suelto > último BSA) 
 | `engines/textures` | DDS (BC1–BC7, DX10, RGBA sin comprimir) y estadísticas reales de alfa |
 | `engines/rendering` | Escena: reglas del juego (slots, orden de equipamiento, pelo bajo casco), skinning, FaceGen, traducción de transparencia, avisos por pieza |
 
+## Carga segura (auditoría v2, F-10/F-11/F-12)
+
+Todo NIF llega a nifly por **una sola puerta**: `sns::nif::load_nifly` (`engines/nif/include/sns/nif/safe_load.hpp`), que
+usan `load_mesh`/`load_skeleton` y el `parse_nif` de FaceGen. Antes de llamar a nifly, `prevalidate_nif` recorre la cabecera
+con lectura acotada y rechaza con `sns::Error(Parse)`: más de 64 MiB, cabecera que no es de Skyrim (20.2.0.7, user 12),
+cadenas o tablas que salen del archivo, índices de tipo fuera de rango, tamaños de bloque que no caben (nifly reservaba lo
+que dijera la cabecera: 4,1 GB con un archivo de 238 bytes) y rutas de `BSShaderTextureSet` fuera de su bloque o de más de
+1024 bytes (nifly pasa cada ruta por `std::regex`). Cualquier excepción de nifly se convierte en `sns::Error`; un FaceGen
+ilegible es «no legible», nunca una excepción que salga de un hilo. En la escena, una malla que falle por cualquier motivo
+solo pierde esa pieza (`MeshUnreadable`).
+
+Concordancia con nifly sobre datos reales (solo lectura): 4000 NIF de los mods del perfil, 0 rechazos falsos
+(`sns_nif_load_probe scan`). Riesgo residual: las rutas propias de `BSEffectShaderProperty` no se validan campo a campo
+(su disposición depende de la versión); quedan acotadas por el límite de 64 MiB y por el `catch` de `load_nifly`. Medido en
+MSVC Debug antes de la corrección: la ruta de 589 824 bytes del caso de la auditoría no desbordó la pila, pero tardó 5,6 s.
+
 ## Transformaciones (NIF → nifly → Qt)
 
 1. Formas sin *skin*: transformación global del NIF (cadena de padres compuesta una sola vez).

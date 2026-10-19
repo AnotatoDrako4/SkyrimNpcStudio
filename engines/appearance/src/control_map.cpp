@@ -256,6 +256,15 @@ ControlReport analyze_appearance_control(const ControlInputs& in) {
   if (in.regeneration_deviation) std::snprintf(deviation_text, sizeof(deviation_text), " (desviación medida %.3f)", *in.regeneration_deviation);
   const bool facegen_matches_record = in.regeneration_deviation && *in.regeneration_deviation < kFaceGenMatchesRecord;
 
+  // ---- The effective FaceGen was opened and could not be parsed (audit F-11: it no longer throws; say why)
+  if (in.facegen.found && in.facegen_readable == false) {
+    finding("warning", "FaceGenUnreadable",
+            "El FaceGen que carga el juego (" + in.facegen.path + ", de " + quoted(in.facegen.winner_mod) +
+                ") está dañado o no es un NIF de Skyrim.",
+            "En el juego la cabeza puede salir sin geometría o con la «cara oscura», o el juego puede cerrarse al cargar el NPC.",
+            "Reinstala o actualiza el mod que lo aporta; si sigue igual, exporta el rostro con el estudio para regenerar el FaceGen.");
+  }
+
   // ---- FaceGen present and from the mod that set the face data
   if (!in.facegen.found && !in.facegen_expected) {
     finding("ok", "FaceGenNotUsed", "El NPC no usa FaceGen propio (toma los rasgos de una plantilla o su raza no usa FaceGen).",

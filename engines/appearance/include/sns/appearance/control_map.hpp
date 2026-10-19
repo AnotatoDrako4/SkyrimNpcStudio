@@ -50,6 +50,9 @@ struct ControlInputs {
   // Whether every head part of the record has a shape of the same name in the effective FaceGen (shapes
   // are named after the head part EditorIDs); unset when not checked.
   std::optional<bool> facegen_has_record_head_parts;
+  // Whether the effective FaceGen could be parsed when the studio opened it (false: damaged or not a NIF,
+  // audit F-11); unset when it was not opened.
+  std::optional<bool> facegen_readable;
 };
 
 struct ComponentControl {

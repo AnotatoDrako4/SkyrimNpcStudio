@@ -12,6 +12,8 @@ Dialog {
     anchors.centerIn: Overlay.overlay
     width: Math.min(Theme.px(440), (parent ? parent.width : Theme.px(440)) - 32)
     standardButtons: Dialog.Close
+    // Quick access kept for the View menu and the status bar; everything else lives in Configuración (Ctrl+,).
+    signal moreRequested()
 
     ColumnLayout {
         anchors.fill: parent
@@ -57,11 +59,19 @@ Dialog {
             wrapMode: Text.WordWrap
         }
 
-        Button {
-            Layout.alignment: Qt.AlignRight
-            text: qsTr("Restablecer valores iniciales")
-            enabled: !Workbench.appearanceAtDefaults
-            onClicked: Workbench.resetAppearance()
+        RowLayout {
+            Layout.fillWidth: true
+            Button {
+                objectName: "moreSettingsButton"
+                text: qsTr("Todos los ajustes… (Ctrl+,)")
+                onClicked: dialog.moreRequested()
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: qsTr("Restablecer valores iniciales")
+                enabled: !Workbench.appearanceAtDefaults
+                onClicked: Workbench.resetAppearance()
+            }
         }
     }
 }

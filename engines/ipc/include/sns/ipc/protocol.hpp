@@ -5,7 +5,7 @@
 namespace sns::ipc::protocol {
 
 inline constexpr int kMajor = 1;
-inline constexpr int kMinor = 4;
+inline constexpr int kMinor = 5;
 
 namespace method {
 inline constexpr const char* kHandshake = "system.handshake";

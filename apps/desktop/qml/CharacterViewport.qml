@@ -42,17 +42,25 @@ Rectangle {
         camera.z = Math.max(20, radius * 2.8)
     }
 
-    function reset() { frame(scene.center, scene.radius, 0) }
+    // Back to the default framing (Configuración › Visor 3D › Cámara predeterminada; "Cuerpo entero" unless changed).
+    function reset() {
+        cameraPreset.currentIndex = AppSettings.defaultCameraPreset
+        framePreset(AppSettings.defaultCameraPreset)
+    }
 
-    function applyCameraPreset(index) {
-        root.uvMode = false
-        cameraPreset.currentIndex = index
+    function framePreset(index) {
         const yaw = index === 2 ? 90 : index === 3 ? 180 : 0
         if (index === 4) {
             const heads = root.scene.parts.filter(p => p.group === "head" && p.shownByDefault)
             if (heads.length > 0) root.frame(heads[0].center, Math.min(heads[0].radius, root.scene.radius * 0.22), 0)
             else root.frame(root.scene.center, root.scene.radius, 0)
         } else root.frame(root.scene.center, root.scene.radius, yaw)
+    }
+
+    function applyCameraPreset(index) {
+        root.uvMode = false
+        cameraPreset.currentIndex = index
+        framePreset(index)
     }
 
     function pickCharacter() {
@@ -97,7 +105,16 @@ Rectangle {
              : (mode === "blend" || mode === "blendPrepass") ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
     }
 
-    Connections { target: root.scene; function onReady() { root.isolated = ""; root.reset() } }
+    // A finished scene is framed again unless "Encuadrar al cargar un NPC" is off (then the camera stays where it is).
+    Connections {
+        target: root.scene
+        function onReady() {
+            root.isolated = ""
+            if (AppSettings.autoFitOnNpc || !root.framedOnce) root.reset()
+            root.framedOnce = true
+        }
+    }
+    property bool framedOnce: false
 
     // A viewport in a hidden tab does not rebuild on every edit; it catches up when shown.
     Binding { target: root.scene; property: "active"; value: root.visible }
@@ -117,10 +134,12 @@ Rectangle {
             anchors.fill: parent
             camera: camera
             environment: SceneEnvironment {
+                // Configuración › Visor 3D: view only (never stored in textures or projects).
                 backgroundMode: SceneEnvironment.Color
-                clearColor: "#16171a"
-                antialiasingMode: SceneEnvironment.MSAA
-                antialiasingQuality: SceneEnvironment.High
+                clearColor: AppSettings.viewportBackground
+                antialiasingMode: AppSettings.antiAliasing === 0 ? SceneEnvironment.NoAA : SceneEnvironment.MSAA
+                antialiasingQuality: AppSettings.antiAliasing === 1 ? SceneEnvironment.Medium
+                                   : AppSettings.antiAliasing === 3 ? SceneEnvironment.VeryHigh : SceneEnvironment.High
                 debugSettings: DebugSettings {
                     materialOverride: root.diagnostic === "baseColor" ? DebugSettings.BaseColor
                                     : root.diagnostic === "normals" ? DebugSettings.Normals
@@ -131,12 +150,12 @@ Rectangle {
 
             Node {
                 id: pivot
-                PerspectiveCamera { id: camera; z: 300; clipNear: 0.1; clipFar: 10000; fieldOfView: 45 }
+                PerspectiveCamera { id: camera; z: 300; clipNear: 0.1; clipFar: 10000; fieldOfView: AppSettings.cameraFov }
             }
 
-            DirectionalLight { eulerRotation: Qt.vector3d(-30,-25,0); color: "#fff0dc"; brightness: 1.1; castsShadow: true; ambientColor: Qt.rgba(root.ambient,root.ambient,root.ambient,1) }
-            DirectionalLight { eulerRotation: Qt.vector3d(-10,125,0); color: "#d6e7ff"; brightness: 0.65 }
-            DirectionalLight { eulerRotation: Qt.vector3d(-60,190,0); brightness: 0.4 }
+            DirectionalLight { eulerRotation: Qt.vector3d(-30,-25,0); color: "#fff0dc"; brightness: 1.1 * AppSettings.lightIntensity; castsShadow: true; ambientColor: Qt.rgba(root.ambient,root.ambient,root.ambient,1) }
+            DirectionalLight { eulerRotation: Qt.vector3d(-10,125,0); color: "#d6e7ff"; brightness: 0.65 * AppSettings.lightIntensity }
+            DirectionalLight { eulerRotation: Qt.vector3d(-60,190,0); brightness: 0.4 * AppSettings.lightIntensity }
 
             Repeater3D {
                 id: partsRepeater
@@ -212,7 +231,12 @@ Rectangle {
                 materials: PrincipledMaterial { baseColor: "#f0c96b"; lighting: PrincipledMaterial.NoLighting }
             }
 
-            OrbitCameraController { anchors.fill: parent; origin: pivot; camera: camera; acceptedButtons: Qt.RightButton | Qt.MiddleButton; panEnabled: true }
+            // Sensitivity and inversion: Configuración › Visor 3D (Qt's own defaults: speed 0.1, Y inverted).
+            OrbitCameraController {
+                anchors.fill: parent; origin: pivot; camera: camera; acceptedButtons: Qt.RightButton | Qt.MiddleButton; panEnabled: true
+                xSpeed: AppSettings.orbitSpeed; ySpeed: AppSettings.orbitSpeed
+                xInvert: AppSettings.invertOrbitX; yInvert: !AppSettings.invertOrbitY
+            }
 
             TapHandler {
                 acceptedButtons: Qt.LeftButton

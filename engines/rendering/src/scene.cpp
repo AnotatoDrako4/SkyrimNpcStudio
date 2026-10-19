@@ -70,6 +70,11 @@ std::optional<nif::MeshFile> load(const assets::AssetResolver& resolver, const S
   } catch (const Error& e) {
     issue(scene, "warning", "MeshUnreadable", e.what(), subject);
     return std::nullopt;
+  } catch (const std::exception& e) {
+    // Audit F-12: like textures and the skeleton below, any failure of one mesh drops that mesh only; the
+    // rest of the character (the head included) is still built.
+    issue(scene, "warning", "MeshUnreadable", "cannot read " + path + ": " + e.what(), subject);
+    return std::nullopt;
   }
 }
 

@@ -11,6 +11,7 @@
 
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
+#include "sns/nif/safe_load.hpp"
 
 namespace sns::face {
 
@@ -32,10 +33,15 @@ std::string host_key(std::string_view path) {
   return key;
 }
 
+// nullptr when the bytes are not a readable NIF: structurally refused before nifly sees them, refused by
+// nifly, or nifly threw (audit F-10/F-11: a damaged FaceGen is "unreadable", never an escaping exception).
 std::unique_ptr<nifly::NifFile> parse_nif(const std::string& bytes) {
-  std::istringstream in(bytes, std::ios::in | std::ios::binary);
   auto nif = std::make_unique<nifly::NifFile>();
-  if (nif->Load(in) != 0 || !nif->IsValid()) return nullptr;
+  try {
+    sns::nif::load_nifly(*nif, bytes, "FaceGen");
+  } catch (const Error&) {
+    return nullptr;
+  }
   return nif;
 }
 

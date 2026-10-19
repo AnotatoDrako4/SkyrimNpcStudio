@@ -28,10 +28,12 @@ struct BuiltinLayout {
   const char* key;
   const char* name;
 };
-constexpr std::array<BuiltinLayout, 6> kBuiltin = {{
+constexpr std::array<BuiltinLayout, 8> kBuiltin = {{
     {"creator", "Character Creator"},
     {"face", "Edición facial"},
     {"wardrobe", "Vestuario"},
+    {"outfit", "Estudio de atuendos"},
+    {"review", "Revisión de mod"},
     {"explore", "Exploración de NPC"},
     {"viewer", "Visor maximizado"},
     {"compact", "Diseño compacto"},
@@ -42,7 +44,8 @@ std::optional<LayoutValues> builtin_values(const QString& key, const LayoutValue
   LayoutValues v = base;
   if (key == "creator") return v;
   if (key == "face") { v.left_visible = false; v.right_visible = true; v.right_width = 480; return v; }
-  if (key == "wardrobe") { v.left_visible = true; v.left_width = 420; v.right_visible = true; v.right_width = 380; return v; }
+  if (key == "wardrobe" || key == "outfit") { v.left_visible = true; v.left_width = 420; v.right_visible = true; v.right_width = 380; return v; }
+  if (key == "review") { v.left_visible = true; v.left_width = 380; v.right_visible = true; v.right_width = 400; v.bottom_visible = true; v.bottom_height = 240; return v; }
   if (key == "explore") { v.left_visible = true; v.left_width = 480; v.right_visible = false; return v; }
   if (key == "viewer") { v.maximized = true; return v; }
   if (key == "compact") { v.left_width = 240; v.right_width = 300; v.bottom_visible = false; return v; }

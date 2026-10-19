@@ -2,31 +2,37 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    // ---------------------------------------------------------------- Surfaces & Backgrounds
-    readonly property color bg: "#16171a"           // Deep carbon/graphite
-    readonly property color surface: "#1c1e22"      // Viewport & canvas
-    readonly property color panel: "#22252a"        // Sidebars & card backgrounds
-    readonly property color panelAlt: "#282c33"     // Hovered cards & elevated panels
-    readonly property color control: "#282c33"      // Form inputs & control rectangles
-    readonly property color selection: "#2f4f72"    // Selected list items
-    readonly property color panelHeader: "#1a1c20"  // Internal section headers
-    readonly property color header: "#181a1d"       // Main window header & menubar
-    readonly property color border: "#30343d"       // Clean subtle borders
-    readonly property color borderSubtle: "#262930" // Secondary dividers
-    readonly property color borderFocus: "#4382c4"  // Focus outline
+    // Colors come from the theme and accent chosen in Configuración (AppSettings.palette, C++). The names stay the
+    // same for every consumer; the default ("Grafito oscuro" + "Azul acero") is the original palette value for value.
+    // Nothing here reaches textures, models or the 3D scene.
+    readonly property var pal: AppSettings.palette
 
-    // ---------------------------------------------------------------- Steel Blue Accent
-    readonly property color accent: "#4382c4"
-    readonly property color accentHover: "#5595db"
-    readonly property color accentPressed: "#376da6"
-    readonly property color accentDim: "#1d3248"
-    readonly property color accentSubtle: "#264382c4"
-    readonly property color accentBorder: "#3b6fa7"
+    // ---------------------------------------------------------------- Surfaces & Backgrounds
+    readonly property color bg: pal.bg                     // Deep carbon/graphite
+    readonly property color surface: pal.surface           // Viewport & canvas
+    readonly property color panel: pal.panel               // Sidebars & card backgrounds
+    readonly property color panelAlt: pal.panelAlt         // Hovered cards & elevated panels
+    readonly property color control: pal.control           // Form inputs & control rectangles
+    readonly property color selection: pal.selection       // Selected list items
+    readonly property color panelHeader: pal.panelHeader   // Internal section headers
+    readonly property color header: pal.header             // Main window header & menubar
+    readonly property color border: pal.border             // Clean subtle borders
+    readonly property color borderSubtle: pal.borderSubtle // Secondary dividers
+    readonly property color borderFocus: pal.borderFocus   // Focus outline
+
+    // ---------------------------------------------------------------- Accent
+    readonly property color accent: pal.accent
+    readonly property color accentHover: pal.accentHover
+    readonly property color accentPressed: pal.accentPressed
+    readonly property color accentDim: pal.accentDim
+    readonly property color accentSubtle: pal.accentSubtle
+    readonly property color accentBorder: pal.accentBorder
+    readonly property color onAccent: pal.onAccent         // text drawn on the accent
 
     // ---------------------------------------------------------------- Typography & Content
-    readonly property color text: "#e1e4ea"
-    readonly property color textDim: "#8c94a2"
-    readonly property color textMuted: "#616875"
+    readonly property color text: pal.text
+    readonly property color textDim: pal.textDim
+    readonly property color textMuted: pal.textMuted
     readonly property string fontFamily: Workbench.fontFamily.length > 0 ? Workbench.fontFamily : "Segoe UI"
     readonly property string mono: "Consolas, monospace"
 
@@ -70,12 +76,13 @@ QtObject {
     readonly property int radiusLarge: 6
 
     // ---------------------------------------------------------------- Status & Physics
-    readonly property color ok: "#48b26e"
-    readonly property color okDim: "#1c3826"
-    readonly property color warn: "#d49638"
-    readonly property color warnDim: "#3d2e18"
-    readonly property color error: "#d9534f"
-    readonly property color errorDim: "#3d1e1e"
+    // Semantic colors: each theme has its own legible shade; the accent never replaces them.
+    readonly property color ok: pal.ok
+    readonly property color okDim: pal.okDim
+    readonly property color warn: pal.warn
+    readonly property color warnDim: pal.warnDim
+    readonly property color error: pal.error
+    readonly property color errorDim: pal.errorDim
 
     // SMP Physics Badge (subtle, non-distracting)
     readonly property color smpBadgeBg: "#281e33"

@@ -247,3 +247,75 @@ TEST_CASE("Portrait cache: a Skyrim capture is kept apart and never taken for a 
   CHECK_FALSE(cache.game_capture("0A2C8E:Skyrim.esm"));
   CHECK(QFile::exists(cache.current("0A2C8E:Skyrim.esm")->image_path));
 }
+
+TEST_CASE("Portrait cache: the stored renders are indexed for instant display, intact ones only", "[portrait]") {
+  sns::test::TempDir dir;
+  const auto profile = lydia_profile();
+  PortraitCache cache(qpath(dir.path() / "portraits"));
+  QString error;
+  REQUIRE(cache.store(entry_for("0A2C8E:Skyrim.esm", profile), kPng, &error));
+  REQUIRE(cache.store(entry_for("002B6C:Dawnguard.esm", profile), kPng, &error));
+  const QByteArray other("\x89PNG\r\n\x1a\nanother-image", 21);
+  REQUIRE(cache.store(entry_for("002B6C:Dawnguard.esm", profile), other, &error));  // leaves a previous version
+  auto index = cache.scan_current();
+  CHECK(index.size() == 2);  // previous versions are not current renders
+  REQUIRE(index.contains(PortraitCache::entry_name("0A2C8E:Skyrim.esm")));
+  CHECK(index.value(PortraitCache::entry_name("0A2C8E:Skyrim.esm")).entry.form_key == "0A2C8E:Skyrim.esm");
+  // Indexed whatever the profile now says (it is only shown as provisional): an outdated digest is still listed.
+  auto outdated = entry_for("013BB9:Skyrim.esm", profile);
+  outdated.snapshot_digest = QStringLiteral("snapshot-OLD");
+  REQUIRE(cache.store(outdated, kPng, &error));
+  CHECK(cache.scan_current().size() == 3);
+  // An image altered on disk is never shown, not even as provisional.
+  const auto tampered = cache.current("0A2C8E:Skyrim.esm");
+  REQUIRE(tampered);
+  QFile image(tampered->image_path);
+  REQUIRE(image.open(QIODevice::WriteOnly | QIODevice::Truncate));
+  image.write("altered");
+  image.close();
+  index = cache.scan_current();
+  CHECK(index.size() == 2);
+  CHECK_FALSE(index.contains(PortraitCache::entry_name("0A2C8E:Skyrim.esm")));
+  // A capture of Skyrim is never indexed as a render.
+  const auto shot = qpath(dir.path() / "shot.png");
+  QImage picture(32, 32, QImage::Format_RGB32);
+  picture.fill(Qt::red);
+  REQUIRE(picture.save(shot, "PNG"));
+  REQUIRE(cache.store_game_capture("000A2C8E:skyrim.esm", shot, "2026-10-19T09:00:00.000-03:00", &error));
+  CHECK(cache.scan_current().size() == 2);
+}
+
+TEST_CASE("Portrait cache: clearing removes the studio renders and keeps the Skyrim captures", "[portrait]") {
+  sns::test::TempDir dir;
+  const auto profile = lydia_profile();
+  const auto folder = qpath(dir.path() / "portraits");
+  PortraitCache cache(folder);
+  QString error;
+  CHECK(cache.clear_renders(&error) == 0);  // no folder yet: nothing to do
+  REQUIRE(cache.store(entry_for("0A2C8E:Skyrim.esm", profile), kPng, &error));
+  const QByteArray other("\x89PNG\r\n\x1a\nanother-image", 21);
+  REQUIRE(cache.store(entry_for("0A2C8E:Skyrim.esm", profile), other, &error));
+  const auto shot = qpath(dir.path() / "shot.png");
+  QImage picture(32, 32, QImage::Format_RGB32);
+  picture.fill(Qt::blue);
+  REQUIRE(picture.save(shot, "PNG"));
+  REQUIRE(cache.store_game_capture("0A2C8E:Skyrim.esm", shot, "2026-10-19T09:00:00.000-03:00", &error));
+  // A file of the user next to the cache folder is not inside it and is never touched.
+  const auto outside = qpath(dir.path() / "keep-me.png");
+  REQUIRE(picture.save(outside, "PNG"));
+  const auto before = cache.usage();
+  CHECK(before.renders == 1);
+  CHECK(before.captures == 1);
+  CHECK(before.files == 6);  // entry + image, previous entry + image, capture entry + image
+  CHECK(before.bytes > 0);
+  CHECK(cache.clear_renders(&error) == 4);
+  const auto after = cache.usage();
+  CHECK(after.renders == 0);
+  CHECK(after.captures == 1);
+  CHECK(after.files == 2);
+  CHECK(cache.game_capture("0A2C8E:Skyrim.esm"));
+  CHECK_FALSE(cache.current("0A2C8E:Skyrim.esm"));
+  CHECK_FALSE(cache.previous("0A2C8E:Skyrim.esm"));
+  CHECK(QFile::exists(outside));
+  CHECK(QFile::exists(shot));
+}

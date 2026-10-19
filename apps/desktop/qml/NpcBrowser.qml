@@ -9,7 +9,11 @@ import SkyrimNpcStudio
 ColumnLayout {
     id: root
     required property StudioController studio
-    property string viewMode: "list"  // "list" or "gallery"
+    property string viewMode: AppSettings.npcBrowserView  // "list" or "gallery" (Configuración › NPC y retratos; remembered)
+    function setViewMode(mode) {
+        root.viewMode = mode
+        AppSettings.npcBrowserView = mode
+    }
     // Double click or Enter on an NPC: the host opens the editor.
     signal editRequested(string formKey)
     spacing: 6
@@ -51,7 +55,7 @@ ColumnLayout {
              : kind === "missing" ? qsTr("no existe en el perfil") : (kind || "?")
     }
 
-    Timer { id: debounce; interval: 200; onTriggered: root.search() }
+    Timer { id: debounce; interval: AppSettings.searchDebounceMs; onTriggered: root.search() }
     Connections {
         target: root.studio
         function onLoaded() { root.search() }
@@ -114,7 +118,7 @@ ColumnLayout {
                 text: qsTr("Lista")
                 checkable: true
                 checked: root.viewMode === "list"
-                onClicked: root.viewMode = "list"
+                onClicked: root.setViewMode("list")
             }
             Button {
                 objectName: "npcGalleryModeButton"
@@ -122,7 +126,7 @@ ColumnLayout {
                 text: qsTr("Galería")
                 checkable: true
                 checked: root.viewMode === "gallery"
-                onClicked: root.viewMode = "gallery"
+                onClicked: root.setViewMode("gallery")
             }
         }
         Text {
@@ -224,7 +228,7 @@ ColumnLayout {
         clip: true
         focus: visible
         model: visible ? root.studio.npcResults : null
-        readonly property int columns: Math.max(1, Math.floor(width / 92))
+        readonly property int columns: Math.max(1, Math.floor(width / AppSettings.galleryCardWidth))
         cellWidth: Math.floor(width / columns)
         cellHeight: cellWidth - 10 + 66
         cacheBuffer: cellHeight  // one row beyond the visible ones
@@ -232,7 +236,28 @@ ColumnLayout {
         keyNavigationEnabled: true
         ScrollBar.vertical: ScrollBar {}
         onAtYEndChanged: root.loadMoreIfAtEnd()
-        onContentHeightChanged: Qt.callLater(root.loadMoreIfAtEnd)
+        onContentHeightChanged: { Qt.callLater(root.loadMoreIfAtEnd); prefetchTimer.restart() }
+        onContentYChanged: prefetchTimer.restart()
+        onCountChanged: prefetchTimer.restart()
+
+        // While nothing visible is waiting, the portrait engine prepares the rows the user will scroll to next
+        // (Configuración › Rendimiento). Only real rows of the current results; a new list replaces the old one.
+        Timer {
+            id: prefetchTimer
+            interval: 350
+            onTriggered: {
+                const rows = AppSettings.portraitPrefetchRows
+                if (!grid.visible || rows <= 0 || grid.count === 0) { root.studio.portraits.prefetch([]); return }
+                const firstHidden = grid.indexAt(1, grid.contentY + grid.height + grid.cellHeight * 1.5)
+                const start = firstHidden >= 0 ? firstHidden : Math.min(grid.count, Math.ceil((grid.contentY + grid.height) / grid.cellHeight + 1) * grid.columns)
+                const keys = []
+                for (let i = start; i < Math.min(grid.count, start + rows * grid.columns); ++i) {
+                    const row = root.studio.npcResults.get(i)
+                    if (row && row.formKey) keys.push(row.formKey)
+                }
+                root.studio.portraits.prefetch(keys)
+            }
+        }
 
         function selectCurrent() {
             if (currentItem) root.studio.selectNpc(currentItem.formKey)
@@ -259,10 +284,6 @@ ColumnLayout {
             width: grid.cellWidth
             height: grid.cellHeight
             readonly property var appearanceState: { root.studio.appearanceScan; return root.studio.appearanceStateOf(card.formKey) }
-            // The visible cards ask for their portrait; a card scrolled away gives its turn back.
-            readonly property var portrait: root.studio.portraits.stateOf(card.formKey, root.studio.portraits.revision)
-            Component.onCompleted: root.studio.portraits.request(card.formKey)
-            Component.onDestruction: root.studio.portraits.release(card.formKey)
 
             Rectangle {
                 anchors.fill: parent
@@ -276,60 +297,14 @@ ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 5
                     spacing: 1
-                    Rectangle {
+                    // A render of the studio from the profile's own resources (or the stored one, marked "verificando",
+                    // while it is checked), or why there is none: never a stand-in face.
+                    PortraitThumb {
                         id: portraitBox
-                        objectName: "npcCardPortrait"
                         Layout.fillWidth: true
                         Layout.preferredHeight: width
-                        color: Theme.surface
-                        radius: 3
-                        // A render of the studio from the profile's own resources, or why there is none: never a
-                        // stand-in face.
-                        Image {
-                            objectName: "npcCardPortraitImage"
-                            anchors.fill: parent
-                            anchors.margins: 1
-                            visible: card.portrait.state === "ready"
-                            source: card.portrait.state === "ready" ? card.portrait.url : ""
-                            asynchronous: true
-                            fillMode: Image.PreserveAspectFit
-                            sourceSize: Qt.size(256, 256)
-                        }
-                        // Drawn without some of its files (e.g. a base head texture the profile lacks): said on the card.
-                        Rectangle {
-                            objectName: "npcCardMissingBadge"
-                            readonly property int missing: (card.portrait.missing || []).length
-                            visible: card.portrait.state === "ready" && missing > 0
-                            anchors.left: parent.left
-                            anchors.bottom: parent.bottom
-                            anchors.margins: 2
-                            width: missingLabel.implicitWidth + 6
-                            height: missingLabel.implicitHeight + 2
-                            radius: 2
-                            color: Theme.warn
-                            Text {
-                                id: missingLabel
-                                anchors.centerIn: parent
-                                text: qsTr("%1 ausente(s)").arg(parent.missing)
-                                color: Theme.bg
-                                font.pixelSize: Theme.micro
-                            }
-                        }
-                        Text {
-                            anchors.centerIn: parent
-                            width: parent.width - 8
-                            visible: card.portrait.state !== "ready"
-                            horizontalAlignment: Text.AlignHCenter
-                            text: card.portrait.state === "queued" ? qsTr("Retrato en cola")
-                                : card.portrait.state === "rendering" ? qsTr("Generando retrato…")
-                                : card.portrait.state === "error" ? qsTr("Sin retrato: %1").arg(card.portrait.reason || "?")
-                                : qsTr("Sin retrato")
-                            color: card.portrait.state === "error" ? Theme.warn : Theme.textMuted
-                            font.pixelSize: Theme.micro
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 5
-                            elide: Text.ElideRight
-                        }
+                        portraits: root.studio.portraits
+                        formKey: card.formKey
                     }
                     Text {
                         Layout.fillWidth: true

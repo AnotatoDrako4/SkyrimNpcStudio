@@ -7,6 +7,7 @@
 #include <QUrl>
 #include <QUuid>
 
+#include "export_destination.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
 #include "sns/ipc/protocol.hpp"
@@ -21,13 +22,6 @@ namespace {
 QString local_path(const QString& path_or_url) {
   const QUrl url(path_or_url);
   return url.isLocalFile() ? url.toLocalFile() : path_or_url;
-}
-
-bool is_inside(const QString& child, const std::filesystem::path& parent) {
-  if (parent.empty()) return false;
-  const auto c = QDir::cleanPath(QFileInfo(child).absoluteFilePath()).toLower() + "/";
-  const auto p = QDir::cleanPath(QString::fromStdWString(parent.native())).toLower() + "/";
-  return c.startsWith(p);
 }
 
 outfit::Piece piece_from(const QVariantMap& armor) {
@@ -335,8 +329,9 @@ void OutfitEditor::exportPatch(const QString& plugin_name, const QString& output
   }
   const auto output = QDir::toNativeSeparators(local_path(output_dir_or_url));
   const auto snap = snapshot_();
-  if (snap && (is_inside(output, snap->config.overwrite_dir) || is_inside(output, snap->game.root))) {
-    emit exportFailed(tr("No se exporta dentro de Overwrite ni de la carpeta del juego. Elige otra carpeta."), {});
+  if (const auto refused = refused_export_directory(output, snap ? forbidden_roots_of(*snap) : std::vector<ForbiddenRoot>{});
+      !refused.isEmpty()) {
+    emit exportFailed(refused, {});  // nothing created yet
     return;
   }
   QDir().mkpath(output);

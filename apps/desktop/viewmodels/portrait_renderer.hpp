@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QQmlComponent>
 #include <QQuickItem>
+#include <QSet>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
@@ -43,6 +44,9 @@ class PortraitRenderer : public QObject {
   Q_PROPERTY(int revision READ revision NOTIFY changed)
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
   Q_PROPERTY(QString cacheDirectory READ cache_directory NOTIFY changed)
+  // Settings Center (npc.portraitInstantCache): a card shows the render stored in the cache at once, marked
+  // provisional, while it is verified against the profile (or redone when it is out of date).
+  Q_PROPERTY(bool instantCache READ instant_cache WRITE set_instant_cache NOTIFY changed)
 
  public:
   // Bump when the framing, lights, materials or image size change: every cached portrait is redone.
@@ -52,6 +56,8 @@ class PortraitRenderer : public QObject {
   static constexpr int kMaxQueue = 48;      // requests beyond it (the oldest) are dropped
   static constexpr int kTimeoutMs = 45000;  // one head that never finishes is an error, not a hang
   static constexpr int kCacheHitsPerPass = 8;
+  static constexpr int kLookupBatch = 24;   // cache verifications per background task
+  static constexpr int kMaxPrefetch = 64;   // NPCs beyond the visible cards prepared while idle
   // The render thread's release at exit, at most: above any real frame (first heads 3.3-4.7 s), only a hang reaches it.
   static constexpr int kReleaseTimeoutMs = kTimeoutMs;
 
@@ -72,6 +78,17 @@ class PortraitRenderer : public QObject {
   // Forgets what is known of this NPC and asks again: the cache entry is checked against the profile anew.
   Q_INVOKABLE void refresh(const QString& formKey);
   Q_INVOKABLE void cancelAll();
+  // NPCs the user is likely to scroll to next (the rows after the visible ones). They are verified and, when
+  // nothing visible is waiting, rendered at low priority; a new call replaces the list. Never on screen by
+  // itself: a card still asks with request().
+  Q_INVOKABLE void prefetch(const QStringList& formKeys);
+  // What the profile's cache folder holds: {directory, renders, captures, files, bytes, indexed, verified,
+  // outdated}. `revision` only makes bindings re-read it.
+  Q_INVOKABLE QVariantMap cacheUsage(int revision = 0) const;
+  // Removes this profile's studio renders (Skyrim captures attached by the user stay). Empty string or why not.
+  Q_INVOKABLE QString clearRenders();
+  [[nodiscard]] bool instant_cache() const { return instant_cache_; }
+  void set_instant_cache(bool on);
   // What the cache holds for this NPC besides the card portrait, each read back with its hash:
   // {current: {url, createdAt, rendererVersion, resources}, previous: {...} (the render it replaced),
   //  comparable (same renderer: only the resources differ), changedResources: [data paths],
@@ -101,6 +118,26 @@ class PortraitRenderer : public QObject {
   // Folder of the portrait caches of every profile (SNS_PORTRAIT_CACHE_DIR or the app's local data).
   [[nodiscard]] static QString portrait_base_directory();
   [[nodiscard]] PortraitResource fingerprint(const QString& path) const;
+  // Thread-safe: what one resource is in this snapshot now (used by the background verifications too).
+  [[nodiscard]] static PortraitResource fingerprint_of(const SnapshotPtr& snapshot, const QString& path);
+  // Verdict of PortraitCache::lookup() for one NPC in the current profile.
+  struct Known {
+    bool valid = false;
+    QString url, created_at, reason;
+    qint64 render_ms = 0;
+    QStringList missing;
+  };
+  enum class Want { Requested, Prefetch, Verify };
+  // Cache verifications run on the thread pool, a batch at a time: requested cards first, then the
+  // prefetch list, then every render stored in the cache (so a card later asking is ready at once).
+  void start_lookups();
+  void on_lookups(int serial, quint64 generation, const QList<std::pair<QString, Want>>& batch, const QList<PortraitLookup>& results,
+                  qint64 elapsed_ms);
+  // A known verdict: the card is ready, or the NPC goes to the render queue (requested ahead of prefetched).
+  void route(const QString& form_key, const Known& known, Want want);
+  // provisionalUrl / provisionalCreatedAt / provisionalRenderer of the stored render, when the setting is on.
+  [[nodiscard]] QVariantMap provisional_of(const QString& key);
+  [[nodiscard]] bool is_prefetch(const QString& key) const;
   [[nodiscard]] QList<PortraitResource> resources_of_scene() const;
   // Off-screen rendering: created on the first portrait, then reused.
   bool ensure_offscreen(QString* error);
@@ -119,7 +156,16 @@ class PortraitRenderer : public QObject {
   QString snapshot_digest_;  // empty while it is being computed
   int profile_serial_ = 0;
   std::unique_ptr<PortraitCache> cache_;
-  QStringList queue_;                   // FormKeys, most recently requested first
+  QStringList queue_;                   // FormKeys, most recently requested first, waiting for their verdict
+  QStringList render_queue_;            // FormKeys to render: requested first, then prefetched
+  QStringList prefetch_;                // FormKeys to verify (and render while idle) for the rows ahead
+  QSet<QString> prefetch_keys_;         // entry_name of every prefetched NPC not requested by a card
+  QHash<QString, PortraitVersion> index_;  // entry_name -> render stored in the cache (provisional display)
+  QHash<QString, Known> known_;            // entry_name -> verdict of lookup() for this profile
+  bool index_ready_ = false;
+  bool lookup_in_flight_ = false;
+  quint64 lookup_generation_ = 0;  // a cancel or a new profile drops the verdicts of a batch in flight
+  bool instant_cache_ = true;
   QString current_;                     // FormKey being rendered
   QHash<QString, QVariantMap> states_;  // PortraitCache::entry_name -> stateOf()
   QTimer watchdog_;
@@ -146,6 +192,8 @@ class PortraitRenderer : public QObject {
   // Measurements (stats()).
   int requested_ = 0, cache_hits_ = 0, rendered_ = 0, errors_ = 0, stale_ = 0, dropped_ = 0, cancelled_ = 0, max_queue_ = 0;
   int second_frames_ = 0;
+  int provisional_ = 0, prefetched_ = 0, lookup_batches_ = 0, verified_ = 0, prefetch_requests_ = 0;
+  qint64 max_lookup_ms_ = 0, index_ms_ = 0;
   qint64 total_render_ms_ = 0, max_render_ms_ = 0, total_capture_ms_ = 0;
   qint64 max_capture_ms_ = 0;  // longest block of the GUI thread by a portrait: polish + sync, or PNG + cache
   qint64 max_frame_ms_ = 0;    // longest frame, start to image (render thread; the GUI thread keeps running)

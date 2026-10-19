@@ -115,6 +115,12 @@ public sealed record NpcSummary
     public required int OverrideCount { get; init; }
     public required bool IsUnique { get; init; }
     public required bool UsesTemplate { get; init; }
+
+    /// <summary>
+    /// Where the game looks for this NPC's FaceGen (protocol 1.5). The studio uses these paths instead of
+    /// rebuilding them from the FormKey, so the naming rule exists once (audit v2 F-20).
+    /// </summary>
+    public FaceGenPaths? FaceGen { get; init; }
 }
 
 public sealed record NpcSearchResponse

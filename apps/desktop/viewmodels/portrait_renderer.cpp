@@ -2,6 +2,8 @@
 
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <algorithm>
 #include <QSemaphore>
 #include <QColor>
 #include <QCryptographicHash>
@@ -103,6 +105,18 @@ QVariantMap PortraitRenderer::stats() const {
           {"lastStaleReason", last_stale_reason_},
           {"lastError", last_error_},
           {"ready", stage_component_ && cache_ && !snapshot_digest_.isEmpty()},
+          {"instantCache", instant_cache_},
+          {"provisional", provisional_},
+          {"prefetched", prefetched_},
+          {"prefetchQueue", static_cast<int>(prefetch_.size())},
+          {"prefetchRequests", prefetch_requests_},
+          {"renderQueue", static_cast<int>(render_queue_.size())},
+          {"lookupBatches", lookup_batches_},
+          {"maxLookupBatchMs", max_lookup_ms_},
+          {"verified", verified_},
+          {"indexed", static_cast<int>(index_.size())},
+          {"indexReady", index_ready_},
+          {"indexMs", index_ms_},
           {"rendererVersion", kRendererVersion}};
 }
 
@@ -124,6 +138,10 @@ void PortraitRenderer::set_profile(SnapshotPtr snapshot, const QString& profile_
   snapshot_ = std::move(snapshot);
   profile_key_ = profile_key;
   snapshot_digest_.clear();
+  index_.clear();
+  known_.clear();
+  index_ready_ = false;
+  lookup_in_flight_ = false;  // a batch still running belongs to the old profile (serial): dropped on return
   const int serial = ++profile_serial_;
   if (!snapshot_) {  // no profile (being changed): nothing is looked up or rendered until the next one
     cache_.reset();
@@ -138,11 +156,42 @@ void PortraitRenderer::set_profile(SnapshotPtr snapshot, const QString& profile_
   ++revision_;
   emit changed();
   if (!snapshot_) return;
+  // While the worker indexes the profile (seconds to minutes) the renders stored in a previous session are read
+  // back (hash checked) so the gallery can show them the moment it opens, marked provisional until verified.
+  QThreadPool::globalInstance()->start([self = QPointer<PortraitRenderer>(this), dir = cache_->directory(), serial] {
+    QElapsedTimer clock;
+    clock.start();
+    auto index = PortraitCache(dir).scan_current();
+    const auto ms = clock.elapsed();
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, serial, index = std::move(index), ms]() mutable {
+          if (!self || serial != self->profile_serial_) return;
+          self->index_ = std::move(index);
+          self->index_ready_ = true;
+          self->index_ms_ = ms;
+          diag::record("portrait", QStringLiteral("cache index: %1 stored renders in %2 ms").arg(self->index_.size()).arg(ms).toStdString());
+          // Cards that asked before the index was read get their provisional image now.
+          for (auto it = self->states_.begin(); it != self->states_.end(); ++it) {
+            const auto state = it->value("state").toString();
+            if ((state == QLatin1String("queued") || state == QLatin1String("rendering")) && !it->contains("provisionalUrl")) {
+              it->insert(self->provisional_of(it.key()));
+            }
+          }
+          ++self->revision_;
+          emit self->changed();
+          self->schedule_pump();
+        },
+        Qt::QueuedConnection);
+  });
   // What every portrait of this profile depends on besides its own files: the profile and its active
   // plugins (a record edit changes a plugin file). Computed off the GUI thread (hundreds of stats).
   QThreadPool::globalInstance()->start([self = QPointer<PortraitRenderer>(this), snapshot = snapshot_, profile_key, serial] {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(profile_key.toUtf8());
+    // Tests only: a salt makes every stored portrait "out of date" as a changed load order would, without
+    // touching the MO2 profile (npc-portraits-instant scenario).
+    if (qEnvironmentVariableIsSet("SNS_PORTRAIT_DIGEST_SALT")) hash.addData(qEnvironmentVariable("SNS_PORTRAIT_DIGEST_SALT").toUtf8());
     for (const auto& p : snapshot->load_order.active) {
       hash.addData(QByteArray::fromStdString("|" + p.name + "|" + p.provider + "|"));
       if (p.path) {
@@ -170,22 +219,114 @@ void PortraitRenderer::request(const QString& formKey) {
   const auto key = PortraitCache::entry_name(formKey);
   const auto state = states_.value(key).value("state").toString();
   if (state == QLatin1String("ready") || state == QLatin1String("error") || state == QLatin1String("rendering")) return;
-  queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [&](const QString& k) { return PortraitCache::entry_name(k) == key; }), queue_.end());
+  const auto same = [&](const QString& k) { return PortraitCache::entry_name(k) == key; };
+  // A card asks for it now: it is no longer only a prefetch, and it goes ahead of the prefetched renders.
+  prefetch_keys_.remove(key);
+  prefetch_.erase(std::remove_if(prefetch_.begin(), prefetch_.end(), same), prefetch_.end());
+  render_queue_.erase(std::remove_if(render_queue_.begin(), render_queue_.end(), same), render_queue_.end());
+  queue_.erase(std::remove_if(queue_.begin(), queue_.end(), same), queue_.end());
   queue_.prepend(formKey);
   while (queue_.size() > kMaxQueue) {
     states_.remove(PortraitCache::entry_name(queue_.takeLast()));
     ++dropped_;
   }
   max_queue_ = std::max(max_queue_, static_cast<int>(queue_.size()));
-  set_state(key, {{"state", "queued"}});
+  QVariantMap s{{"state", "queued"}};
+  s.insert(provisional_of(key));
+  set_state(key, s);
   schedule_pump();
 }
 
 void PortraitRenderer::release(const QString& formKey) {
   const auto key = PortraitCache::entry_name(formKey);
-  const auto before = queue_.size();
-  queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [&](const QString& k) { return PortraitCache::entry_name(k) == key; }), queue_.end());
-  if (queue_.size() != before && states_.value(key).value("state").toString() == QLatin1String("queued")) states_.remove(key);
+  const auto same = [&](const QString& k) { return PortraitCache::entry_name(k) == key; };
+  const auto before = queue_.size() + render_queue_.size();
+  queue_.erase(std::remove_if(queue_.begin(), queue_.end(), same), queue_.end());
+  render_queue_.erase(std::remove_if(render_queue_.begin(), render_queue_.end(), same), render_queue_.end());
+  if (queue_.size() + render_queue_.size() != before && states_.value(key).value("state").toString() == QLatin1String("queued")) states_.remove(key);
+}
+
+void PortraitRenderer::prefetch(const QStringList& formKeys) {
+  ++prefetch_requests_;
+  // Prefetched renders that no card asked for and that are not in the new list are dropped from the queue.
+  QSet<QString> wanted;
+  for (const auto& k : formKeys) wanted.insert(PortraitCache::entry_name(k));
+  render_queue_.erase(std::remove_if(render_queue_.begin(), render_queue_.end(),
+                                     [&](const QString& k) {
+                                       const auto key = PortraitCache::entry_name(k);
+                                       if (!prefetch_keys_.contains(key) || wanted.contains(key)) return false;
+                                       if (states_.value(key).value("state").toString() == QLatin1String("queued")) states_.remove(key);
+                                       return true;
+                                     }),
+                      render_queue_.end());
+  prefetch_.clear();
+  prefetch_keys_.clear();
+  for (const auto& k : formKeys) {
+    if (prefetch_.size() >= kMaxPrefetch) break;
+    const auto key = PortraitCache::entry_name(k);
+    const auto state = states_.value(key).value("state").toString();
+    if (k.isEmpty() || prefetch_keys_.contains(key) || !state.isEmpty()) continue;  // a card already asked, or done
+    prefetch_keys_.insert(key);
+    prefetch_ << k;
+  }
+  schedule_pump();
+}
+
+bool PortraitRenderer::is_prefetch(const QString& key) const { return prefetch_keys_.contains(key); }
+
+void PortraitRenderer::set_instant_cache(bool on) {
+  if (on == instant_cache_) return;
+  instant_cache_ = on;
+  // Drop or add the provisional image of the cards waiting now.
+  for (auto it = states_.begin(); it != states_.end(); ++it) {
+    const auto state = it->value("state").toString();
+    if (state != QLatin1String("queued") && state != QLatin1String("rendering")) continue;
+    it->remove("provisionalUrl");
+    it->remove("provisionalCreatedAt");
+    it->remove("provisionalRenderer");
+    if (on) it->insert(provisional_of(it.key()));
+  }
+  ++revision_;
+  emit changed();
+}
+
+QVariantMap PortraitRenderer::provisional_of(const QString& key) {
+  if (!instant_cache_) return {};
+  const auto it = index_.constFind(key);
+  if (it == index_.cend()) return {};
+  ++provisional_;
+  return {{"provisionalUrl", QUrl::fromLocalFile(it->image_path).toString()},
+          {"provisionalCreatedAt", it->entry.created_at},
+          {"provisionalRenderer", it->entry.renderer_version}};
+}
+
+QVariantMap PortraitRenderer::cacheUsage(int revision) const {
+  Q_UNUSED(revision)
+  if (!cache_) return {{"available", false}};
+  const auto u = cache_->usage();
+  int valid = 0, outdated = 0;
+  for (const auto& k : known_) (k.valid ? valid : outdated)++;
+  return {{"available", true},   {"directory", QDir::toNativeSeparators(cache_->directory())},
+          {"renders", u.renders}, {"captures", u.captures},
+          {"files", u.files},     {"bytes", u.bytes},
+          {"indexed", static_cast<int>(index_.size())},
+          {"verified", valid},    {"outdated", outdated}};
+}
+
+QString PortraitRenderer::clearRenders() {
+  if (!cache_) return tr("No hay un perfil cargado");
+  cancelAll();
+  QString error;
+  const int removed = cache_->clear_renders(&error);
+  index_.clear();
+  known_.clear();
+  states_.clear();
+  ++revision_;
+  emit changed();
+  if (removed < 0) return tr("No se pudieron borrar todos los retratos: %1").arg(error);
+  diag::record("portrait", QStringLiteral("cleared %1 cache files in %2").arg(removed).arg(cache_->directory()).toStdString());
+  schedule_pump();
+  return {};
 }
 
 QVariantMap PortraitRenderer::stateOf(const QString& formKey, int revision) const {
@@ -197,15 +338,25 @@ QVariantMap PortraitRenderer::stateOf(const QString& formKey, int revision) cons
 void PortraitRenderer::refresh(const QString& formKey) {
   if (PortraitCache::entry_name(formKey) == PortraitCache::entry_name(current_)) return;
   states_.remove(PortraitCache::entry_name(formKey));
+  known_.remove(PortraitCache::entry_name(formKey));  // checked against the profile anew
   request(formKey);
 }
 
 void PortraitRenderer::cancelAll() {
-  for (const auto& k : std::as_const(queue_)) {
-    states_.remove(PortraitCache::entry_name(k));
-    ++cancelled_;
+  // Everything still waiting (for its verdict or for its render) is forgotten; verdicts already known stay.
+  for (auto it = states_.begin(); it != states_.end();) {
+    if (it->value("state").toString() == QLatin1String("queued")) {
+      it = states_.erase(it);
+      ++cancelled_;
+    } else {
+      ++it;
+    }
   }
   queue_.clear();
+  render_queue_.clear();
+  prefetch_.clear();
+  prefetch_keys_.clear();
+  ++lookup_generation_;  // a batch being verified now is dropped when it comes back
   ++render_generation_;  // a frame still on the render thread belongs to no render any more
   if (!current_.isEmpty()) {
     watchdog_.stop();
@@ -294,56 +445,179 @@ void PortraitRenderer::clear_scene() {
 void PortraitRenderer::pump() {
   pump_scheduled_ = false;
   if (shutting_down_) return;
+  if (cache_ && snapshot_ && !snapshot_digest_.isEmpty()) {
+    // Requested cards whose verdict is already known are resolved now (ready, or to the render queue).
+    QList<std::pair<QString, Known>> resolved;
+    for (auto it = queue_.begin(); it != queue_.end();) {
+      const auto k = known_.constFind(PortraitCache::entry_name(*it));
+      if (k == known_.cend()) { ++it; continue; }
+      resolved.push_back({*it, *k});
+      it = queue_.erase(it);
+    }
+    for (const auto& [form_key, known] : resolved) route(form_key, known, Want::Requested);
+    start_lookups();
+  }
   if (frame_in_flight_) {
     // The next head is built once the frame in flight is back (on_frame pumps). A frame that never comes back
     // (GPU hang, device lost) fails the waiting heads with that cause instead of leaving them queued.
     if (frame_timer_.elapsed() > kTimeoutMs) {
       if (offscreen_error_.isEmpty()) offscreen_error_ = tr("el hilo de render no terminó un fotograma en %1 s").arg(kTimeoutMs / 1000);
-      for (const auto& k : std::as_const(queue_)) {
-        set_state(PortraitCache::entry_name(k), {{"state", "error"}, {"reason", tr("Render fuera de pantalla no disponible: %1").arg(offscreen_error_)}});
-        ++errors_;
+      for (const auto& list : {queue_, render_queue_}) {
+        for (const auto& k : list) {
+          set_state(PortraitCache::entry_name(k), {{"state", "error"}, {"reason", tr("Render fuera de pantalla no disponible: %1").arg(offscreen_error_)}});
+          ++errors_;
+        }
       }
       last_error_ = offscreen_error_;
       queue_.clear();
+      render_queue_.clear();
       return;
     }
     QTimer::singleShot(250, this, [this] { schedule_pump(); });
     return;
   }
   if (!current_.isEmpty() || !stage_component_ || !cache_ || !snapshot_ || snapshot_digest_.isEmpty()) return;
-  int hits = 0;
-  while (!queue_.isEmpty()) {
-    if (hits == kCacheHitsPerPass) {  // a few lookups per pass of the event loop
-      schedule_pump();
-      return;
-    }
-    const auto form_key = queue_.takeFirst();
-    const auto found = cache_->lookup(form_key, kRendererVersion, snapshot_digest_, [this](const QString& path) { return fingerprint(path); });
-    if (found.state == PortraitCacheState::Valid) {
-      ++cache_hits_;
-      ++hits;
-      set_state(PortraitCache::entry_name(form_key), {{"state", "ready"},
-                                                      {"url", QUrl::fromLocalFile(found.image_path).toString()},
-                                                      {"source", "cache"},
-                                                      {"createdAt", found.entry->created_at},
-                                                      {"renderMs", found.entry->render_ms},
-                                                      {"missing", missing_of(found.entry->resources)}});
-      emit finished(form_key, QStringLiteral("ready"));
-      continue;
-    }
-    if (found.state == PortraitCacheState::Stale) {
-      ++stale_;
-      last_stale_reason_ = form_key + ": " + found.reason;
-    }
+  if (!render_queue_.isEmpty()) {
+    const auto form_key = render_queue_.takeFirst();
+    const auto key = PortraitCache::entry_name(form_key);
+    const bool prefetched = prefetch_keys_.contains(key);
     begin_render(form_key);
+    if (prefetched) {
+      prefetch_keys_.remove(key);
+      ++prefetched_;
+    }
+  }
+}
+
+void PortraitRenderer::start_lookups() {
+  if (lookup_in_flight_ || !cache_ || !snapshot_ || snapshot_digest_.isEmpty()) return;
+  // Requested cards first, then the rows ahead (prefetch), then every stored render not verified yet.
+  QList<std::pair<QString, Want>> batch;
+  QSet<QString> taken;
+  const auto add = [&](const QString& form_key, Want want) {
+    const auto key = PortraitCache::entry_name(form_key);
+    if (batch.size() >= kLookupBatch || taken.contains(key) || known_.contains(key)) return;
+    taken.insert(key);
+    batch.push_back({form_key, want});
+  };
+  for (const auto& k : std::as_const(queue_)) add(k, Want::Requested);
+  for (const auto& k : std::as_const(prefetch_)) add(k, Want::Prefetch);
+  if (batch.size() < kLookupBatch && index_ready_) {
+    for (auto it = index_.cbegin(); it != index_.cend() && batch.size() < kLookupBatch; ++it) add(it->entry.form_key, Want::Verify);
+  }
+  if (batch.isEmpty()) return;
+  // Requested ones leave the waiting list now (their verdict routes them); prefetched ones too.
+  for (const auto& [form_key, want] : batch) {
+    const auto key = PortraitCache::entry_name(form_key);
+    const auto same = [&](const QString& k) { return PortraitCache::entry_name(k) == key; };
+    if (want == Want::Requested) queue_.erase(std::remove_if(queue_.begin(), queue_.end(), same), queue_.end());
+    if (want == Want::Prefetch) prefetch_.erase(std::remove_if(prefetch_.begin(), prefetch_.end(), same), prefetch_.end());
+  }
+  lookup_in_flight_ = true;
+  ++lookup_batches_;
+  QThreadPool::globalInstance()->start([self = QPointer<PortraitRenderer>(this), batch, dir = cache_->directory(), digest = snapshot_digest_,
+                                        snapshot = snapshot_, serial = profile_serial_, generation = lookup_generation_] {
+    QElapsedTimer clock;
+    clock.start();
+    const PortraitCache cache(dir);
+    QList<PortraitLookup> results;
+    results.reserve(batch.size());
+    for (const auto& item : batch) {
+      results.push_back(cache.lookup(item.first, kRendererVersion, digest,
+                                     [&snapshot](const QString& path) { return fingerprint_of(snapshot, path); }));
+    }
+    const auto ms = clock.elapsed();
+    QMetaObject::invokeMethod(
+        self.data(), [self, serial, generation, batch, results, ms] { if (self) self->on_lookups(serial, generation, batch, results, ms); },
+        Qt::QueuedConnection);
+  });
+}
+
+void PortraitRenderer::on_lookups(int serial, quint64 generation, const QList<std::pair<QString, Want>>& batch,
+                                  const QList<PortraitLookup>& results, qint64 elapsed_ms) {
+  if (serial != profile_serial_) return;  // another profile: set_profile already reset everything
+  lookup_in_flight_ = false;
+  max_lookup_ms_ = std::max(max_lookup_ms_, elapsed_ms);
+  if (generation != lookup_generation_) {  // cancelled meanwhile: these verdicts are not used
+    schedule_pump();
     return;
   }
+  for (qsizetype i = 0; i < batch.size() && i < results.size(); ++i) {
+    const auto& [form_key, want] = batch[i];
+    const auto& found = results[i];
+    const auto key = PortraitCache::entry_name(form_key);
+    Known k;
+    if (found.state == PortraitCacheState::Valid) {
+      k.valid = true;
+      k.url = QUrl::fromLocalFile(found.image_path).toString();
+      k.created_at = found.entry->created_at;
+      k.render_ms = found.entry->render_ms;
+      k.missing = missing_of(found.entry->resources);
+    } else {
+      k.reason = found.state == PortraitCacheState::Missing ? QStringLiteral("not in the cache") : found.reason;
+      if (found.state == PortraitCacheState::Stale) {
+        ++stale_;
+        last_stale_reason_ = form_key + ": " + found.reason;
+      }
+    }
+    known_.insert(key, k);
+    ++verified_;
+    const auto state = states_.value(key).value("state").toString();
+    if (want == Want::Requested && state == QLatin1String("queued")) route(form_key, k, Want::Requested);
+    else if (want == Want::Prefetch && prefetch_keys_.contains(key) && state.isEmpty()) route(form_key, k, Want::Prefetch);
+    else if (want != Want::Verify && state == QLatin1String("queued")) route(form_key, k, Want::Requested);  // a card asked meanwhile
+  }
+  schedule_pump();
+}
+
+void PortraitRenderer::route(const QString& form_key, const Known& known, Want want) {
+  const auto key = PortraitCache::entry_name(form_key);
+  if (known.valid) {
+    ++cache_hits_;
+    if (want == Want::Prefetch) prefetch_keys_.remove(key);
+    QVariantMap s{{"state", "ready"}, {"url", known.url}, {"source", "cache"}, {"createdAt", known.created_at}, {"renderMs", known.render_ms}};
+    if (!known.missing.isEmpty()) s["missing"] = known.missing;
+    set_state(key, s);
+    emit finished(form_key, QStringLiteral("ready"));
+    return;
+  }
+  const auto same = [&](const QString& k) { return PortraitCache::entry_name(k) == key; };
+  render_queue_.erase(std::remove_if(render_queue_.begin(), render_queue_.end(), same), render_queue_.end());
+  // A requested card goes first (most recent first, like the requests); a prefetched NPC waits at the end.
+  if (want == Want::Prefetch) render_queue_.append(form_key);
+  else render_queue_.prepend(form_key);
+  while (render_queue_.size() > kMaxQueue) {  // the oldest prefetched render goes first, then the oldest request
+    auto victim = std::find_if(render_queue_.rbegin(), render_queue_.rend(), [&](const QString& k) { return is_prefetch(PortraitCache::entry_name(k)); });
+    const auto gone = victim != render_queue_.rend() ? *victim : render_queue_.last();
+    render_queue_.removeOne(gone);
+    const auto gone_key = PortraitCache::entry_name(gone);
+    prefetch_keys_.remove(gone_key);
+    if (states_.value(gone_key).value("state").toString() == QLatin1String("queued")) states_.remove(gone_key);
+    ++dropped_;
+  }
+  QVariantMap s{{"state", "queued"}};
+  if (want == Want::Prefetch) {
+    states_.insert(key, s);  // no card shows it: nothing to repaint
+    return;
+  }
+  s.insert(provisional_of(key));
+  set_state(key, s);
 }
 
 void PortraitRenderer::begin_render(const QString& form_key) {
   ++render_generation_;
   current_ = form_key;
-  set_state(PortraitCache::entry_name(form_key), {{"state", "rendering"}});
+  {
+    const auto key = PortraitCache::entry_name(form_key);
+    QVariantMap s{{"state", "rendering"}};
+    // The stored render stays on the card (marked provisional) until the new one replaces it.
+    const auto before = states_.value(key);
+    for (const auto* field : {"provisionalUrl", "provisionalCreatedAt", "provisionalRenderer"}) {
+      if (before.contains(QLatin1String(field))) s.insert(QLatin1String(field), before.value(QLatin1String(field)));
+    }
+    if (!s.contains("provisionalUrl") && !prefetch_keys_.contains(key)) s.insert(provisional_of(key));
+    set_state(key, s);
+  }
   diag::record("portrait", ("render " + form_key).toStdString());
   render_timer_.start();
   watchdog_.start();
@@ -554,6 +828,10 @@ void PortraitRenderer::complete_capture(const QImage& image, const QString& fram
     finish(QStringLiteral("error"), tr("La caché no confirma el retrato: %1").arg(back.reason));
     return;
   }
+  // The new render is what the gallery shows at once from now on (and in the next session).
+  if (auto stored = cache_->current(current_)) index_.insert(PortraitCache::entry_name(current_), std::move(*stored));
+  known_.insert(PortraitCache::entry_name(current_),
+                Known{true, QUrl::fromLocalFile(back.image_path).toString(), back.entry->created_at, {}, entry.render_ms, missing_of(back.entry->resources)});
   ++rendered_;
   total_render_ms_ += entry.render_ms;
   max_render_ms_ = std::max(max_render_ms_, entry.render_ms);
@@ -736,18 +1014,20 @@ void PortraitRenderer::release_offscreen() {
   }
 }
 
-PortraitResource PortraitRenderer::fingerprint(const QString& path) const {
+PortraitResource PortraitRenderer::fingerprint(const QString& path) const { return fingerprint_of(snapshot_, path); }
+
+PortraitResource PortraitRenderer::fingerprint_of(const SnapshotPtr& snapshot, const QString& path) {
   PortraitResource r{path, QStringLiteral("missing"), -1, -1};
-  if (!snapshot_ || path.isEmpty()) return r;
+  if (!snapshot || path.isEmpty()) return r;
   const auto data = ss(path);
-  if (const auto file = snapshot_->vfs.resolve(data)) {
+  if (const auto file = snapshot->vfs.resolve(data)) {
     const QFileInfo info(QString::fromStdWString(file->absolute.wstring()));
     r.location = QStringLiteral("loose:") + info.absoluteFilePath();
     r.size = info.size();
     r.modified_ms = info.lastModified().toMSecsSinceEpoch();
     return r;
   }
-  if (const auto ctx = ResourceContext::for_snapshot(snapshot_); ctx && ctx->resolver) {
+  if (const auto ctx = ResourceContext::for_snapshot(snapshot); ctx && ctx->resolver) {
     if (const auto loc = ctx->resolver->locate(data)) r.location = QStringLiteral("archive:%1@%2").arg(qs(loc->provider), qs(loc->archive_provider));
   }
   return r;

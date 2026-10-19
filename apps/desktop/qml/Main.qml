@@ -17,6 +17,27 @@ ApplicationWindow {
     color: Theme.bg
     font.family: Theme.fontFamily
     font.pixelSize: Theme.normal
+    // Controls (Fusion) follow the theme chosen in Configuración: menus, fields, lists and dialogs too.
+    // "Grafito oscuro" gives back the original palette of main.cpp exactly.
+    palette.window: Theme.pal.qtWindow
+    palette.windowText: Theme.pal.qtText
+    palette.base: Theme.pal.qtBase
+    palette.alternateBase: Theme.pal.qtAlternateBase
+    palette.text: Theme.pal.qtText
+    palette.button: Theme.pal.qtButton
+    palette.buttonText: Theme.pal.qtText
+    palette.brightText: "white"
+    palette.highlight: Theme.pal.qtHighlight
+    palette.highlightedText: Theme.onAccent
+    palette.link: Theme.pal.qtHighlight
+    palette.toolTipBase: Theme.pal.qtWindow
+    palette.toolTipText: Theme.pal.qtText
+    palette.placeholderText: Theme.pal.qtPlaceholder
+    palette.mid: Theme.pal.qtMid
+    palette.dark: Theme.pal.qtDark
+    palette.disabled.text: Theme.pal.qtDisabled
+    palette.disabled.buttonText: Theme.pal.qtDisabled
+    palette.disabled.windowText: Theme.pal.qtDisabled
     title: "Skyrim NPC Studio — Creative Workspace"
            + (studio.selectedProfile.length > 0 ? " [" + studio.instanceName + " / " + studio.selectedProfile + "]" : "")
            + (studio.outfit.dirty ? "  •" : "")
@@ -111,6 +132,100 @@ ApplicationWindow {
         onAccepted: window.studio.forge.saveProject(selectedFolder.toString())
     }
 
+    // The Settings Center reaches the window preferences through WorkbenchState (one source of truth).
+    Binding { target: AppSettings; property: "workbench"; value: Workbench }
+    Binding { target: window.studio.portraits; property: "instantCache"; value: AppSettings.portraitInstantCache }
+
+    SettingsCenter {
+        id: settingsCenter
+        studio: window.studio
+    }
+
+    Dialog {
+        id: saveLayoutDialog
+        title: qsTr("Guardar distribución del espacio de trabajo")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Save | Dialog.Cancel
+        onAccepted: {
+            if (saveLayoutNameField.text.trim().length > 0) {
+                Workbench.saveLayout(saveLayoutNameField.text.trim())
+                saveLayoutNameField.text = ""
+            }
+        }
+        ColumnLayout {
+            spacing: Theme.spacingMd
+            Label { text: qsTr("Nombre para la distribución personalizada:") }
+            TextField {
+                id: saveLayoutNameField
+                Layout.preferredWidth: Theme.px(300)
+                placeholderText: qsTr("Ej: Mi Edición Dual, Visor Ancho...")
+            }
+        }
+    }
+
+    // Leaving with unsaved work asks first (Configuración › General). Automation quits without closing the window.
+    property bool closeConfirmed: false
+    readonly property bool hasUnsavedWork: window.studio.outfit.dirty || window.studio.appearance.dirty || window.studio.forge.dirty
+    onClosing: (close) => {
+        if (closeConfirmed || !AppSettings.confirmUnsavedClose || !hasUnsavedWork) return
+        close.accepted = false
+        unsavedDialog.open()
+    }
+    Dialog {
+        id: unsavedDialog
+        objectName: "unsavedCloseDialog"
+        title: qsTr("Hay cambios sin guardar")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(Theme.px(480), window.width - 40)
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: [window.studio.outfit.dirty ? qsTr("• Atuendo (.snps) modificado") : "",
+                   window.studio.appearance.dirty ? qsTr("• Rostro o altura del NPC editados") : "",
+                   window.studio.forge.dirty ? qsTr("• Proyecto Character Forge (.sncf) modificado") : ""]
+                  .filter(s => s.length > 0).join("\n") + "\n\n" + qsTr("Si sales ahora se perderán. Nada se ha escrito en Skyrim ni en MO2.")
+        }
+        footer: DialogButtonBox {
+            Button { text: qsTr("Volver"); DialogButtonBox.buttonRole: DialogButtonBox.RejectRole; highlighted: true }
+            Button { text: qsTr("Salir sin guardar"); DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole }
+            onRejected: unsavedDialog.close()
+            onClicked: (button) => {
+                if (button.DialogButtonBox.buttonRole === DialogButtonBox.DestructiveRole) {
+                    window.closeConfirmed = true
+                    unsavedDialog.close()
+                    window.close()
+                }
+            }
+        }
+    }
+
+    // Theme or scale being previewed from Configuración: kept only on "Mantener", reverted automatically otherwise,
+    // so an unreadable choice never sticks. Shown above every dialog.
+    Popup {
+        objectName: "themePreviewBanner"
+        visible: AppSettings.previewActive
+        // Bottom center: never over the Settings Center's search or the menus.
+        x: ((parent ? parent.width : window.width) - width) / 2
+        y: (parent ? parent.height : window.height) - height - Theme.toolbarHeight - Theme.spacingXl * 2
+        z: 1000
+        modal: false
+        closePolicy: Popup.NoAutoClose
+        padding: Theme.spacingMd
+        background: Rectangle { color: Theme.panelHeader; border.color: Theme.accent; border.width: 2; radius: Theme.radiusLarge }
+        contentItem: RowLayout {
+            spacing: Theme.spacingLg
+            Label {
+                text: qsTr("¿Mantener esta apariencia? Se revierte en %1 s").arg(AppSettings.previewSecondsLeft)
+                color: Theme.text
+                font.pixelSize: Theme.normal
+            }
+            Button { objectName: "keepPreviewButton"; text: qsTr("Mantener"); highlighted: true; onClicked: AppSettings.keepPreview() }
+            Button { objectName: "revertPreviewButton"; text: qsTr("Revertir"); onClicked: AppSettings.revertPreview() }
+        }
+    }
+
     Component.onCompleted: {
         Theme.advancedMode = windowSettings.advancedMode
         window.studio.portraits.attachStage(portraitStageComponent)
@@ -152,6 +267,13 @@ ApplicationWindow {
             title: qsTr("&Archivo")
             Action { text: qsTr("Instancia y perfil de MO2…"); onTriggered: welcome.open() }
             Action { text: qsTr("Abrir ModOrganizer.ini…"); onTriggered: instanceDialog.open() }
+            MenuSeparator {}
+            Action {
+                objectName: "settingsAction"
+                text: qsTr("Configuración…")
+                shortcut: "Ctrl+,"
+                onTriggered: settingsCenter.openAt("", "")
+            }
             MenuSeparator {}
             Action { text: qsTr("Salir"); shortcut: StandardKey.Quit; onTriggered: Qt.quit() }
         }
@@ -200,9 +322,36 @@ ApplicationWindow {
                 checked: window.layout.maximized
                 onTriggered: window.layout.maximized = checked
             }
-            Action {
-                text: qsTr("Restablecer distribución")
-                onTriggered: window.layout.reset()
+            Menu {
+                title: qsTr("Distribuciones de paneles")
+                Repeater {
+                    model: Workbench.builtinLayouts
+                    MenuItem {
+                        text: modelData.name
+                        onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
+                    }
+                }
+                MenuSeparator { visible: Workbench.savedLayouts.length > 0 }
+                Menu {
+                    title: qsTr("Mis distribuciones guardadas")
+                    visible: Workbench.savedLayouts.length > 0
+                    Repeater {
+                        model: Workbench.savedLayouts
+                        MenuItem {
+                            text: modelData
+                            onTriggered: Workbench.applyLayout(modelData)
+                        }
+                    }
+                }
+                MenuSeparator {}
+                Action {
+                    text: qsTr("Guardar distribución actual…")
+                    onTriggered: saveLayoutDialog.open()
+                }
+                Action {
+                    text: qsTr("Restablecer a valores de fábrica")
+                    onTriggered: window.layout.reset()
+                }
             }
             MenuSeparator {}
             Menu {
@@ -228,6 +377,7 @@ ApplicationWindow {
                          checked: Workbench.density === Workbench.Comfortable; onTriggered: Workbench.density = Workbench.Comfortable }
             }
             Action { text: qsTr("Preferencias de apariencia…"); onTriggered: scaleDialog.open() }
+            Action { text: qsTr("Tema y colores…"); onTriggered: settingsCenter.openAt("appearance", "appearance.theme") }
             MenuSeparator {}
             Action {
                 text: qsTr("Modo avanzado")
@@ -274,8 +424,13 @@ ApplicationWindow {
 
     // Ctrl+= is Ctrl++ on keyboards where "+" needs Shift (StandardKey.ZoomIn covers the rest).
     Shortcut { sequence: "Ctrl+="; onActivated: Workbench.zoomIn() }
+    Shortcut { sequence: "Ctrl+-"; onActivated: Workbench.zoomOut() }
+    Shortcut { sequence: "Ctrl+0"; onActivated: Workbench.zoomReset() }
 
-    ScalePreferencesDialog { id: scaleDialog }
+    ScalePreferencesDialog {
+        id: scaleDialog
+        onMoreRequested: { scaleDialog.close(); settingsCenter.openAt("appearance", "") }
+    }
 
     // ---------------------------------------------------------------- TOOLBAR SUPERIOR
     header: ToolBar {
@@ -290,23 +445,43 @@ ApplicationWindow {
             id: headerRow
             // Short labels when the window is narrow for the chosen scale, so every action stays on screen.
             readonly property bool compact: window.width / Theme.fontFactor < 1200
+            readonly property bool ultraCompact: window.width / Theme.fontFactor < 750
             anchors.fill: parent
-            anchors.leftMargin: Theme.spacingLg
-            anchors.rightMargin: Theme.spacingLg
-            spacing: Theme.spacingLg
+            anchors.leftMargin: ultraCompact ? Theme.spacingSm : Theme.spacingLg
+            anchors.rightMargin: ultraCompact ? Theme.spacingSm : Theme.spacingLg
+            spacing: ultraCompact ? Theme.spacingSm : Theme.spacingLg
 
             // Modos de trabajo principales
             TabBar {
                 id: workspaceTabs
                 objectName: "workspaceTabs"
                 implicitHeight: Theme.controlHeight + Theme.spacingXs
-                // The last workspace comes back on start (automation may still pick another one).
-                Component.onCompleted: currentIndex = Workbench.workspace
+                // The last workspace comes back on start, or the fixed one chosen in Configuración › General
+                // (automation may still pick another one).
+                Component.onCompleted: {
+                    const fixed = ["creator", "outfit", "forge"].indexOf(AppSettings.startWorkspace)
+                    currentIndex = fixed >= 0 ? fixed : Workbench.workspace
+                }
                 onCurrentIndexChanged: Workbench.workspace = currentIndex
                 // Each tab as wide as its label (TabBar would otherwise split the width evenly and elide).
-                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("🎭 PERSONAJE") : qsTr("🎭 PERSONALIZAR PERSONAJE") }
-                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("👗 ATUENDOS") : qsTr("👗 ESTUDIO DE ATUENDOS") }
-                TabButton { width: implicitWidth; text: headerRow.compact ? qsTr("FORGE") : qsTr("CHARACTER FORGE") }
+                TabButton {
+                    width: implicitWidth
+                    text: headerRow.ultraCompact ? "🎭" : (headerRow.compact ? qsTr("🎭 PERSONAJE") : qsTr("🎭 PERSONALIZAR PERSONAJE"))
+                    ToolTip.visible: hovered && headerRow.ultraCompact
+                    ToolTip.text: qsTr("Personalizar personaje")
+                }
+                TabButton {
+                    width: implicitWidth
+                    text: headerRow.ultraCompact ? "👗" : (headerRow.compact ? qsTr("👗 ATUENDOS") : qsTr("👗 ESTUDIO DE ATUENDOS"))
+                    ToolTip.visible: hovered && headerRow.ultraCompact
+                    ToolTip.text: qsTr("Estudio de atuendos")
+                }
+                TabButton {
+                    width: implicitWidth
+                    text: headerRow.ultraCompact ? "⚒" : (headerRow.compact ? "FORGE" : "CHARACTER FORGE")
+                    ToolTip.visible: hovered && headerRow.ultraCompact
+                    ToolTip.text: qsTr("Character Forge")
+                }
             }
 
             Rectangle { width: 1; height: Theme.px(22); color: Theme.borderSubtle }
@@ -353,18 +528,70 @@ ApplicationWindow {
                 ToolTip.text: qsTr("Oculta los paneles laterales y la consola (F11). Vuelve a la distribución anterior al salir.")
             }
 
+            ToolButton {
+                id: layoutPresetButton
+                objectName: "layoutPresetButton"
+                text: headerRow.compact ? "🗔" : "🗔 " + qsTr("Distribución")
+                implicitHeight: Theme.controlHeight
+                onClicked: layoutPresetMenu.open()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Alternar distribuciones de paneles predefinidas y guardadas")
+                Menu {
+                    id: layoutPresetMenu
+                    y: layoutPresetButton.height
+                    Repeater {
+                        model: Workbench.builtinLayouts
+                        MenuItem {
+                            text: modelData.name
+                            onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
+                        }
+                    }
+                    MenuSeparator { visible: Workbench.savedLayouts.length > 0 }
+                    Menu {
+                        title: qsTr("Guardadas")
+                        visible: Workbench.savedLayouts.length > 0
+                        Repeater {
+                            model: Workbench.savedLayouts
+                            MenuItem {
+                                text: modelData
+                                onTriggered: Workbench.applyLayout(modelData)
+                            }
+                        }
+                    }
+                    MenuSeparator {}
+                    MenuItem {
+                        text: qsTr("Guardar distribución actual…")
+                        onTriggered: saveLayoutDialog.open()
+                    }
+                    MenuItem {
+                        text: qsTr("Restablecer de fábrica")
+                        onTriggered: window.layout.reset()
+                    }
+                }
+            }
+
             Item { Layout.fillWidth: true }
+
+            ToolButton {
+                objectName: "settingsButton"
+                text: headerRow.compact ? "⚙" : "⚙ " + qsTr("Configuración")
+                implicitHeight: Theme.controlHeight
+                Accessible.name: qsTr("Configuración")
+                onClicked: settingsCenter.openAt("", "")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Tema, escala, distribuciones, visor 3D, retratos y más (Ctrl+,)")
+            }
 
             // Botón de exportación principal
             Button {
                 objectName: "headerExportButton"
-                text: headerRow.compact ? qsTr("🚀 Exportar") : qsTr("🚀 Exportar Mod…")
+                text: headerRow.ultraCompact ? qsTr("🚀") : (headerRow.compact ? qsTr("🚀 Exportar") : qsTr("🚀 Exportar Mod…"))
                 highlighted: true
                 enabled: window.ready && workspaceTabs.currentIndex !== 2
                 implicitHeight: Theme.controlHeight + Theme.spacingXs
                 font.bold: true
-                ToolTip.visible: hovered && workspaceTabs.currentIndex === 2
-                ToolTip.text: qsTr("La exportación de NPC nuevos llegará en Fase 2")
+                ToolTip.visible: (hovered && workspaceTabs.currentIndex === 2) || (hovered && headerRow.ultraCompact)
+                ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("La exportación de NPC nuevos llegará en Fase 2") : qsTr("Exportar mod completo / rostro")
                 onClicked: exportWizardDialog.open()
             }
         }

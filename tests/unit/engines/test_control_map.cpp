@@ -189,6 +189,29 @@ TEST_CASE("Control map: a translated copy of the plugin keeps the original mod's
   CHECK(finding(analyze_appearance_control(in), "FaceGenRecordMismatch"));
 }
 
+// Audit F-11 (profile scenario): a damaged FaceGen no longer throws out of the scan thread; it reads as
+// "unreadable". The report must say so, instead of only "the FaceGen does not match the record".
+TEST_CASE("Control map: an unreadable FaceGen is reported as damaged", "[appearance][controlmap][facegen-unreadable]") {
+  ControlInputs in;
+  in.chain = chain({link("Skyrim.esm", "<Game Data>", {}), link("unofficial skyrim special edition patch.esp", "USSEP Spanish", {"HeadParts"})});
+  in.facegen = bsa("<Game Data>");
+  in.facetint = bsa("<Game Data>");
+  in.facegen_readable = false;
+  const auto r = analyze_appearance_control(in);
+  const auto* damaged = finding(r, "FaceGenUnreadable");
+  REQUIRE(damaged);
+  CHECK(damaged->severity == "warning");
+  CHECK(damaged->message.find("<Game Data>") != std::string::npos);
+  CHECK(has_warning(r));
+
+  SECTION("a readable or unopened FaceGen has no such finding") {
+    in.facegen_readable = true;
+    CHECK_FALSE(finding(analyze_appearance_control(in), "FaceGenUnreadable"));
+    in.facegen_readable.reset();
+    CHECK_FALSE(finding(analyze_appearance_control(in), "FaceGenUnreadable"));
+  }
+}
+
 TEST_CASE("Control map: a head-parts-only change whose pieces are all in the FaceGen is a note", "[appearance][controlmap]") {
   // Shape of Aeri on the test profile: USSEP (translated) changes HeadParts only; FaceGen from the game BSA.
   ControlInputs in;

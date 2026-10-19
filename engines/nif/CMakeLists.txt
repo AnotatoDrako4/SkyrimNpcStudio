@@ -1,4 +1,4 @@
-add_library(sns_nif STATIC src/mesh.cpp)
+add_library(sns_nif STATIC src/mesh.cpp src/safe_load.cpp)
 add_library(sns::nif ALIAS sns_nif)
 target_include_directories(sns_nif PUBLIC include)
 # nifly is private: no nifly type appears in the public header.

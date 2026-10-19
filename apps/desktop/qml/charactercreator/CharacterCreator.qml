@@ -59,6 +59,9 @@ Item {
 
                     ArmorCatalog {
                         studio: root.studio
+                        onPreviewRequested: (formKey) => {
+                            root.studio.armorPreview.selectArmor(formKey)
+                        }
                     }
 
                     // Panel de donantes / replacers

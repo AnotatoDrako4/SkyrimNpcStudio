@@ -62,6 +62,7 @@ internal static class CatalogIndexer
 
             progress(new IndexProgress { Stage = "winners", Current = 0, Total = 1 });
             store.ActivateLoadOrder(rows);
+            PurgeCache(store, issues);
 
             var counts = CatalogQueries.Counts(store);
             var response = new IndexResponse
@@ -83,6 +84,26 @@ internal static class CatalogIndexer
             store?.Dispose();
             session.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Housekeeping after the load order is active (audit v2 F-17): a purge that fails (e.g. another studio
+    /// process holds the cache) only leaves old rows for the next index, so it never fails this one.
+    /// </summary>
+    private static void PurgeCache(CatalogStore store, List<Issue> issues)
+    {
+        try
+        {
+            var purged = store.PurgeUnusedPlugins();
+            if (purged > 0)
+            {
+                Rpc.Log.Info($"index cache: purged {purged} plugin version(s) unused for {CatalogStore.UnusedPluginRetention.TotalDays:0} days");
+            }
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            issues.Add(Issue.Warning("CachePurgeFailed", $"Old plugin versions could not be removed from the index cache: {ex.Message}"));
         }
     }
 

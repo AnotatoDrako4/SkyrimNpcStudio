@@ -7,6 +7,7 @@ using System.Text.Json;
 using SkyrimNpcStudio.Worker.Contracts;
 using SkyrimNpcStudio.Worker.NpcCatalog;
 using SkyrimNpcStudio.Worker.PluginReader;
+using SkyrimNpcStudio.Worker.Validation;
 
 namespace SkyrimNpcStudio.Worker.PatchBuilder;
 
@@ -86,7 +87,8 @@ internal static class ModPackager
         Func<string, string, BuiltPatch> buildAction,
         CancellationToken ct)
     {
-        var outputDir = ValidateOutputDirectory(outputDirectory, session);
+        // The resolved folder (links and junctions followed): the export writes there, never through a link.
+        var outputDir = ExportDestinationPolicy.Validate(session, outputDirectory);
         OutfitPatchBuilder.ValidatePluginName(pluginName, session);
 
         var modName = Path.GetFileNameWithoutExtension(pluginName);
@@ -179,33 +181,6 @@ internal static class ModPackager
             TryDelete(staging);
             throw;
         }
-    }
-
-    private static string ValidateOutputDirectory(string path, LoadOrderSession session)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
-        {
-            throw new WorkerException(ErrorCodes.InvalidArgument, "outputDirectory must be an absolute path.");
-        }
-
-        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        if (!Directory.Exists(full))
-        {
-            throw new WorkerException(ErrorCodes.InvalidArgument, $"Output directory '{full}' does not exist.");
-        }
-
-        // Refuse to write next to any active plugin: that is a game Data folder or an existing mod.
-        foreach (var plugin in session.Plugins)
-        {
-            var pluginDir = Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(Path.GetFullPath(plugin.Path))!);
-            if (string.Equals(pluginDir, full, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new WorkerException(ErrorCodes.InvalidArgument,
-                    $"'{full}' contains active plugins (game Data folder or an installed mod). Export to a separate folder.");
-            }
-        }
-
-        return full;
     }
 
     private static readonly JsonSerializerOptions ManifestJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -395,7 +370,32 @@ internal static class ModPackager
         sb.AppendLine(CultureInfo.InvariantCulture, $"installationFile={modName}.zip");
         sb.AppendLine("repository=");
         sb.AppendLine("comments=Generado por Skyrim NPC Studio");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"notes=\"{(description ?? string.Empty).Replace("\"", "'", StringComparison.Ordinal)}\"");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"notes=\"{IniValue(description ?? string.Empty)}\"");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Text for one quoted meta.ini value as QSettings (how MO2 reads the file) unescapes it: backslash, quote,
+    /// CR, LF and tab are escaped and any other control character becomes a space, so a description can never
+    /// start a new line, section or key (audit v2 F-19: "[Plugins]" in a description used to become one).
+    /// </summary>
+    internal static string IniValue(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            sb.Append(c switch
+            {
+                '\\' => @"\\",
+                '"' => "\\\"",
+                '\n' => @"\n",
+                '\r' => @"\r",
+                '\t' => @"\t",
+                _ when char.IsControl(c) || c is '\u2028' or '\u2029' => " ",
+                _ => c.ToString(),
+            });
+        }
+
         return sb.ToString();
     }
 

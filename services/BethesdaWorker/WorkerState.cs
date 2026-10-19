@@ -20,14 +20,23 @@ internal sealed class Catalog(string profileKey, LoadOrderSession session, Catal
 }
 
 /// <summary>
-/// Holds the active catalog. SQLite connections and Mutagen overlays are not thread-safe, so all
-/// access is serialized; indexing replaces the catalog and makes reads fail fast with Busy.
+/// Holds the active catalog. SQLite connections and Mutagen overlays are not thread-safe, so the catalog
+/// has one user at a time. Short reads use it under the gate. Long operations (indexing, exports) claim it
+/// under the gate and run outside it: every other request answers at once with Busy instead of queuing
+/// behind them (audit v2 F-14). A re-index keeps the previous catalog until the new one is complete, so a
+/// failed or cancelled re-index leaves the studio with the catalog it had (audit v2 F-18).
 /// </summary>
 internal sealed class WorkerState : IDisposable
 {
+    private const string Indexing = "indexing";
+    private const string Exporting = "export";
+
     private readonly Lock _gate = new();
     private Catalog? _catalog;
-    private bool _indexing;
+
+    // The long operation that owns the catalog outside the gate (Indexing, Exporting), or null.
+    private string? _claimedBy;
+    private bool _disposed;
 
     public CatalogStatusResponse Status()
     {
@@ -36,7 +45,7 @@ internal sealed class WorkerState : IDisposable
             return new CatalogStatusResponse
             {
                 Indexed = _catalog is not null,
-                Busy = _indexing,
+                Busy = _claimedBy is not null,
                 ProfileKey = _catalog?.ProfileKey,
                 PluginCount = _catalog?.Session.Plugins.Count ?? 0,
             };
@@ -47,19 +56,43 @@ internal sealed class WorkerState : IDisposable
     {
         lock (_gate)
         {
-            if (_indexing)
-            {
-                throw new WorkerException(ErrorCodes.Busy, "The catalog is being indexed; retry when indexing finishes.");
-            }
+            return query(Available());
+        }
+    }
 
-            if (_catalog is null)
-            {
-                throw new WorkerException(ErrorCodes.NotIndexed, "No load order has been indexed yet (call catalog.index).");
-            }
+    /// <summary>Test seam: runs on the export's thread once the export owns the catalog.</summary>
+    internal Action? ExportStarted { get; set; }
 
-            // The winner tables live in a cache shared with other studio processes on the same profile.
-            _catalog.Store.EnsureActiveLoadOrder();
-            return query(_catalog);
+    /// <summary>
+    /// Runs an export with the catalog to itself, outside the gate: searches, status and a second export
+    /// answer Busy meanwhile instead of waiting for it to write, verify and zip the mod.
+    /// </summary>
+    public T Export<T>(Func<Catalog, T> export)
+    {
+        Catalog catalog;
+        lock (_gate)
+        {
+            catalog = Available();
+            _claimedBy = Exporting;
+        }
+
+        try
+        {
+            ExportStarted?.Invoke();
+            return export(catalog);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _claimedBy = null;
+                // Dispose() came while the export used the catalog: it left the disposing to the export.
+                if (_disposed)
+                {
+                    _catalog = null;
+                    catalog.Dispose();
+                }
+            }
         }
     }
 
@@ -67,22 +100,29 @@ internal sealed class WorkerState : IDisposable
     {
         lock (_gate)
         {
-            if (_indexing)
-            {
-                throw new WorkerException(ErrorCodes.Busy, "An indexing operation is already running.");
-            }
-
-            _indexing = true;
-            _catalog?.Dispose();
-            _catalog = null;
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ThrowIfClaimed(Indexing, "An indexing operation is already running.");
+            // Replacing the catalog would dispose it under the running export.
+            ThrowIfClaimed(Exporting, "An export is using the catalog; index again when it finishes.");
+            _claimedBy = Indexing;
         }
 
+        Catalog? replaced = null;
         try
         {
+            // The previous catalog stays in place (reads answer Busy meanwhile) until this one is complete.
             var result = CatalogIndexer.Run(request, progress, ct);
+            var fresh = new Catalog(request.ProfileKey, result.Session, result.Store);
             lock (_gate)
             {
-                _catalog = new Catalog(request.ProfileKey, result.Session, result.Store);
+                if (_disposed)
+                {
+                    fresh.Dispose();
+                    throw new ObjectDisposedException(nameof(WorkerState));
+                }
+
+                replaced = _catalog;
+                _catalog = fresh;
             }
 
             return result.Response;
@@ -91,8 +131,38 @@ internal sealed class WorkerState : IDisposable
         {
             lock (_gate)
             {
-                _indexing = false;
+                _claimedBy = null;
+                if (_disposed)
+                {
+                    replaced ??= _catalog;
+                    _catalog = null;
+                }
             }
+
+            replaced?.Dispose();
+        }
+    }
+
+    /// <summary>The catalog, for the caller holding the gate; Busy while a long operation owns it.</summary>
+    private Catalog Available()
+    {
+        ThrowIfClaimed(Indexing, "The catalog is being indexed; retry when indexing finishes.");
+        ThrowIfClaimed(Exporting, "An export is using the catalog; retry when it finishes.");
+        if (_catalog is null)
+        {
+            throw new WorkerException(ErrorCodes.NotIndexed, "No load order has been indexed yet (call catalog.index).");
+        }
+
+        // The winner tables live in a cache shared with other studio processes on the same profile.
+        _catalog.Store.EnsureActiveLoadOrder();
+        return _catalog;
+    }
+
+    private void ThrowIfClaimed(string owner, string message)
+    {
+        if (_claimedBy == owner)
+        {
+            throw new WorkerException(ErrorCodes.Busy, message);
         }
     }
 
@@ -100,8 +170,13 @@ internal sealed class WorkerState : IDisposable
     {
         lock (_gate)
         {
-            _catalog?.Dispose();
-            _catalog = null;
+            _disposed = true;
+            // A running index or export disposes what it holds when it ends.
+            if (_claimedBy is null)
+            {
+                _catalog?.Dispose();
+                _catalog = null;
+            }
         }
     }
 }

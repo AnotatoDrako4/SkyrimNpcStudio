@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QStringList>
 #include <QString>
@@ -83,6 +84,23 @@ class PortraitCache {
   bool remove_game_capture(const QString& form_key);
   // Data paths whose record differs between two renders (also those only one of them used).
   [[nodiscard]] static QStringList changed_resources(const PortraitEntry& before, const PortraitEntry& after);
+
+  // Every current studio render of the folder read back with its hash, keyed by entry_name. Nothing is
+  // checked against the profile: the gallery shows these at once as *provisional* ("cached, being verified")
+  // while lookup() decides whether each one is still valid. Runs off the GUI thread (it reads every image).
+  [[nodiscard]] QHash<QString, PortraitVersion> scan_current() const;
+  // What the folder holds: studio renders (current entries), Skyrim captures, files and bytes.
+  struct Usage {
+    int renders = 0;
+    int captures = 0;
+    int files = 0;
+    qint64 bytes = 0;
+  };
+  [[nodiscard]] Usage usage() const;
+  // Removes the studio renders only: current and previous entries and their PNGs. The captures the user
+  // attached (`.skyrim.json` and their images) stay. Nothing outside this folder is touched. Returns the
+  // number of files removed (-1 and `error` when one could not be removed).
+  int clear_renders(QString* error);
 
  private:
   [[nodiscard]] std::optional<PortraitVersion> read_version(const QString& json_name, const QString& form_key, QString* reason) const;

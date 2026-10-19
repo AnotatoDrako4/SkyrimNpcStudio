@@ -155,6 +155,70 @@ public sealed class ModPackagerTests : IDisposable
         Assert.Empty(Directory.EnumerateDirectories(_out, ".sns-staging-*"));
     }
 
+    /// <summary>
+    /// Audit v2 F-19: the description went into meta.ini's notes as is, so a line break started a new INI line:
+    /// "[Plugins]" or "gameName=..." in a description became sections and keys MO2 reads. The value is now one
+    /// line in QSettings' escaping (MO2 reads meta.ini with QSettings), and reads back as the same text.
+    /// </summary>
+    [Fact]
+    public void AMultiLineDescriptionCannotAddLinesToMetaIni()
+    {
+        const string description = "Línea 1\n[Plugins]\r\ngameName=Oblivion\nruta C:\\mods \"citada\"\tfin\u0007";
+        var response = _state.Read(c => ModPackager.ExportOutfitPatch(c.Session, c.Queries, new ExportOutfitPatchRequest
+        {
+            PluginName = "SNS_Packager_Notes.esp",
+            OutputDirectory = _out,
+            CreateZip = false,
+            Description = description,
+            Assignments =
+            [
+                new OutfitAssignment
+                {
+                    NpcFormKey = SyntheticLoadOrder.Lydia.ToString(),
+                    ArmorFormKeys = [SyntheticLoadOrder.SteelCuirass.ToString()],
+                },
+            ],
+        }, CancellationToken.None));
+
+        var lines = File.ReadAllLines(Path.Combine(response.ModDirectory, "meta.ini"));
+        Assert.Equal(["[General]"], lines.Where(l => l.StartsWith('[')).ToArray());
+        var keys = lines.Skip(1).Select(l => l[..l.IndexOf('=', StringComparison.Ordinal)]).ToArray();
+        Assert.Equal(["gameName", "modid", "version", "installationFile", "repository", "comments", "notes"], keys);
+        Assert.Contains("gameName=SkyrimSE", lines);
+
+        // Other control characters (here BEL) have no QSettings escape MO2 shows; they become a space.
+        var notes = lines.Single(l => l.StartsWith("notes=", StringComparison.Ordinal))["notes=".Length..];
+        Assert.Equal(description.Replace('\u0007', ' '), UnescapeQSettingsValue(notes));
+    }
+
+    /// <summary>QSettings' reading of a quoted INI value: \\ \" \n \r \t escapes inside double quotes.</summary>
+    private static string UnescapeQSettingsValue(string raw)
+    {
+        Assert.True(raw.Length >= 2 && raw[0] == '"' && raw[^1] == '"', $"notes is not one quoted value: {raw}");
+        var text = new System.Text.StringBuilder();
+        for (var i = 1; i < raw.Length - 1; i++)
+        {
+            if (raw[i] != '\\')
+            {
+                Assert.NotEqual('"', raw[i]);
+                text.Append(raw[i]);
+                continue;
+            }
+
+            text.Append(raw[++i] switch
+            {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '"' => '"',
+                '\\' => '\\',
+                var other => throw new Xunit.Sdk.XunitException($"unexpected escape \\{other}"),
+            });
+        }
+
+        return text.ToString();
+    }
+
     public void Dispose()
     {
         _state.Dispose();

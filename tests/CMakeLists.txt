@@ -21,12 +21,18 @@ add_executable(sns_engine_tests
   unit/engines/test_easy_mod.cpp
   unit/engines/test_review_case.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
+# Audit F-10/F-12: damaged NIFs refused before nifly; one bad mesh never empties the preview.
+target_sources(sns_engine_tests PRIVATE unit/engines/test_nif_safe_load.cpp)
 target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
   sns::core sns::ipc sns::mo2 sns::projects sns::creation sns::outfit sns::appearance sns::presets sns::face sns::rendering
-  sns::gltf nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
+  sns::gltf sns::nif nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
+
+# ---- Tool: loads one NIF in a process of its own and reports outcome, time and peak memory (audit F-10) --
+add_executable(sns_nif_load_probe tools/nif_load_probe.cpp)
+target_link_libraries(sns_nif_load_probe PRIVATE sns::core sns::nif sns::face nifly psapi sns::compile_options)
 
 # ---- Build tree: every first-party object has its header dependencies recorded ---------------
 if(CMAKE_GENERATOR MATCHES "Ninja")
@@ -72,6 +78,18 @@ if(SNS_BUILD_APP AND WIN32)
   target_link_libraries(sns_workbench_tests PRIVATE Qt6::Core Qt6::Qml sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_workbench_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
 
+  # Settings Center catalogue (theme, viewer, portraits...), its storage, search, import/export and palettes,
+  # reaching the WorkbenchState preferences without duplicating them. Qt Gui only for QColor; no window.
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Gui)
+  add_executable(sns_settings_tests
+    app/test_settings_service.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/settings_service.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/workbench_state.cpp)
+  set_target_properties(sns_settings_tests PROPERTIES AUTOMOC ON)
+  target_include_directories(sns_settings_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_settings_tests PRIVATE Qt6::Core Qt6::Gui Qt6::Qml sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_settings_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
   # Portrait cache of the NPC gallery: entries, validation against the profile, previous versions and Skyrim
   # captures (Qt Gui only for QImageReader; no window).
   find_package(Qt6 6.11 REQUIRED COMPONENTS Gui)
@@ -81,6 +99,14 @@ if(SNS_BUILD_APP AND WIN32)
   target_include_directories(sns_portrait_cache_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
   target_link_libraries(sns_portrait_cache_tests PRIVATE Qt6::Core Qt6::Gui sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_portrait_cache_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
+  # Audit P0-01/F-13: export folders inside the game or MO2 are refused before anything is created.
+  add_executable(sns_export_destination_tests
+    app/test_export_destination.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/export_destination.cpp)
+  target_include_directories(sns_export_destination_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_export_destination_tests PRIVATE Qt6::Core sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_export_destination_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
 
   foreach(kind access-violation terminate abort)
     add_test(NAME "app:crash report and minidump (${kind})"
@@ -106,6 +132,13 @@ if(SNS_BUILD_WORKER)
     COMMENT "Publishing synthetic fixture generator"
     VERBATIM)
   add_custom_target(fixture_gen ALL DEPENDS ${SNS_FIXTURE_GEN_EXE})
+
+  # Synthetic MO2 instance with a damaged FaceGen: audit F-11 profile scenario (scripts/damaged-facegen-check.ps1).
+  add_executable(sns_synthetic_mo2 tools/synthetic_mo2.cpp)
+  target_include_directories(sns_synthetic_mo2 PRIVATE support)
+  target_compile_definitions(sns_synthetic_mo2 PRIVATE SNS_FIXTURE_GEN_EXE="${SNS_FIXTURE_GEN_EXE}")
+  target_link_libraries(sns_synthetic_mo2 PRIVATE sns::core nifly nlohmann_json::nlohmann_json sns::compile_options)
+  add_dependencies(sns_synthetic_mo2 fixture_gen)
 
   add_executable(sns_integration_tests
     integration/test_worker_roundtrip.cpp

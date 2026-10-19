@@ -233,7 +233,7 @@ TEST_CASE("Built-in layouts apply to one workspace only", "[workbench][layouts]"
   ensure_app();
   sns::test::TempDir dir;
   WorkbenchState state(ini_in(dir));
-  CHECK(state.builtin_layouts().size() == 6);
+  CHECK(state.builtin_layouts().size() == 8);
   CHECK(state.applyBuiltinLayout("face", "creator"));
   auto* creator = state.layout("creator");
   CHECK_FALSE(creator->left_visible());
@@ -242,6 +242,12 @@ TEST_CASE("Built-in layouts apply to one workspace only", "[workbench][layouts]"
   // The other workspaces did not change.
   CHECK(state.layout("outfit")->left_visible());
   CHECK(state.layout("forge")->left_visible());
+
+  CHECK(state.applyBuiltinLayout("review", "creator"));
+  CHECK(creator->left_visible());
+  CHECK(creator->right_visible());
+  CHECK(creator->bottom_visible());
+  CHECK(creator->bottom_height() == 240);
 
   CHECK(state.applyBuiltinLayout("viewer", "creator"));
   CHECK(creator->maximized());

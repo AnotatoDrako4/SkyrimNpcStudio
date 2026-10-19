@@ -286,4 +286,54 @@ QStringList PortraitCache::changed_resources(const PortraitEntry& before, const 
   return out;
 }
 
+QHash<QString, PortraitVersion> PortraitCache::scan_current() const {
+  QHash<QString, PortraitVersion> out;
+  const QDir dir(directory_);
+  for (const auto& name : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
+    if (name.endsWith(QLatin1String(".previous.json")) || name.endsWith(QLatin1String(".skyrim.json"))) continue;
+    QFile file(dir.filePath(name));
+    if (!file.open(QIODevice::ReadOnly)) continue;
+    const auto entry = portrait_entry_from_json(file.readAll(), nullptr);
+    if (!entry || entry->source != kStudioRender || entry_name(entry->form_key) + ".json" != name) continue;
+    if (auto v = read_version(name, entry->form_key, nullptr)) out.insert(entry_name(entry->form_key), std::move(*v));
+  }
+  return out;
+}
+
+PortraitCache::Usage PortraitCache::usage() const {
+  Usage u;
+  const QDir dir(directory_);
+  for (const auto& info : dir.entryInfoList(QDir::Files)) {
+    ++u.files;
+    u.bytes += info.size();
+    const auto name = info.fileName();
+    if (name.endsWith(QLatin1String(".skyrim.json"))) ++u.captures;
+    else if (name.endsWith(QLatin1String(".json")) && !name.endsWith(QLatin1String(".previous.json"))) ++u.renders;
+  }
+  return u;
+}
+
+int PortraitCache::clear_renders(QString* error) {
+  const QDir dir(directory_);
+  if (!dir.exists()) return 0;
+  int removed = 0;
+  QStringList failed;
+  const auto remove = [&](const QString& name) {
+    if (QFile::remove(dir.filePath(name))) ++removed;
+    else if (QFile::exists(dir.filePath(name))) failed << name;
+  };
+  for (const auto& name : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
+    if (!name.endsWith(QLatin1String(".skyrim.json"))) remove(name);
+  }
+  // Studio renders are "<name>-<hash>.png"; a capture image always has "-skyrim-" in its name.
+  for (const auto& name : dir.entryList({QStringLiteral("*.png")}, QDir::Files)) {
+    if (!name.contains(QLatin1String("-skyrim-"))) remove(name);
+  }
+  if (!failed.isEmpty()) {
+    if (error) *error = QStringLiteral("could not remove: %1").arg(failed.join(QStringLiteral(", ")));
+    return -1;
+  }
+  return removed;
+}
+
 }  // namespace sns::app

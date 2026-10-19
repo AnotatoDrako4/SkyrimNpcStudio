@@ -1781,6 +1781,49 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->step();
         });
       });
+    } else if (name == "damaged-facegen-scan") {
+      // Audit F-11 on a profile: ONLY for the synthetic instance of tests/tools/synthetic_mo2.cpp (run by
+      // scripts/damaged-facegen-check.ps1; not part of "all"), whose single defect is the damaged FaceGen of one
+      // NPC. The scan must finish and report that NPC as a damaged FaceGen, instead of the studio closing (an
+      // exception out of the scan thread) or calling it a FaceGen that does not match the record. The synthetic
+      // load order has one unique NPC, so "the rest goes on" is shown by a second scan that finishes the same.
+      auto first = std::make_shared<QVariantMap>();
+      for (int pass = 0; pass < 2; ++pass) {
+        steps.push_back([self, pass, first] {
+          const auto damaged = qEnvironmentVariable("SNS_DAMAGED_FACEGEN_NPC", QStringLiteral("0A2C8E:Skyrim.esm"));
+          self->studio->scanAppearanceControl();
+          auto wait = std::make_shared<std::function<void()>>();
+          auto started = std::make_shared<QElapsedTimer>();
+          started->start();
+          *wait = [self, wait, started, damaged, pass, first] {
+            const auto scan = self->studio->appearance_scan();
+            if (scan.value("running").toBool() && started->elapsed() < 5 * 60 * 1000) { self->after(200, *wait); return; }
+            const int total = scan.value("total").toInt(), analysed = scan.value("analysed").toInt(), errors = scan.value("errors").toInt();
+            const auto tag = QStringLiteral("scan %1: ").arg(pass + 1);
+            self->check(scan.value("stage").toString() == "done", tag + "synthetic profile scan finished: " + scan.value("stage").toString());
+            self->check(total >= 1 && scan.value("listed").toInt() == total && analysed == total && errors == 0,
+                        tag + QStringLiteral("%1 unique NPCs listed, %2 analysed, %3 errors").arg(total).arg(analysed).arg(errors));
+            QVariantMap row;
+            for (const auto& r : scan.value("rows").toList()) {
+              if (r.toMap().value("formKey").toString().compare(damaged, Qt::CaseInsensitive) == 0) row = r.toMap();
+            }
+            const auto codes = row.value("codes").toStringList();
+            self->check(!row.isEmpty(), tag + damaged + " has a row in the scan");
+            self->check(codes.contains(QStringLiteral("FaceGenUnreadable")),
+                        tag + damaged + " reported as a damaged FaceGen (codes: " + codes.join(", ") + ")");
+            if (pass == 0) {
+              *first = scan;
+            } else {
+              self->check(scan.value("counts") == first->value("counts") && scan.value("codes") == first->value("codes"),
+                          tag + "the studio still scans after the damaged FaceGen: same counts and codes as scan 1");
+            }
+            QFile out(QDir(self->work_dir).filePath(QStringLiteral("damaged-facegen-scan-%1.json").arg(pass + 1)));
+            if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(scan)).toJson());
+            self->step();
+          };
+          self->after(200, *wait);
+        });
+      }
     } else if (name == "appearance-scan") {
       // Control map of every unique NPC of the real profile: totals add up, flagged NPCs keep their
       // findings when opened one by one (where the facial measurement may only downgrade a mismatch),
@@ -2462,6 +2505,238 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->check(problems.isEmpty(), QStringLiteral("gallery: %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
           self->window->grabWindow().save(QDir(self->work_dir).filePath("npc-gallery.png"));
           g->browser->setProperty("viewMode", "list");
+          self->step();
+        });
+      });
+    } else if (name == "donor-gallery") {
+      // Presets › Transferencia de apariencia as a face gallery: a donor search fills the gallery (not the browser's
+      // rows), each card asks for its portrait and ends with one or a stated reason, and "Usar" is the same action as
+      // the list's button. Nothing is applied here (the donor export scenario covers applyDonor).
+      auto state = std::make_shared<QElapsedTimer>();
+      auto browser_rows = std::make_shared<int>(0);
+      auto gallery = [self]() -> QQuickItem* {
+        for (auto* item : self->window->findChildren<QQuickItem*>())
+          if (item->objectName() == QLatin1String("donorGallery") && item->isVisible()) return item;
+        return nullptr;
+      };
+      auto donor_cards = [gallery]() {
+        QStringList keys;
+        auto* g = gallery();
+        auto* content = g ? g->property("contentItem").value<QQuickItem*>() : nullptr;
+        if (!content) return keys;
+        for (auto* child : content->childItems())
+          if (child->property("formKey").isValid()) keys << child->property("formKey").toString();
+        return keys;
+      };
+      steps.push_back([self, state, browser_rows] {
+        *browser_rows = self->studio->npc_results()->count();
+        state->start();
+        self->studio->searchDonors(qEnvironmentVariable("SNS_STRESS_DONOR_SEARCH", QStringLiteral("Lydia")));
+        self->step();
+      });
+      steps.push_back([self, state, browser_rows, gallery, donor_cards] {
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, state, browser_rows, gallery, donor_cards, tick] {
+          if (self->studio->donor_results()->count() > 0 && gallery() && !donor_cards().isEmpty()) {
+            self->check(true, QStringLiteral("donor search: %1 donors, %2 face cards in the gallery after %3 ms")
+                                  .arg(self->studio->donor_results()->count()).arg(donor_cards().size()).arg(state->elapsed()));
+            self->check(self->studio->npc_results()->count() == *browser_rows, "the donor search leaves the browser's rows alone");
+            self->step();
+            return;
+          }
+          if (state->elapsed() > 60000) {
+            self->check(false, QStringLiteral("donor gallery shows cards (donors %1, gallery %2)")
+                                   .arg(self->studio->donor_results()->count()).arg(gallery() ? "visible" : "not visible"));
+            self->step();
+            return;
+          }
+          self->after(50, *tick);
+        };
+        (*tick)();
+      });
+      steps.push_back([self, donor_cards] {
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, donor_cards, clock, tick] {
+          const auto keys = donor_cards();
+          int final = 0, ready = 0;
+          QStringList reasons;
+          for (const auto& fk : keys) {
+            const auto s = self->studio->portraits()->stateOf(fk, 0);
+            const auto st = s.value("state").toString();
+            if (st == QLatin1String("ready")) { ++ready; ++final; }
+            else if (st == QLatin1String("error")) { ++final; reasons << fk + ": " + s.value("reason").toString(); }
+          }
+          if ((!keys.isEmpty() && final == keys.size()) || clock->elapsed() > 4 * 60000) {
+            self->check(final == keys.size() && ready > 0, QStringLiteral("%1 of %2 donor cards show a studio portrait, %3 a stated reason (%4 ms)")
+                                                             .arg(ready).arg(keys.size()).arg(final - ready).arg(clock->elapsed()));
+            for (const auto& r : reasons.mid(0, 4)) self->log("  no portrait: " + r);
+            const auto shot = QDir(self->work_dir).filePath("donor-gallery.png");
+            self->log(QStringLiteral("capture %1: %2").arg(self->window->grabWindow().save(shot) ? "saved" : "FAILED", shot));
+            self->step();
+            return;
+          }
+          self->after(100, *tick);
+        };
+        (*tick)();
+      });
+    } else if (name == "npc-portraits-instant") {
+      // Portraits already made in an earlier session show at once: the cache index is read while the profile is
+      // indexed, cards show the stored render (marked provisional) or the verified one immediately, the verdicts
+      // run off the GUI thread, a card never stays provisional once it is final, and the rows ahead are handed to
+      // the prefetch. Run three times over one cache folder: cold, warm, and warm with SNS_PORTRAIT_DIGEST_SALT
+      // (every stored portrait out of date, as after a load order change). Report: portraits-instant.json.
+      struct Instant {
+        QQuickItem* browser = nullptr;
+        QQuickItem* grid = nullptr;
+        QElapsedTimer opened;
+        QJsonObject report;
+        qint64 max_gap = 0;
+        QElapsedTimer beat;
+        QTimer* heartbeat = nullptr;
+      };
+      auto p = std::make_shared<Instant>();
+      auto renderer = [self] { return self->studio->portraits(); };
+      auto keys_on_screen = [p](int n) {
+        QStringList keys;
+        auto* content = p->grid ? p->grid->property("contentItem").value<QQuickItem*>() : nullptr;
+        if (!content) return keys;
+        QList<QQuickItem*> cards;
+        for (auto* child : content->childItems())
+          if (child->property("formKey").isValid()) cards << child;
+        std::sort(cards.begin(), cards.end(), [](QQuickItem* a, QQuickItem* b) { return a->property("index").toInt() < b->property("index").toInt(); });
+        for (auto* c : cards) {
+          if (keys.size() == n) break;
+          keys << c->property("formKey").toString();
+        }
+        return keys;
+      };
+      auto shows_image = [renderer](const QString& fk) {
+        const auto s = renderer()->stateOf(fk, 0);
+        return s.value("state").toString() == QLatin1String("ready") || !s.value("provisionalUrl").toString().isEmpty();
+      };
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(20, *tick);
+        };
+        (*tick)();
+      };
+      const bool salted = qEnvironmentVariableIsSet("SNS_PORTRAIT_DIGEST_SALT");
+      const bool warm = qEnvironmentVariableIsSet("SNS_PORTRAIT_EXPECT_CACHE");
+      steps.push_back([self, p, renderer, wait_for, salted, warm] {
+        for (auto* o : self->window->findChildren<QObject*>())
+          if (o->objectName() == QLatin1String("creatorNpcBrowser")) p->browser = qobject_cast<QQuickItem*>(o);
+        for (auto* item : self->window->findChildren<QQuickItem*>())
+          if (p->browser && item->objectName() == QLatin1String("npcGallery") && p->browser->isAncestorOf(item)) p->grid = item;
+        self->check(p->browser && p->grid, "creator NPC browser and its gallery found");
+        if (!p->browser || !p->grid) { self->steps.clear(); self->step(); return; }
+        const auto s0 = renderer()->stats();
+        self->log(QStringLiteral("mode: %1; cache index %2 (%3 stored renders read in %4 ms) before the gallery opens")
+                      .arg(salted ? "warm, profile changed (salt)" : warm ? "warm" : "cold")
+                      .arg(s0.value("indexReady").toBool() ? "ready" : "not ready")
+                      .arg(s0.value("indexed").toInt()).arg(s0.value("indexMs").toLongLong()));
+        p->report["mode"] = salted ? "salted" : warm ? "warm" : "cold";
+        p->report["indexedBeforeGallery"] = s0.value("indexed").toInt();
+        p->report["indexReadyBeforeGallery"] = s0.value("indexReady").toBool();
+        p->report["indexMs"] = s0.value("indexMs").toLongLong();
+        if (warm) self->check(s0.value("indexReady").toBool() && s0.value("indexed").toInt() > 0,
+                              "the stored renders were indexed while the profile loaded (before the gallery opened)");
+        self->studio->searchNpcs({}, {}, QStringLiteral("unique"), {});
+        // The same rows in every run: wait for the unique-only page, not the full list shown at load.
+        wait_for([self] {
+          const auto* rows = self->studio->npc_results();
+          if (rows->count() == 0) return false;
+          for (int i = 0; i < std::min(rows->count(), 50); ++i) if (!rows->get(i).value("isUnique").toBool()) return false;
+          return true;
+        }, 30000, [self, p](bool) {
+          p->beat.start();
+          p->heartbeat = new QTimer(self->window);
+          p->heartbeat->setInterval(10);
+          QObject::connect(p->heartbeat, &QTimer::timeout, p->heartbeat, [p] { p->max_gap = std::max(p->max_gap, p->beat.restart()); });
+          p->heartbeat->start();
+          p->opened.start();
+          p->browser->setProperty("viewMode", "gallery");
+          self->window->grabWindow();
+          self->step();
+        });
+      });
+      // The first image on a card, and how many of the first visible cards show one right away.
+      steps.push_back([self, p, renderer, wait_for, keys_on_screen, shows_image, warm] {
+        wait_for([keys_on_screen, shows_image] { const auto k = keys_on_screen(8); return std::any_of(k.begin(), k.end(), shows_image); },
+                 180000, [self, p, renderer, keys_on_screen, shows_image, warm](bool ok) {
+                   const auto first_ms = p->opened.elapsed();
+                   const auto keys = keys_on_screen(8);
+                   int with_image = 0, provisional = 0;
+                   for (const auto& fk : keys) {
+                     const auto s = renderer()->stateOf(fk, 0);
+                     if (shows_image(fk)) ++with_image;
+                     if (s.value("state").toString() != QLatin1String("ready") && !s.value("provisionalUrl").toString().isEmpty()) ++provisional;
+                   }
+                   self->check(ok, QStringLiteral("first image on a card after %1 ms; %2 of %3 visible cards show an image then (%4 provisional)")
+                                       .arg(first_ms).arg(with_image).arg(keys.size()).arg(provisional));
+                   p->report["firstImageMs"] = first_ms;
+                   p->report["cardsWithImageAtFirst"] = with_image;
+                   p->report["provisionalAtFirst"] = provisional;
+                   p->report["visibleCards"] = static_cast<int>(keys.size());
+                   if (warm) self->check(first_ms < 1500, QStringLiteral("warm cache: an image within 1.5 s of opening the gallery (%1 ms)").arg(first_ms));
+                   self->step();
+                 });
+      });
+      // Every visible card ends with a verified portrait or a stated error, and none stays provisional.
+      steps.push_back([self, p, renderer, wait_for, keys_on_screen, salted] {
+        const auto keys = keys_on_screen(8);
+        auto final_state = [renderer](const QString& fk) {
+          const auto s = renderer()->stateOf(fk, 0).value("state").toString();
+          return s == QLatin1String("ready") || s == QLatin1String("error");
+        };
+        wait_for([keys, final_state] { return std::all_of(keys.begin(), keys.end(), final_state); }, 6 * 60000,
+                 [self, p, renderer, keys, salted](bool ok) {
+                   int ready = 0, errors = 0, still_provisional = 0, rendered_now = 0, from_cache = 0;
+                   for (const auto& fk : keys) {
+                     const auto s = renderer()->stateOf(fk, 0);
+                     const auto state = s.value("state").toString();
+                     if (state == QLatin1String("ready")) ++ready;
+                     if (state == QLatin1String("error")) ++errors;
+                     if (state == QLatin1String("ready") && s.contains("provisionalUrl")) ++still_provisional;
+                     if (s.value("source").toString() == QLatin1String("render")) ++rendered_now;
+                     if (s.value("source").toString() == QLatin1String("cache")) ++from_cache;
+                   }
+                   p->report["allFinalMs"] = p->opened.elapsed();
+                   self->check(ok, QStringLiteral("visible cards final after %1 ms: %2 ready (%3 from the cache, %4 rendered now), %5 with a stated error")
+                                       .arg(p->opened.elapsed()).arg(ready).arg(from_cache).arg(rendered_now).arg(errors));
+                   self->check(still_provisional == 0, "no card keeps the provisional mark once its portrait is verified");
+                   if (salted) self->check(rendered_now > 0, "with the profile changed, out-of-date portraits are redone (not served as valid)");
+                   else if (qEnvironmentVariableIsSet("SNS_PORTRAIT_EXPECT_CACHE"))
+                     self->check(rendered_now == 0 && from_cache > 0, QStringLiteral("warm cache: %1 visible portraits from the cache, none redone").arg(from_cache));
+                   p->report["readyFromCache"] = from_cache;
+                   p->report["renderedNow"] = rendered_now;
+                   p->report["errors"] = errors;
+                   self->step();
+                 });
+      });
+      // Idle: the rows ahead were handed to the prefetch and verified/rendered at low priority.
+      steps.push_back([self, p, renderer] {
+        self->after(8000, [self, p, renderer] {
+          if (p->heartbeat) p->heartbeat->stop();
+          const auto s = renderer()->stats();
+          self->log(QStringLiteral("stats: provisional %1, verified %2 in %3 batches (slowest %4 ms), cache hits %5, rendered %6, stale %7, "
+                                   "prefetch calls %8, prefetched renders %9, render queue %10")
+                        .arg(s.value("provisional").toInt()).arg(s.value("verified").toInt()).arg(s.value("lookupBatches").toInt())
+                        .arg(s.value("maxLookupBatchMs").toLongLong()).arg(s.value("cacheHits").toInt()).arg(s.value("rendered").toInt())
+                        .arg(s.value("stale").toInt()).arg(s.value("prefetchRequests").toInt()).arg(s.value("prefetched").toInt())
+                        .arg(s.value("renderQueue").toInt()));
+          self->check(s.value("prefetchRequests").toInt() > 0, "the gallery handed the rows ahead to the prefetch");
+          self->check(p->max_gap < 2000, QStringLiteral("longest event-loop pause while the gallery opened: %1 ms").arg(p->max_gap));
+          p->report["maxEventLoopGapMs"] = p->max_gap;
+          p->report["stats"] = QJsonObject::fromVariantMap(s);
+          QFile out(QDir(self->work_dir).filePath("portraits-instant.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(p->report).toJson());
           self->step();
         });
       });
