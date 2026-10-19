@@ -15,4 +15,17 @@
     <Authors>Skyrim NPC Studio contributors</Authors>
     <Copyright>GPL-3.0-only</Copyright>
   </PropertyGroup>
+
+  <!--
+    Release binaries independent of the folder they are built in: Deterministic alone still hashes the build
+    path into the PE timestamp, the MVID/PDB id and the names of source-generated file-local types (Regex), so
+    the same sources built in two folders gave two worker DLLs (out/local-implementation/20261019-repro).
+    PathMap rewrites those paths; the artifacts folder (dotnet publish artifacts-path) first, because it may
+    lie inside the repository and Roslyn applies the first matching prefix.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
+    <PathMap Condition="'$(ArtifactsPath)' != ''">$([System.IO.Path]::GetFullPath('$(ArtifactsPath)'))=/_artifacts/,$(PathMap)</PathMap>
+  </PropertyGroup>
 </Project>
