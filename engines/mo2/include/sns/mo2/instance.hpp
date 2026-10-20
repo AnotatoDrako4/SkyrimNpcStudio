@@ -36,6 +36,10 @@ struct InstanceConfig {
 // Global instances live in %LOCALAPPDATA%\ModOrganizer\<name>\ModOrganizer.ini.
 std::vector<InstanceInfo> discover_global_instances();
 
+// Comprehensive discovery: active running MO2 process, registry, standard/portable locations,
+// and global AppData instances. Deduplicated and verified.
+std::vector<InstanceInfo> discover_all_instances();
+
 // Same, from an explicit root (testable without touching the real profile).
 std::vector<InstanceInfo> discover_instances_in(const std::filesystem::path& mod_organizer_appdata);
 

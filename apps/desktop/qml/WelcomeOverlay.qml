@@ -63,7 +63,7 @@ Dialog {
             Text {
                 anchors.centerIn: parent
                 visible: instanceList.count === 0
-                text: qsTr("No hay instancias globales. Abre el ModOrganizer.ini de tu instalación portable.")
+                text: qsTr("No se encontraron instancias de Mod Organizer 2. Abre el ModOrganizer.ini de tu instalación.")
                 color: Theme.textDim
                 font.pixelSize: Theme.small
             }

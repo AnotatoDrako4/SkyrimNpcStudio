@@ -24,6 +24,7 @@
 #include <QThreadPool>
 #include <QUrl>
 #include <algorithm>
+#include <set>
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
 #include "sns/appearance/control_map.hpp"
@@ -174,7 +175,27 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
 
   QSettings settings;
   const auto last = settings.value("mo2/instanceIni").toString();
-  if (!last.isEmpty() && openInstance(last)) {
+  bool opened = false;
+  if (!last.isEmpty() && QFile::exists(last)) {
+    opened = openInstance(last);
+  }
+
+  // Fallback: If last saved instance is missing or deleted (e.g. stale temp dir), automatically try the first discovered valid instance!
+  if (!opened && instances_->rowCount() > 0) {
+    for (int i = 0; i < instances_->rowCount(); ++i) {
+      const auto row = instances_->get(i);
+      const QString candidatePath = row.value("path").toString();
+      if (!candidatePath.isEmpty() && QFile::exists(candidatePath)) {
+        if (openInstance(candidatePath)) {
+          log("info", tr("Instancia de Mod Organizer seleccionada automáticamente: %1").arg(candidatePath));
+          opened = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (opened) {
     const auto profile = settings.value("mo2/profile").toString();
     if (profiles_.contains(profile)) selected_profile_ = profile;
     emit instanceChanged();
@@ -204,13 +225,47 @@ void StudioController::set_progress(const QString& text, double value) {
 
 void StudioController::discoverInstances() {
   QList<QVariantMap> rows;
-  for (const auto& info : mo2::discover_global_instances()) {
-    rows.push_back({{"name", qs(info.name)}, {"kind", "global"}, {"path", from_path(info.ini)}});
+  std::set<QString> seen;
+
+  for (const auto& info : mo2::discover_all_instances()) {
+    const QString p = from_path(info.ini);
+    const QString norm = p.toLower().replace('\\', '/');
+    if (seen.insert(norm).second) {
+      rows.push_back({
+        {"name", qs(info.name)},
+        {"kind", info.kind == mo2::InstanceKind::Global ? "global" : "portable"},
+        {"path", p}
+      });
+    }
   }
-  if (!instance_path_.isEmpty() &&
-      std::none_of(rows.begin(), rows.end(), [&](const QVariantMap& r) { return r["path"] == instance_path_; })) {
-    rows.push_back({{"name", instance_name_}, {"kind", "portable"}, {"path", instance_path_}});
+
+  // Also check QSettings for previously remembered instances (under games/...)
+  QSettings settings;
+  const auto allKeys = settings.allKeys();
+  for (const auto& k : allKeys) {
+    if (k.startsWith("games/")) {
+      const QString iniPath = k.mid(6);
+      const QString norm = iniPath.toLower().replace('\\', '/');
+      if (!seen.contains(norm) && QFile::exists(iniPath)) {
+        if (auto info = mo2::instance_from_path(to_path(iniPath))) {
+          seen.insert(norm);
+          rows.push_back({
+            {"name", qs(info->name)},
+            {"kind", info->kind == mo2::InstanceKind::Global ? "global" : "portable"},
+            {"path", iniPath}
+          });
+        }
+      }
+    }
   }
+
+  if (!instance_path_.isEmpty()) {
+    const QString norm = instance_path_.toLower().replace('\\', '/');
+    if (!seen.contains(norm)) {
+      rows.push_back({{"name", instance_name_}, {"kind", "portable"}, {"path", instance_path_}});
+    }
+  }
+
   instances_->reset(rows);
 }
 

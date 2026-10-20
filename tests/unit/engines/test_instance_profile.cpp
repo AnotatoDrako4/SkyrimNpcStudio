@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <set>
+
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
 #include "sns/mo2/instance.hpp"
@@ -69,6 +71,18 @@ TEST_CASE("Global instances are discovered from the AppData folder", "[mo2][inst
   REQUIRE(found.size() == 1);
   CHECK(found[0].name == "Skyrim SE");
   CHECK(found[0].kind == InstanceKind::Global);
+}
+
+TEST_CASE("Comprehensive instance discovery finds local or running instances without duplicates", "[mo2][instance]") {
+  const auto found = discover_all_instances();
+  std::set<std::string> seen;
+  for (const auto& inst : found) {
+    CHECK_FALSE(inst.ini.empty());
+    std::string key = text::to_lower_ascii(text::path_to_utf8(inst.ini.lexically_normal()));
+    CHECK(seen.insert(key).second);
+    std::error_code ec;
+    CHECK(std::filesystem::exists(inst.ini, ec));
+  }
 }
 
 TEST_CASE("Game language: local profile INIs, global INIs, then profile fallback", "[mo2][profile]") {
