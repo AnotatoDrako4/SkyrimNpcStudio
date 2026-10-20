@@ -1,3 +1,5 @@
 @echo off
-rem Acceso directo a SkyrimNpcStudio.bat
+rem ============================================================================
+rem  Skyrim NPC Studio Ultimate - Acceso Rapido
+rem ============================================================================
 call "%~dp0SkyrimNpcStudio.bat" %*

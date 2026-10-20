@@ -3,35 +3,35 @@ rem ============================================================================
 rem  Skyrim NPC Studio Ultimate — Outfit Studio 3D + Character Creator 3.0
 rem  FaceGen Fidelity + Outfit Designer + HDT-SMP / FSMP (Release autónomo / Debug dev)
 rem ============================================================================
-title Skyrim NPC Studio Ultimate — Outfit Studio 3D + Character Creator 3.0
+title Skyrim NPC Studio Ultimate — Creative Workspace
 setlocal
 
-rem UTF-8 console: a Spanish MSVC writes its /showIncludes notes in the console code page and
-rem Ninja only recognises them in UTF-8. Without it, header changes stop recompiling the files
-rem that include them (stale objects, memory corruption). See docs/CRASH_DIAGNOSTICS.md.
+rem UTF-8 console: soporte para caracteres internacionales y logs MSVC/Ninja
 chcp 65001 >nul
 
-cd /d "%~dp0"
-set "DIST=%~dp0dist\SkyrimNpcStudio"
-set "RELEASE_APP=%DIST%\SkyrimNpcStudio.exe"
-set "DEBUG_APP=%~dp0build\debug\bin\SkyrimNpcStudio.exe"
-set "LOCAL_DIR=%~dp0build\package\bin"
-set "LOCAL_APP=%LOCAL_DIR%\SkyrimNpcStudio.exe"
+set "ROOT=%~dp0"
+cd /d "%ROOT%"
+set "DIST=%ROOT%dist\SkyrimNpcStudio"
+set "RELEASE_EXE=%DIST%\SkyrimNpcStudio.exe"
+set "DEBUG_EXE=%ROOT%build\debug\bin\SkyrimNpcStudio.exe"
+set "LOCAL_DIR=%ROOT%build\package\bin"
+set "LOCAL_EXE=%LOCAL_DIR%\SkyrimNpcStudio.exe"
 set "VERSION_FILE=%DIST%\VERSION.txt"
 
 rem ----------------------------------------------------------------------------
 rem Opciones por linea de comandos:
-rem   SkyrimNpcStudio.bat                 -> Ejecuta la Release mas reciente: build\package (si es mas nueva
-rem                                          que dist\) o la Release autonoma de dist\
-rem   SkyrimNpcStudio.bat --local         -> Ejecuta la Release local de build\package (Qt del entorno de desarrollo)
-rem   SkyrimNpcStudio.bat --build-release -> Recompila la Release local (sin Git ni empaquetar) y la ejecuta
-rem   SkyrimNpcStudio.bat --dist          -> Ejecuta la Release autonoma de dist\ aunque sea antigua
-rem   SkyrimNpcStudio.bat --dev           -> Ejecuta version Debug (desarrollo rapido)
-rem   SkyrimNpcStudio.bat --rebuild       -> Recompila Release y empaqueta en dist\ (scripts\package.ps1, usa Git)
-rem   SkyrimNpcStudio.bat --build-debug   -> Recompila Debug y ejecuta
+rem   SkyrimNpcStudio.bat                 : Ejecuta la Release autonoma en dist\ (empaqueta si no existe o cambio commit)
+rem   SkyrimNpcStudio.bat --dist          : Ejecuta la Release autonoma de dist\ directamente sin comprobaciones
+rem   SkyrimNpcStudio.bat --rebuild       : Fuerza recompilacion Release y empaquetado en dist\
+rem   SkyrimNpcStudio.bat --package       : Alias de --rebuild
+rem   SkyrimNpcStudio.bat --dev           : Ejecuta version Debug (desarrollo rapido)
+rem   SkyrimNpcStudio.bat --build-debug   : Recompila Debug y ejecuta
+rem   SkyrimNpcStudio.bat --local         : Ejecuta la Release local de build\package (con entorno Qt de desarrollo)
+rem   SkyrimNpcStudio.bat --build-release : Recompila la Release local y la ejecuta
 rem ----------------------------------------------------------------------------
 
-rem Una sola instancia: dos versiones distintas sobre el mismo perfil reconstruyen una el catalogo de la otra.
+:RECHECK_INSTANCE
+rem Comprobacion de instancia unica: evita conflictos de base de datos y cache entre dos instancias
 tasklist /FI "IMAGENAME eq SkyrimNpcStudio.exe" 2>nul | find /I "SkyrimNpcStudio.exe" >nul
 if not errorlevel 1 goto ALREADY_OPEN
 
@@ -44,45 +44,68 @@ if /I "%~1"=="--local" goto RUN_LOCAL_RELEASE
 if /I "%~1"=="--build-release" goto BUILD_LOCAL_RELEASE
 if /I "%~1"=="--dist" goto LAUNCH_RELEASE
 
-rem Release local mas nueva que dist\ (compilada sin empaquetar, p. ej. mientras Git esta en espera): se usa esa.
-if not exist "%LOCAL_APP%" goto CHECK_DIST
-powershell -NoProfile -Command "$l = Get-Item -LiteralPath '%LOCAL_APP%'; $d = Get-Item -LiteralPath '%RELEASE_APP%' -ErrorAction SilentlyContinue; if (-not $d -or $l.LastWriteTime -gt $d.LastWriteTime) { exit 10 } else { exit 0 }"
-if %errorlevel% EQU 10 goto RUN_LOCAL_RELEASE
+rem ----------------------------------------------------------------------------
+rem Modo por defecto: Verificar si dist\SkyrimNpcStudio existe y esta actualizado
+rem ----------------------------------------------------------------------------
+if not exist "%RELEASE_EXE%" (
+    echo [INFO] No se encontro el paquete Release en dist\SkyrimNpcStudio.
+    echo Generando compilacion Release autonoma inicial...
+    goto DO_PACKAGE
+)
 
-:CHECK_DIST
-rem Modo Release por defecto: Comprobar si dist\ existe y esta al dia
-if not exist "%RELEASE_APP%" goto DO_PACKAGE
-if not exist "%VERSION_FILE%" goto DO_PACKAGE
+if not exist "%VERSION_FILE%" goto LAUNCH_RELEASE
 
 set "SOURCE_COMMIT="
 set "PACKAGE_COMMIT="
-for /f %%H in ('git rev-parse --short HEAD 2^>nul') do set "SOURCE_COMMIT=%%H"
-for /f "usebackq tokens=5" %%V in ("%VERSION_FILE%") do set "PACKAGE_COMMIT=%%V"
+for /f %%H in ('git -C "%ROOT%" rev-parse --short HEAD 2^>nul') do set "SOURCE_COMMIT=%%H"
+if exist "%VERSION_FILE%" for /f "usebackq tokens=5" %%V in ("%VERSION_FILE%") do set "PACKAGE_COMMIT=%%V"
 
 if defined SOURCE_COMMIT (
     if defined PACKAGE_COMMIT (
         if /I not "%SOURCE_COMMIT%"=="%PACKAGE_COMMIT%" (
-            echo Actualizando paquete: commit %SOURCE_COMMIT% difiere de %PACKAGE_COMMIT%
+            echo =======================================================================
+            echo  [ACTUALIZACION] Codigo actualizado detectado: %SOURCE_COMMIT% vs %PACKAGE_COMMIT%
+            echo  Actualizando paquete Release en dist\SkyrimNpcStudio...
+            echo =======================================================================
             goto DO_PACKAGE
         )
     )
 )
 
+goto LAUNCH_RELEASE
+
 :LAUNCH_RELEASE
+if not exist "%RELEASE_EXE%" (
+    echo.
+    echo [ERROR] No se encontro el ejecutable en:
+    echo   %RELEASE_EXE%
+    echo Ejecuta: SkyrimNpcStudio.bat --rebuild
+    pause
+    exit /b 1
+)
 echo Iniciando Skyrim NPC Studio Ultimate...
-start "" /D "%DIST%" "%RELEASE_APP%" %*
+pushd "%DIST%"
+start "" "SkyrimNpcStudio.exe" %*
+popd
+ping -n 2 127.0.0.1 >nul
 exit /b 0
 
 :DO_PACKAGE
 echo =======================================================================
-echo  Preparando Skyrim NPC Studio (Character Creator 3.0)
+echo  Preparando Skyrim NPC Studio Ultimate (Creative Workspace)
 echo  Compilando Release y desplegando runtime en dist\SkyrimNpcStudio...
 echo =======================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\package.ps1"
 if %errorlevel% EQU 3 goto ALREADY_RUNNING
 if errorlevel 1 (
     echo.
-    echo [ERROR] No se pudo empaquetar la aplicacion.
+    echo [ERROR] No se pudo empaquetar la aplicacion automaticamente.
+    if exist "%RELEASE_EXE%" (
+        echo Se encontro una version anterior funcional en dist\.
+        echo Presiona cualquier tecla para intentar iniciarla, o cierra para salir.
+        pause >nul
+        goto LAUNCH_RELEASE
+    )
     pause
     exit /b 1
 )
@@ -92,7 +115,7 @@ goto LAUNCH_RELEASE
 echo =======================================================================
 echo  Recompilando Release y empaquetando dist\SkyrimNpcStudio...
 echo =======================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\package.ps1"
 if %errorlevel% EQU 3 goto ALREADY_RUNNING
 if errorlevel 1 (
     echo.
@@ -104,16 +127,32 @@ goto LAUNCH_RELEASE
 
 :ALREADY_OPEN
 echo.
-echo [AVISO] Skyrim NPC Studio ya esta abierto. Cierralo antes de abrir otra copia: dos versiones distintas
-echo         sobre el mismo perfil reconstruyen una el catalogo de la otra.
+echo =======================================================================
+echo  [AVISO] Skyrim NPC Studio ya se encuentra en ejecucion.
+echo =======================================================================
+echo  Se detecto un proceso activo de SkyrimNpcStudio.exe.
+echo.
+set /p "USER_CHOICE=Deseas cerrar la instancia activa y reiniciar? [S/N]: "
+if /I "%USER_CHOICE%"=="S" (
+    echo Cerrando instancia previa...
+    taskkill /F /IM "SkyrimNpcStudio.exe" 2>nul
+    ping -n 2 127.0.0.1 >nul
+    goto RECHECK_INSTANCE
+)
+echo Cancelado por el usuario.
+exit /b 0
+
+:ALREADY_RUNNING
+echo.
+echo [AVISO] Skyrim NPC Studio esta abierto desde dist\: cierralo antes de empaquetar.
 pause
 exit /b 0
 
 :BUILD_LOCAL_RELEASE
 echo =======================================================================
-echo  Compilando la Release local (build\package, sin empaquetar ni Git)...
+echo  Compilando Release local (build\package)...
 echo =======================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%~dp0scripts\dev-env.ps1'; cmake --build '%~dp0build\package'; exit $LASTEXITCODE"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1'; cmake --build '%ROOT%build\package'; exit $LASTEXITCODE }"
 if errorlevel 1 (
     echo.
     echo [ERROR] Error al compilar la Release local.
@@ -123,27 +162,20 @@ if errorlevel 1 (
 goto RUN_LOCAL_RELEASE
 
 :RUN_LOCAL_RELEASE
-if not exist "%LOCAL_APP%" (
+if not exist "%LOCAL_EXE%" (
     echo [AVISO] No existe la Release local: usa --build-release para compilarla.
     pause
     exit /b 1
 )
 echo Iniciando Skyrim NPC Studio (Release local de build\package)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%~dp0scripts\dev-env.ps1' *> $null; Start-Process -FilePath '%LOCAL_APP%' -WorkingDirectory '%LOCAL_DIR%'"
-exit /b 0
-
-:ALREADY_RUNNING
-echo.
-echo [AVISO] Skyrim NPC Studio ya esta abierto: no se cierra para no perder cambios sin guardar.
-echo         Cierralo y vuelve a ejecutar este archivo para actualizar el paquete.
-pause
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1' | Out-Null; Start-Process -FilePath '%LOCAL_EXE%' -WorkingDirectory '%LOCAL_DIR%' }"
 exit /b 0
 
 :BUILD_DEBUG
 echo =======================================================================
 echo  Compilando Skyrim NPC Studio (Modo Debug)...
 echo =======================================================================
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%~dp0scripts\dev-env.ps1'; cmake --build --preset debug --target SkyrimNpcStudio"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1'; cmake --build --preset debug --target SkyrimNpcStudio }"
 if errorlevel 1 (
     echo.
     echo [ERROR] Error durante la compilacion de depuracion.
@@ -153,9 +185,9 @@ if errorlevel 1 (
 goto RUN_DEBUG
 
 :RUN_DEBUG
-if not exist "%DEBUG_APP%" (
+if not exist "%DEBUG_EXE%" (
     echo [AVISO] El ejecutable Debug no existe todavia. Compilando primero...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%~dp0scripts\dev-env.ps1'; cmake --build --preset debug --target SkyrimNpcStudio"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1'; cmake --build --preset debug --target SkyrimNpcStudio }"
     if errorlevel 1 (
         echo [ERROR] No se pudo compilar el binario Debug.
         pause
@@ -163,5 +195,5 @@ if not exist "%DEBUG_APP%" (
     )
 )
 echo Iniciando Skyrim NPC Studio (Modo Debug / Dev)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '%~dp0scripts\dev-env.ps1'; Start-Process -FilePath '%DEBUG_APP%' -WorkingDirectory '%~dp0build\debug\bin'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1' | Out-Null; Start-Process -FilePath '%DEBUG_EXE%' -WorkingDirectory '%ROOT%build\debug\bin' }"
 exit /b 0
