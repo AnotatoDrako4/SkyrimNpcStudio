@@ -1,0 +1,41 @@
+{
+  "agent": "Claude Code",
+  "timestamp": "2026-10-21T16:43:39-03:00",
+  "status": "REFERENCE_INTEGRATION_ROUND2_COMPLETE_PENDING_SKYRIM",
+  "mission": "reference-integration: GenerateFollower / NPC Plugin Chooser 2 / Effigy",
+  "increment": "Round 2: persistent head choice, redo stale portraits, NPC names, 3-4 source grid, A4 skin match estimate",
+  "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
+  "evidence": "out/reference-integration/20261021-refint-a1/CHECKPOINT_R2.md",
+  "activeLock": null,
+  "buildDirectories": [
+    "build/refint",
+    "build/refint-app"
+  ],
+  "usesBuildSlot": false,
+  "exclusiveOwnedPathsTouched": [
+    "apps/desktop/viewmodels/studio_controller.hpp",
+    "apps/desktop/viewmodels/studio_controller.cpp",
+    "apps/desktop/viewmodels/scene_viewmodel.hpp",
+    "apps/desktop/viewmodels/scene_viewmodel.cpp",
+    "engines/mo2/"
+  ],
+  "reservedPathsTouched": [
+    "apps/desktop/CMakeLists.txt (additive only: A1 +6, A3 +2, A2 +1, round 2 +1 lines)"
+  ],
+  "reservedPathsNotTouched": [
+    "apps/desktop/qml/Main.qml",
+    "apps/desktop/qml/Theme.qml",
+    "apps/desktop/qml/CharacterViewport.qml",
+    "tests/CMakeLists.txt",
+    "scripts/*.ps1"
+  ],
+  "antigravityPathsTouched": [],
+  "gitUsage": "DISABLED_PER_OWNER_POLICY",
+  "exportsEnabled": false,
+  "skyrimValidationStatus": "PENDING_HUMAN_INSPECTION",
+  "workerContractChange": "catalog.searchHeadParts: optional formKeys (backward compatible)",
+  "blocked": [
+    "B follower wizard",
+    "C multi-follower (need F0/D1/D3 and verified native FaceGen)"
+  ]
+}

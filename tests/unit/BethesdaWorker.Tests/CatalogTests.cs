@@ -86,6 +86,26 @@ public sealed class CatalogTests(CatalogFixture fixture) : IClassFixture<Catalog
     }
 
     [Fact]
+    public void SearchNpcs_ByFormKeys_ReturnsExactlyThoseNpcs_IgnoresCaseAndCannotInjectSql()
+    {
+        NpcSearchResponse Search(NpcSearchRequest r) => fixture.State.Read(c => c.Queries.SearchNpcs(r));
+
+        Assert.Equal(LydiaKey, Assert.Single(Search(new() { FormKeys = [LydiaKey] }).Items).FormKey);
+        var lower = Search(new() { FormKeys = [LydiaKey.ToLowerInvariant(), "FFFFFF:Nothing.esm"] });
+        Assert.Equal(LydiaKey, Assert.Single(lower.Items).FormKey);
+        Assert.Equal(1, lower.Total);
+        Assert.Empty(Search(new() { FormKeys = ["x') OR 1=1 --"] }).Items);
+
+        var some = Search(new() { Limit = 200 }).Items.Take(2).Select(i => i.FormKey).ToList();
+        Assert.Equal(2, Search(new() { FormKeys = some }).Total);
+
+        // It narrows like any other filter, it does not replace them.
+        Assert.Empty(Search(new() { FormKeys = [LydiaKey], Sex = "male" }).Items);
+        // Without keys nothing changes.
+        Assert.Equal(4, Search(new() { FormKeys = [] }).Total);
+    }
+
+    [Fact]
     public void GetNpc_ShowsOverrideChainAndTheLostHeightEdit()
     {
         var npc = fixture.State.Read(c => c.Queries.GetNpc(LydiaKey))!;

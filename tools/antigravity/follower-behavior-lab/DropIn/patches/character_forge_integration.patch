@@ -1,0 +1,56 @@
+diff --git a/services/BethesdaWorker/Contracts/Protocol.cs b/services/BethesdaWorker/Contracts/Protocol.cs
+--- a/services/BethesdaWorker/Contracts/Protocol.cs
++++ b/services/BethesdaWorker/Contracts/Protocol.cs
+@@ -15,2 +15,2 @@
+     /// <summary>Additive changes (new optional fields, new methods) bump the minor version.</summary>
+-    public const int Minor = 5;
++    public const int Minor = 6;
+@@ -41,2 +41,7 @@
+     public const string CreationSearchRecords = "creation.searchRecords";
++    public const string CreationAnalyzeVoice = "creation.analyzeVoice";
++    public const string CreationGetBehaviorCatalog = "creation.getBehaviorCatalog";
++    public const string CreationApplyArchetype = "creation.applyArchetype";
++    public const string CreationUndoArchetype = "creation.undoArchetype";
++    public const string CreationValidateBehavior = "creation.validateBehavior";
+diff --git a/engines/ipc/include/sns/ipc/protocol.hpp b/engines/ipc/include/sns/ipc/protocol.hpp
+--- a/engines/ipc/include/sns/ipc/protocol.hpp
++++ b/engines/ipc/include/sns/ipc/protocol.hpp
+@@ -8,2 +8,2 @@
+-inline constexpr int kMinor = 5;
++inline constexpr int kMinor = 6;
+@@ -30,2 +30,7 @@
+ inline constexpr const char* kCreationSearchRecords = "creation.searchRecords";
++inline constexpr const char* kCreationAnalyzeVoice = "creation.analyzeVoice";
++inline constexpr const char* kCreationGetBehaviorCatalog = "creation.getBehaviorCatalog";
++inline constexpr const char* kCreationApplyArchetype = "creation.applyArchetype";
++inline constexpr const char* kCreationUndoArchetype = "creation.undoArchetype";
++inline constexpr const char* kCreationValidateBehavior = "creation.validateBehavior";
+diff --git a/services/BethesdaWorker/Rpc/WorkerRpcTarget.cs b/services/BethesdaWorker/Rpc/WorkerRpcTarget.cs
+--- a/services/BethesdaWorker/Rpc/WorkerRpcTarget.cs
++++ b/services/BethesdaWorker/Rpc/WorkerRpcTarget.cs
+@@ -37,2 +37,3 @@
+             Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords,
++                Methods.CreationAnalyzeVoice, Methods.CreationGetBehaviorCatalog, Methods.CreationApplyArchetype, Methods.CreationUndoArchetype, Methods.CreationValidateBehavior],
+@@ -137,2 +138,22 @@
+     public IReadOnlyList<CreationRecord> SearchCreationRecords(CreationSearchRequest request) =>
+         Guard(() => state.Read(c => CreationRecordQueries.Search(c.Session, request)));
++
++    [JsonRpcMethod(Methods.CreationAnalyzeVoice)]
++    public CreationAnalyzeVoiceResponse AnalyzeVoice(CreationAnalyzeVoiceRequest request) =>
++        Guard(() => state.Read(c => FollowerBehaviorRpcDispatcher.HandleAnalyzeVoice(request)));
++
++    [JsonRpcMethod(Methods.CreationGetBehaviorCatalog)]
++    public CreationBehaviorCatalogResponse GetBehaviorCatalog(CreationBehaviorCatalogRequest request) =>
++        Guard(() => state.Read(c => FollowerBehaviorRpcDispatcher.HandleGetCatalog(request)));
++
++    [JsonRpcMethod(Methods.CreationApplyArchetype)]
++    public CreationApplyArchetypeResponse ApplyArchetype(CreationApplyArchetypeRequest request) =>
++        Guard(() => state.Read(c => FollowerBehaviorRpcDispatcher.HandleApplyArchetype(request)));
++
++    [JsonRpcMethod(Methods.CreationUndoArchetype)]
++    public CreationUndoArchetypeResponse UndoArchetype(CreationUndoArchetypeRequest request) =>
++        Guard(() => FollowerBehaviorRpcDispatcher.HandleUndoArchetype(request));
++
++    [JsonRpcMethod(Methods.CreationValidateBehavior)]
++    public CreationValidateBehaviorResponse ValidateBehavior(CreationValidateBehaviorRequest request) =>
++        Guard(() => state.Read(c => FollowerBehaviorRpcDispatcher.HandleValidateBehavior(request)));

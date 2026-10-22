@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1.0.0",
+  "fixtureDirectory": "tests/antigravity/follower-behavior-lab/fixtures/basic",
+  "profileName": "default",
+  "pluginName": "FollowerBehaviorTest.esp",
+  "draft": {
+    "name": "Astrid Shield-Maiden",
+    "editorId": "SNS_AstridFollower",
+    "description": "Original follower draft validated by Antigravity Follower Behavior Lab.",
+    "raceFormKey": "013746:Skyrim.esm",
+    "female": true,
+    "voiceFormKey": "0A0100:Skyrim.esm",
+    "classFormKey": "013176:Skyrim.esm",
+    "combatStyleFormKey": "03BE1C:Skyrim.esm",
+    "height": 1.0,
+    "weight": 50.0,
+    "level": 15,
+    "minLevel": 10,
+    "maxLevel": 50,
+    "health": 220,
+    "magicka": 100,
+    "stamina": 180,
+    "skills": {
+      "OneHanded": 60,
+      "Block": 55,
+      "HeavyArmor": 60
+    },
+    "headPartFormKeys": [],
+    "hairColorFormKey": "",
+    "headTextureFormKey": "",
+    "outfitArmorFormKeys": [
+      "013952:Skyrim.esm",
+      "013951:Skyrim.esm",
+      "013953:Skyrim.esm"
+    ],
+    "inventory": [
+      {
+        "formKey": "013989:Skyrim.esm",
+        "count": 1
+      }
+    ],
+    "factions": [
+      {
+        "formKey": "05C84D:Skyrim.esm",
+        "rank": 0
+      },
+      {
+        "formKey": "05C84E:Skyrim.esm",
+        "rank": -1
+      }
+    ],
+    "packageFormKeys": [
+      "0A0301:Skyrim.esm",
+      "0A0302:Skyrim.esm"
+    ],
+    "spellFormKeys": [],
+    "perkFormKeys": [
+      "058F68:Skyrim.esm",
+      "0BCD2A:Skyrim.esm"
+    ]
+  }
+}

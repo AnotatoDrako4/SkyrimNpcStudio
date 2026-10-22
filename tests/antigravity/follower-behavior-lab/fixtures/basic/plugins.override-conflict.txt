@@ -1,0 +1,5 @@
+﻿# Antigravity Follower Behavior Lab - Override Conflict Profile
+*Skyrim.esm
+*FollowerVoiceAddon.esp
+*BrokenVoiceOverride.esp
+-DisabledCombatMod.esp

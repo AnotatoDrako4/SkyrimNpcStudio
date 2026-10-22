@@ -134,6 +134,8 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   portrait_scene_->set_portrait_mode(true);
   portrait_scene_->setPreviewArmor(QVariant::fromValue(QStringList{}));
   portraits_ = new PortraitRenderer(portrait_scene_, this);
+  sources_ = new AppearanceSources(portraits_, this);
+  preset_heads_ = new PresetHeadChecker(worker_, this);
   forge_ = new CharacterForgeViewModel([this] {
     creation::ForgeEnvironment env;
     env.instance_name = ss(instance_name_);
@@ -314,6 +316,12 @@ void StudioController::loadProfile(const QString& profile) {
   armor_preview_->clear();
   // Portraits of the previous profile stop now (queue, current head, states); the new one starts its own.
   portraits_->set_profile(nullptr, {});
+  sources_->set_profile(nullptr, {});
+  preset_heads_->set_profile(nullptr);
+  ++names_epoch_;  // names asked for the old profile's catalog are dropped on return, and asked again for the new one
+  npc_names_.clear();
+  npc_names_asked_.clear();
+  emit npcNamesChanged();
   if (npc_more_cancel_) *npc_more_cancel_ = true;  // a page of the old profile is never appended
   npc_more_cancel_ = nullptr;
   ++npc_search_serial_;
@@ -434,6 +442,8 @@ void StudioController::start_index() {
   const auto profile_key = instance_name_ + "-" + qs(s.profile.name) + "-" + QString::fromLatin1(hash);
   load_review_book(profile_key);
   portraits_->set_profile(snapshot_, profile_key);
+  sources_->set_profile(snapshot_, profile_key);
+  preset_heads_->set_profile(snapshot_, profile_key);
   const auto cache = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/cache";
   QDir().mkpath(cache);
 
@@ -671,6 +681,39 @@ QString scan_key(const QString& form_key) {
   return colon < 0 || !ok ? form_key.toLower() : QString::number(id, 16) + ':' + form_key.mid(colon + 1).toLower();
 }
 }  // namespace
+
+QString StudioController::npcKey(const QString& form_key) const { return scan_key(form_key); }
+
+void StudioController::resolveNpcNames(const QStringList& form_keys) {
+  if (phase_ != Phase::Ready) return;
+  Json keys = Json::array();
+  QStringList asked;
+  for (const auto& form_key : form_keys) {
+    const auto key = scan_key(form_key);
+    if (form_key.isEmpty() || npc_names_asked_.contains(key) || asked.contains(key)) continue;
+    asked << key;
+    keys.push_back(ss(form_key));
+    if (keys.size() >= 200) break;  // the worker honors at most 200 keys; the caller asks again for the rest
+  }
+  if (asked.isEmpty()) return;
+  for (const auto& key : asked) npc_names_asked_.insert(key);
+  const int profile_serial = names_epoch_;
+  worker_->call(method::kSearchNpcs, Json{{"formKeys", keys}, {"limit", 200}}, 30s, this, [this, asked, profile_serial](const Json& r) {
+    if (profile_serial != names_epoch_) return;  // another profile since: these names belong to nothing on screen
+    for (const auto& key : asked) npc_names_.insert(key, QString());  // unknown until the catalog says otherwise
+    for (const auto& item : r.value("items", Json::array())) {
+      const auto form_key = qs(item.value("formKey", std::string()));
+      auto name = qs(item.value("name", std::string()));
+      if (name.isEmpty()) name = qs(item.value("editorId", std::string()));
+      npc_names_.insert(scan_key(form_key), name);
+    }
+    emit npcNamesChanged();
+  }, [this, asked, profile_serial](int code, const QString& message, const Json&) {
+    if (profile_serial != names_epoch_) return;
+    for (const auto& key : asked) npc_names_asked_.remove(key);  // asked again next time
+    if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Nombres de NPC: %1").arg(message));
+  });
+}
 
 void StudioController::loadMoreNpcs() {
   if (phase_ != Phase::Ready || npc_more_cancel_ || npc_rows_.isEmpty() || npc_rows_.size() >= npc_total_) return;
@@ -961,6 +1004,8 @@ void StudioController::refresh_appearance_control() {
       out["resolution"] = resolution;
     }
     out["deviation"] = in.regeneration_deviation ? QVariant(*in.regeneration_deviation) : QVariant();
+    // Every source the profile offers for this face, side by side (read-only; its own thread, pictures and draft file).
+    sources_->set_npc(form_key, npc_.value("summary").toMap().value("name").toString(), in, npc_);
   }
   // faceGenChanged fires on every rebuild: notify only when the map itself changed.
   auto previous = appearance_control_;

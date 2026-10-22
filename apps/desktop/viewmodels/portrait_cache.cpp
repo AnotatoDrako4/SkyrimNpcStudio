@@ -12,6 +12,9 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
+
+#include <algorithm>
 
 namespace sns::app {
 namespace {
@@ -334,6 +337,154 @@ int PortraitCache::clear_renders(QString* error) {
     return -1;
   }
   return removed;
+}
+
+QList<PortraitCache::InspectRow> PortraitCache::inspect(const QString& renderer_version, const QString& snapshot_digest,
+                                                        const std::function<PortraitResource(const QString& path)>& current) const {
+  QList<InspectRow> rows;
+  const QDir dir(directory_);
+  QSet<QString> referenced;  // lower-case image file names some entry names
+  const auto size_of = [&](const QString& file) {
+    const QFileInfo info(dir.filePath(file));
+    return info.isFile() ? info.size() : qint64{0};
+  };
+  for (const auto& name : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
+    InspectRow row;
+    const bool capture = name.endsWith(QLatin1String(".skyrim.json"));
+    const bool previous = name.endsWith(QLatin1String(".previous.json"));
+    row.kind = capture ? QStringLiteral("capture") : previous ? QStringLiteral("previous") : QStringLiteral("render");
+    row.name = name.left(name.size() - (capture ? 12 : previous ? 14 : 5));
+    row.files = {name};
+    row.bytes = size_of(name);
+    const auto damaged = [&row](const QString& code, const QString& detail = {}) {
+      row.state = QStringLiteral("damaged");
+      row.code = code;
+      row.detail = detail;
+    };
+    QFile file(dir.filePath(name));
+    if (!file.open(QIODevice::ReadOnly)) {
+      damaged(QStringLiteral("entry-unreadable"), file.errorString());
+      rows.push_back(std::move(row));
+      continue;
+    }
+    QString error;
+    const auto entry = portrait_entry_from_json(file.readAll(), &error);
+    if (!entry) {
+      damaged(QStringLiteral("entry-invalid"), error);
+      rows.push_back(std::move(row));
+      continue;
+    }
+    const auto& e = *entry;
+    row.form_key = e.form_key;
+    row.created_at = e.created_at;
+    row.renderer_version = e.renderer_version;
+    row.files << e.image_file;
+    referenced.insert(e.image_file.toLower());
+    QFile image(dir.filePath(e.image_file));
+    const bool image_there = image.open(QIODevice::ReadOnly);
+    row.bytes += image_there ? image.size() : 0;
+    const auto want_source = capture ? kSkyrimCapture : kStudioRender;
+    if (entry_name(e.form_key) != row.name) {
+      damaged(QStringLiteral("other-npc"), e.form_key);
+    } else if (e.source != want_source) {
+      damaged(QStringLiteral("unknown-source"), e.source);
+    } else if (row.kind == QLatin1String("render") && e.renderer_version != renderer_version) {
+      row.state = QStringLiteral("stale");
+      row.code = QStringLiteral("renderer-changed");
+      row.detail = QStringLiteral("%1 → %2").arg(e.renderer_version, renderer_version);
+    } else if (row.kind == QLatin1String("render") && e.snapshot_digest != snapshot_digest) {
+      row.state = QStringLiteral("stale");
+      row.code = QStringLiteral("profile-changed");
+    } else if (!image_there) {
+      damaged(QStringLiteral("image-missing"), e.image_file);
+    } else if (sha256_hex(image.readAll()) != e.image_sha256) {
+      damaged(QStringLiteral("image-hash"), e.image_file);
+    } else if (row.kind != QLatin1String("render")) {
+      row.state = QStringLiteral("kept");
+      row.code = QStringLiteral("ok");
+    } else {
+      QStringList changed;
+      for (const auto& r : e.resources) {
+        if (current(r.path) != r) changed << r.path;
+      }
+      row.changed_resources = static_cast<int>(changed.size());
+      if (changed.isEmpty()) {
+        row.state = QStringLiteral("valid");
+        row.code = QStringLiteral("ok");
+      } else {
+        changed.sort(Qt::CaseInsensitive);
+        row.state = QStringLiteral("stale");
+        row.code = QStringLiteral("resource-changed");
+        row.detail = changed.first();
+      }
+    }
+    rows.push_back(std::move(row));
+  }
+  // Images no entry names: the ones the studio made ("<name>-<hash>.png") can go; anything else is only listed.
+  for (const auto& info : dir.entryInfoList(QDir::Files)) {
+    const auto name = info.fileName();
+    if (name.endsWith(QLatin1String(".json")) || referenced.contains(name.toLower())) continue;
+    InspectRow row;
+    row.kind = QStringLiteral("orphan");
+    row.state = QStringLiteral("orphan");
+    const bool studio_png = name.endsWith(QLatin1String(".png"), Qt::CaseInsensitive) && !name.contains(QLatin1String("-skyrim-"));
+    row.code = studio_png ? QStringLiteral("orphan-image") : QStringLiteral("unknown-file");
+    row.detail = name;
+    row.files = {name};
+    row.bytes = info.size();
+    rows.push_back(std::move(row));
+  }
+  // Worst first, so the list opens on what needs a decision.
+  const auto rank = [](const InspectRow& r) {
+    if (r.kind == QLatin1String("render") && r.state == QLatin1String("stale")) return 0;
+    if (r.state == QLatin1String("damaged")) return 1;
+    if (r.state == QLatin1String("orphan")) return 2;
+    if (r.state == QLatin1String("valid")) return 3;
+    return 4;
+  };
+  std::stable_sort(rows.begin(), rows.end(), [&](const InspectRow& a, const InspectRow& b) {
+    return rank(a) != rank(b) ? rank(a) < rank(b) : a.name < b.name;
+  });
+  return rows;
+}
+
+bool PortraitCache::is_unusable(const InspectRow& row) {
+  if (row.kind == QLatin1String("render")) return row.state == QLatin1String("stale") || row.state == QLatin1String("damaged");
+  if (row.kind == QLatin1String("previous")) return row.state == QLatin1String("damaged");
+  if (row.kind == QLatin1String("orphan")) return row.code == QLatin1String("orphan-image");
+  return false;  // captures are the user's; kept and valid rows are in use
+}
+
+PortraitCache::PurgeResult PortraitCache::remove_unusable(const QString& renderer_version, const QString& snapshot_digest,
+                                                          const std::function<PortraitResource(const QString& path)>& current, QString* error) {
+  PurgeResult result;
+  const QDir dir(directory_);
+  const auto rows = inspect(renderer_version, snapshot_digest, current);
+  QSet<QString> keep;  // files a row that stays still names (a render and the one it replaced can share one image)
+  for (const auto& row : rows) {
+    if (is_unusable(row)) continue;
+    for (const auto& f : row.files) keep.insert(f.toLower());
+  }
+  QStringList failed;
+  for (const auto& row : rows) {
+    if (!is_unusable(row)) continue;
+    ++result.rows;
+    if (row.kind == QLatin1String("render") && !row.form_key.isEmpty()) result.form_keys << row.form_key;
+    for (const auto& f : row.files) {
+      if (keep.contains(f.toLower())) continue;
+      const QFileInfo info(dir.filePath(f));
+      if (!info.isFile()) continue;
+      const auto size = info.size();
+      if (QFile::remove(info.absoluteFilePath())) {
+        ++result.files;
+        result.bytes += size;
+      } else {
+        failed << f;
+      }
+    }
+  }
+  if (!failed.isEmpty() && error) *error = QStringLiteral("could not remove: %1").arg(failed.join(QStringLiteral(", ")));
+  return result;
 }
 
 }  // namespace sns::app

@@ -442,9 +442,16 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
+      "followerbehaviorlab": {
+        "type": "Project",
+        "dependencies": {
+          "Mutagen.Bethesda.Skyrim": "[0.54.4, )"
+        }
+      },
       "SkyrimNpcStudio.BethesdaWorker": {
         "type": "Project",
         "dependencies": {
+          "FollowerBehaviorLab": "[1.0.0, )",
           "Microsoft.Data.Sqlite": "[10.0.12, )",
           "Mutagen.Bethesda.Skyrim": "[0.54.4, )",
           "StreamJsonRpc": "[2.25.29, )"

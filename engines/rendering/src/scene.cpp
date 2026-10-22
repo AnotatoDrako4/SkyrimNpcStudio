@@ -685,6 +685,66 @@ std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks)
 
 bool is_covered(std::uint32_t slots, std::uint32_t covered) { return (slots & covered) != 0; }
 
+std::optional<std::array<float, 3>> median_skin_color(const textures::DdsImage& image, const RenderPart& part) {
+  if (image.format != textures::TextureFormat::RGBA8 || image.width == 0 || image.height == 0) return std::nullopt;
+  const std::size_t texels = static_cast<std::size_t>(image.width) * image.height;
+  if (image.data.size() < texels * 4) return std::nullopt;
+  // Coverage of the shape's UV triangles on a coarse grid: a cell is "used" when its centre lies inside a triangle (the same u * size,
+  // v * size texel convention the normal-map bake uses). The texture is then read at the centres of the used cells.
+  constexpr int kGrid = 256;
+  const std::size_t vertex_count = part.vertices.size() / kFloatsPerVertex;
+  std::vector<std::uint8_t> used(static_cast<std::size_t>(kGrid) * kGrid, 0);
+  bool any = false;
+  for (std::size_t t = 0; t + 2 < part.indices.size(); t += 3) {
+    const std::uint32_t id[3] = {part.indices[t], part.indices[t + 1], part.indices[t + 2]};
+    if (id[0] >= vertex_count || id[1] >= vertex_count || id[2] >= vertex_count) continue;
+    float x[3], y[3];
+    for (int k = 0; k < 3; ++k) {
+      x[k] = part.vertices[id[k] * kFloatsPerVertex + 6] * kGrid;
+      y[k] = part.vertices[id[k] * kFloatsPerVertex + 7] * kGrid;
+    }
+    const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+    if (!std::isfinite(area) || std::abs(area) < 1e-6f) continue;
+    const int x0 = std::max(0, static_cast<int>(std::floor(std::min({x[0], x[1], x[2]}))));
+    const int x1 = std::min(kGrid - 1, static_cast<int>(std::ceil(std::max({x[0], x[1], x[2]}))));
+    const int y0 = std::max(0, static_cast<int>(std::floor(std::min({y[0], y[1], y[2]}))));
+    const int y1 = std::min(kGrid - 1, static_cast<int>(std::ceil(std::max({y[0], y[1], y[2]}))));
+    for (int cy = y0; cy <= y1; ++cy) {
+      for (int cx = x0; cx <= x1; ++cx) {
+        const float px = cx + 0.5f, py = cy + 0.5f;
+        const float w0 = ((x[1] - px) * (y[2] - py) - (x[2] - px) * (y[1] - py)) / area;
+        const float w1 = ((x[2] - px) * (y[0] - py) - (x[0] - px) * (y[2] - py)) / area;
+        const float w2 = 1.0f - w0 - w1;
+        if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+          used[static_cast<std::size_t>(cy) * kGrid + cx] = 1;
+          any = true;
+        }
+      }
+    }
+  }
+  if (!any) return std::nullopt;
+  std::vector<std::uint8_t> r, g, b;
+  const auto* px = reinterpret_cast<const std::uint8_t*>(image.data.data());
+  for (int cy = 0; cy < kGrid; ++cy) {
+    for (int cx = 0; cx < kGrid; ++cx) {
+      if (!used[static_cast<std::size_t>(cy) * kGrid + cx]) continue;
+      const std::size_t tx = std::min<std::size_t>(image.width - 1, static_cast<std::size_t>((cx + 0.5f) / kGrid * image.width));
+      const std::size_t ty = std::min<std::size_t>(image.height - 1, static_cast<std::size_t>((cy + 0.5f) / kGrid * image.height));
+      const std::size_t i = ty * image.width + tx;
+      if (px[4 * i + 3] < 128) continue;
+      r.push_back(px[4 * i]);
+      g.push_back(px[4 * i + 1]);
+      b.push_back(px[4 * i + 2]);
+    }
+  }
+  if (r.empty()) return std::nullopt;
+  const auto median = [](std::vector<std::uint8_t>& v) {
+    std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+    return static_cast<float>(v[v.size() / 2]) / 255.0f;
+  };
+  return std::array<float, 3>{median(r), median(g), median(b)};
+}
+
 std::vector<std::string> smp_collision_shapes(std::string_view xml) {
   return parse_smp_xml(xml).collision_shapes;
 }
@@ -1052,6 +1112,19 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     }
     part.diffuse = key;
     part.tint.reset();  // applied in the texture: a material multiply on top would tint twice
+  }
+
+  // ---- 3d. median skin color of the head and of the body shapes (estimate of the seam at the neck) --
+  // Measured on what is drawn: the head's composited diffuse (base + FaceGen tint) and the body's (diffuse + skin tone).
+  for (auto& part : scene.parts) {
+    const bool skin_shape = (part.group == "skin" && part.shader_type == nif::kShaderSkinTint) || (part.group == "head" && !part.face_tint.empty());
+    if (!skin_shape || !part.shown_by_default || part.diffuse.empty()) continue;
+    const auto texture = scene.textures.find(part.diffuse);
+    if (texture == scene.textures.end() || !texture->second) continue;
+    if (const auto median = median_skin_color(*texture->second, part)) {
+      part.has_skin_median = true;
+      part.skin_median = *median;
+    }
   }
 
   // ---- 3c. model-space normal maps baked to tangent space ----------------------------------------

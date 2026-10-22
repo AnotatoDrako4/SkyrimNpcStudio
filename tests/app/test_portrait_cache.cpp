@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
 #include <QImage>
@@ -318,4 +319,228 @@ TEST_CASE("Portrait cache: clearing removes the studio renders and keeps the Sky
   CHECK_FALSE(cache.previous("0A2C8E:Skyrim.esm"));
   CHECK(QFile::exists(outside));
   CHECK(QFile::exists(shot));
+}
+
+namespace {
+
+const QString kMesh = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\skyrim.esm\\000a2c8e.nif");
+
+PortraitCache::InspectRow row_of(const QList<PortraitCache::InspectRow>& rows, const QString& form_key, const QString& kind = QStringLiteral("render")) {
+  for (const auto& r : rows) {
+    if (r.kind == kind && PortraitCache::entry_name(r.form_key) == PortraitCache::entry_name(form_key)) return r;
+  }
+  return {};
+}
+
+}  // namespace
+
+TEST_CASE("Portrait inspector: a render is valid, or stale with the reason lookup() gives", "[portrait][inspector]") {
+  sns::test::TempDir dir;
+  auto profile = lydia_profile();
+  PortraitCache cache(qpath(dir.path() / "portraits"));
+  QString error;
+  REQUIRE(cache.store(entry_for("0A2C8E:Skyrim.esm", profile), kPng, &error));
+  const auto now = [&](const QString& p) { return profile.current(p); };
+  const auto lookup_state = [&](const QString& renderer, const QString& digest) { return cache.lookup("0A2C8E:Skyrim.esm", renderer, digest, now).state; };
+
+  auto rows = cache.inspect("portrait-v1", "snapshot-A", now);
+  REQUIRE(rows.size() == 1);
+  CHECK(rows[0].kind == "render");
+  CHECK(rows[0].state == "valid");
+  CHECK(rows[0].code == "ok");
+  CHECK(rows[0].files.size() == 2);  // its entry and its image
+  CHECK(rows[0].bytes > static_cast<qint64>(kPng.size()));
+  CHECK(rows[0].form_key == "0A2C8E:Skyrim.esm");
+  CHECK_FALSE(PortraitCache::is_unusable(rows[0]));
+  CHECK(lookup_state("portrait-v1", "snapshot-A") == PortraitCacheState::Valid);
+
+  rows = cache.inspect("portrait-v2", "snapshot-A", now);
+  CHECK(rows[0].state == "stale");
+  CHECK(rows[0].code == "renderer-changed");
+  CHECK(rows[0].detail.contains("portrait-v1"));
+  CHECK(PortraitCache::is_unusable(rows[0]));
+  CHECK(lookup_state("portrait-v2", "snapshot-A") == PortraitCacheState::Stale);
+
+  rows = cache.inspect("portrait-v1", "snapshot-B", now);
+  CHECK(rows[0].state == "stale");
+  CHECK(rows[0].code == "profile-changed");
+  CHECK(lookup_state("portrait-v1", "snapshot-B") == PortraitCacheState::Stale);
+
+  profile.resources[kMesh].size += 1;  // the head's mesh is another file now
+  rows = cache.inspect("portrait-v1", "snapshot-A", now);
+  CHECK(rows[0].state == "stale");
+  CHECK(rows[0].code == "resource-changed");
+  CHECK(rows[0].changed_resources == 1);
+  CHECK(rows[0].detail == kMesh);
+  CHECK(lookup_state("portrait-v1", "snapshot-A") == PortraitCacheState::Stale);
+}
+
+TEST_CASE("Portrait inspector: damaged files are named, never mistaken for valid ones", "[portrait][inspector]") {
+  sns::test::TempDir dir;
+  const auto profile = lydia_profile();
+  const auto folder = qpath(dir.path() / "portraits");
+  PortraitCache cache(folder);
+  QString error;
+  REQUIRE(cache.store(entry_for("000001:Skyrim.esm", profile), kPng, &error));
+  REQUIRE(cache.store(entry_for("000002:Skyrim.esm", profile), kPng + "2", &error));
+  REQUIRE(cache.store(entry_for("000003:Skyrim.esm", profile), kPng + "3", &error));
+  REQUIRE(QFile::remove(cache.current("000001:Skyrim.esm")->image_path));  // image gone
+  {
+    QFile f(cache.current("000002:Skyrim.esm")->image_path);  // image replaced by other bytes
+    REQUIRE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write("not the portrait");
+  }
+  {
+    QFile f(QDir(folder).filePath("00000004_skyrim.esm.json"));  // an entry that is not one
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    f.write("{ this is not json");
+  }
+  const auto now = [&](const QString& p) { return profile.current(p); };
+  const auto rows = cache.inspect("portrait-v1", "snapshot-A", now);
+  CHECK(row_of(rows, "000001:Skyrim.esm").code == "image-missing");
+  CHECK(row_of(rows, "000002:Skyrim.esm").code == "image-hash");
+  CHECK(row_of(rows, "000003:Skyrim.esm").state == "valid");
+  int invalid = 0;
+  for (const auto& r : rows) invalid += r.code == "entry-invalid" ? 1 : 0;
+  CHECK(invalid == 1);
+  for (const auto& r : rows) {
+    if (r.code == "image-missing" || r.code == "image-hash" || r.code == "entry-invalid") {
+      CHECK(r.state == "damaged");
+      CHECK(PortraitCache::is_unusable(r));
+    }
+  }
+  // The worst come first.
+  CHECK(rows.last().state == "valid");
+  // lookup() agrees on what can be used.
+  CHECK(cache.lookup("000001:Skyrim.esm", "portrait-v1", "snapshot-A", now).state == PortraitCacheState::Stale);
+  CHECK(cache.lookup("000002:Skyrim.esm", "portrait-v1", "snapshot-A", now).state == PortraitCacheState::Stale);
+  CHECK(cache.lookup("000003:Skyrim.esm", "portrait-v1", "snapshot-A", now).state == PortraitCacheState::Valid);
+}
+
+TEST_CASE("Portrait inspector: removing the unusable keeps what is in use, the Skyrim captures and anything unknown", "[portrait][inspector]") {
+  sns::test::TempDir dir;
+  const auto current_profile = lydia_profile();
+  auto old_profile = lydia_profile();
+  old_profile.resources[kMesh].size = 5;  // what a stale render was made from
+  const auto folder = qpath(dir.path() / "portraits");
+  PortraitCache cache(folder);
+  QString error;
+  REQUIRE(cache.store(entry_for("000001:Skyrim.esm", current_profile), kPng, &error));        // valid
+  REQUIRE(cache.store(entry_for("000002:Skyrim.esm", old_profile), kPng + "2", &error));      // stale
+  REQUIRE(cache.store(entry_for("000003:Skyrim.esm", current_profile), kPng + "3", &error));  // valid, with a render it replaced
+  REQUIRE(cache.store(entry_for("000003:Skyrim.esm", current_profile), kPng + "3b", &error));
+  const auto shot = qpath(dir.path() / "shot.png");
+  QImage picture(16, 16, QImage::Format_RGB32);
+  picture.fill(Qt::green);
+  REQUIRE(picture.save(shot, "PNG"));
+  REQUIRE(cache.store_game_capture("000002:Skyrim.esm", shot, "2026-10-19T09:00:00.000-03:00", &error));
+  const QDir folder_dir(folder);
+  {
+    QFile f(folder_dir.filePath("0000000d_skyrim.esm-aaaaaaaaaaaa.png"));  // an image no entry names
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    f.write("orphan");
+  }
+  {
+    QFile f(folder_dir.filePath("notes.txt"));  // not ours
+    REQUIRE(f.open(QIODevice::WriteOnly));
+    f.write("keep");
+  }
+  const auto outside = qpath(dir.path() / "keep-me.png");
+  REQUIRE(picture.save(outside, "PNG"));
+  const auto now = [&](const QString& p) { return current_profile.current(p); };
+
+  const auto rows = cache.inspect("portrait-v1", "snapshot-A", now);
+  CHECK(row_of(rows, "000002:Skyrim.esm").state == "stale");
+  CHECK(row_of(rows, "000003:Skyrim.esm", "previous").state == "kept");
+  CHECK_FALSE(PortraitCache::is_unusable(row_of(rows, "000003:Skyrim.esm", "previous")));  // for comparison, expected to differ
+  CHECK(row_of(rows, "000002:Skyrim.esm", "capture").state == "kept");
+  int orphans = 0, unknown = 0;
+  for (const auto& r : rows) {
+    orphans += r.code == "orphan-image" ? 1 : 0;
+    unknown += r.code == "unknown-file" ? 1 : 0;
+  }
+  CHECK(orphans == 1);
+  CHECK(unknown == 1);
+
+  const auto stale_image = cache.current("000002:Skyrim.esm")->image_path;
+  const auto result = cache.remove_unusable("portrait-v1", "snapshot-A", now, &error);
+  CHECK(error.isEmpty());
+  CHECK(result.rows == 2);   // the stale render and the orphan image
+  CHECK(result.files == 3);  // entry + image + orphan
+  CHECK(result.bytes > 0);
+  CHECK(result.form_keys == QStringList{"000002:Skyrim.esm"});
+  CHECK_FALSE(QFile::exists(stale_image));
+  CHECK_FALSE(cache.current("000002:Skyrim.esm"));
+  CHECK(cache.current("000001:Skyrim.esm"));
+  CHECK(cache.current("000003:Skyrim.esm"));
+  CHECK(cache.previous("000003:Skyrim.esm"));
+  CHECK(cache.game_capture("000002:Skyrim.esm"));
+  CHECK(QFile::exists(folder_dir.filePath("notes.txt")));
+  CHECK(QFile::exists(outside));
+  CHECK_FALSE(QFile::exists(folder_dir.filePath("0000000d_skyrim.esm-aaaaaaaaaaaa.png")));
+
+  // Nothing left to remove, and removing again is harmless.
+  const auto again = cache.remove_unusable("portrait-v1", "snapshot-A", now, &error);
+  CHECK(again.rows == 0);
+  CHECK(again.files == 0);
+}
+
+TEST_CASE("Portrait inspector: a cache of a thousand portraits is inspected and cleaned in a bounded time", "[portrait][inspector]") {
+  sns::test::TempDir dir;
+  const auto current_profile = lydia_profile();
+  auto old_profile = lydia_profile();
+  old_profile.resources[kMesh].size = 5;
+  PortraitCache cache(qpath(dir.path() / "portraits"));
+  QString error;
+  constexpr int kPortraits = 1000;
+  for (int i = 0; i < kPortraits; ++i) {
+    const auto form_key = QStringLiteral("%1:Skyrim.esm").arg(0x100 + i, 6, 16, QLatin1Char('0'));
+    // Every fourth portrait is stale; each image is different (its hash is its name).
+    REQUIRE(cache.store(entry_for(form_key, i % 4 == 0 ? old_profile : current_profile), kPng + QByteArray::number(i), &error));
+  }
+  const auto now = [&](const QString& p) { return current_profile.current(p); };
+  QElapsedTimer clock;
+  clock.start();
+  const auto rows = cache.inspect("portrait-v1", "snapshot-A", now);
+  const auto inspect_ms = clock.elapsed();
+  int stale = 0, valid = 0;
+  for (const auto& r : rows) {
+    stale += r.state == "stale" ? 1 : 0;
+    valid += r.state == "valid" ? 1 : 0;
+  }
+  CHECK(rows.size() == kPortraits);
+  CHECK(stale == kPortraits / 4);
+  CHECK(valid == kPortraits - kPortraits / 4);
+  clock.restart();
+  const auto result = cache.remove_unusable("portrait-v1", "snapshot-A", now, &error);
+  const auto remove_ms = clock.elapsed();
+  CHECK(result.rows == kPortraits / 4);
+  CHECK(result.files == 2 * (kPortraits / 4));
+  CHECK(cache.usage().renders == kPortraits - kPortraits / 4);
+  WARN("inspect of " << kPortraits << " portraits: " << inspect_ms << " ms; inspect + removal of " << result.rows << ": " << remove_ms << " ms");
+  CHECK(inspect_ms < 20000);  // a very loose bound: the measured time is the evidence, this only catches something quadratic
+  CHECK(remove_ms < 20000);
+}
+
+TEST_CASE("Portrait inspector: an image a kept row still names survives the removal of the stale render that shared it", "[portrait][inspector]") {
+  sns::test::TempDir dir;
+  const auto profile = lydia_profile();
+  PortraitCache cache(qpath(dir.path() / "portraits"));
+  QString error;
+  auto first = entry_for("0A2C8E:Skyrim.esm", profile);
+  REQUIRE(cache.store(first, kPng, &error));
+  auto second = entry_for("0A2C8E:Skyrim.esm", profile);
+  second.snapshot_digest = "snapshot-B";  // the same pixels, made under another profile: the first one is kept as "previous"
+  REQUIRE(cache.store(second, kPng, &error));
+  const auto shared = cache.current("0A2C8E:Skyrim.esm")->image_path;
+  REQUIRE(cache.previous("0A2C8E:Skyrim.esm"));
+  REQUIRE(cache.previous("0A2C8E:Skyrim.esm")->image_path == shared);
+  const auto now = [&](const QString& p) { return profile.current(p); };
+
+  // Under a third profile the current render is stale, the previous one is only kept for comparison.
+  const auto result = cache.remove_unusable("portrait-v1", "snapshot-C", now, &error);
+  CHECK(result.rows == 1);
+  CHECK(QFile::exists(shared));
+  CHECK_FALSE(cache.current("0A2C8E:Skyrim.esm"));
+  CHECK(cache.previous("0A2C8E:Skyrim.esm"));
 }

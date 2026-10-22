@@ -19,6 +19,8 @@
 #include "worker_client.hpp"
 #include "scene_viewmodel.hpp"
 #include "portrait_renderer.hpp"
+#include "appearance_sources.hpp"
+#include "preset_head_checker.hpp"
 
 namespace sns::app {
 
@@ -39,6 +41,13 @@ class StudioController : public QObject {
   // NPC gallery portraits: their renderer and the scene it builds them with (fixed NPC, skin only).
   Q_PROPERTY(PortraitRenderer* portraits READ portraits CONSTANT)
   Q_PROPERTY(SceneViewModel* portraitScene READ portrait_scene CONSTANT)
+  // Appearance Source Matrix of the selected NPC and its A/B view (read-only; see AppearanceSources).
+  Q_PROPERTY(AppearanceSources* sources READ sources CONSTANT)
+  // Preset <-> Export Head readiness of a RaceMenu .jslot (diagnosis only; see PresetHeadChecker).
+  Q_PROPERTY(PresetHeadChecker* presetHeads READ preset_heads CONSTANT)
+  // Display names of NPCs asked for by FormKey (resolveNpcNames): npcKey(FormKey) -> name (or EditorID). Lists of FormKeys (the portrait
+  // cache inspector) show the name next to the key once the catalog answered.
+  Q_PROPERTY(QVariantMap npcNames READ npc_names NOTIFY npcNamesChanged)
   Q_PROPERTY(VariantListModel* instances READ instances CONSTANT)
   Q_PROPERTY(VariantListModel* mods READ mods CONSTANT)
   Q_PROPERTY(VariantListModel* diagnostics READ diagnostics CONSTANT)
@@ -95,6 +104,8 @@ class StudioController : public QObject {
   [[nodiscard]] SceneViewModel* armor_preview() const { return armor_preview_; }
   [[nodiscard]] PortraitRenderer* portraits() const { return portraits_; }
   [[nodiscard]] SceneViewModel* portrait_scene() const { return portrait_scene_; }
+  [[nodiscard]] AppearanceSources* sources() const { return sources_; }
+  [[nodiscard]] PresetHeadChecker* preset_heads() const { return preset_heads_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
   [[nodiscard]] VariantListModel* diagnostics() const { return diagnostics_; }
@@ -141,6 +152,11 @@ class StudioController : public QObject {
   Q_INVOKABLE void searchDonors(const QString& text);
   static constexpr int kNpcPage = 500;
   Q_INVOKABLE void selectNpc(const QString& form_key);
+  // Asks the catalog for the names of NPCs not asked about yet (batches of 200); the answer arrives through npcNames.
+  Q_INVOKABLE void resolveNpcNames(const QStringList& form_keys);
+  // The key npcNames uses for a FormKey ("0A2C8E:Skyrim.esm" and "000A2C8E:skyrim.esm" are the same NPC).
+  Q_INVOKABLE QString npcKey(const QString& form_key) const;
+  [[nodiscard]] QVariantMap npc_names() const { return npc_names_; }
   Q_INVOKABLE void setAppearanceFilter(const QString& filter);
   // What the last profile scan found for this NPC: {worst, codes, resolution, requiresReview, reviewState,
   // inputDigest}; empty when it was not analysed (no scan yet, or not a unique NPC).
@@ -174,6 +190,7 @@ class StudioController : public QObject {
   void progressChanged();
   void summaryChanged();
   void npcResultsChanged();
+  void npcNamesChanged();
   void armorResultsChanged();
   void armorPluginsChanged();
   void npcChanged();
@@ -227,6 +244,8 @@ class StudioController : public QObject {
   SceneViewModel* armor_preview_ = nullptr;
   SceneViewModel* portrait_scene_ = nullptr;
   PortraitRenderer* portraits_ = nullptr;
+  AppearanceSources* sources_ = nullptr;
+  PresetHeadChecker* preset_heads_ = nullptr;
   VariantListModel* instances_;
   VariantListModel* mods_;
   VariantListModel* diagnostics_;
@@ -237,6 +256,9 @@ class StudioController : public QObject {
   QVariantList armor_plugins_;
   QHash<QString, QVariantMap> plugin_counts_;  // plugin (lower-case) -> {npcRecords, armorRecords, outfitRecords}
   int npc_total_ = 0;
+  QVariantMap npc_names_;        // npcKey(FormKey) -> display name ("" when the catalog has no such NPC)
+  QSet<QString> npc_names_asked_;  // npcKey of every FormKey already asked about (reset with the profile)
+  int names_epoch_ = 0;            // bumped with every profile load: a name answer of an older one is dropped
   QList<QVariantMap> npc_rows_;  // last NPC search, before the appearance filter
   QString appearance_filter_;
   QHash<QString, QVariantMap> scan_states_;  // scan_key(FormKey) -> appearanceStateOf(), every analysed NPC

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>FollowerBehaviorLab</AssemblyName>
+    <RootNamespace>SkyrimNpcStudio.Antigravity.FollowerBehaviorLab</RootNamespace>
+    <Version>1.0.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+    <NoWarn>$(NoWarn);CA1707;CA1805</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FollowerBehaviorLab.Tests" />
+  </ItemGroup>
+
+</Project>

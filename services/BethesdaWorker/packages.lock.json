@@ -351,6 +351,12 @@
         "resolved": "0.13.1.398",
         "contentHash": "Cm9fOJZ5Meb7uFON2XtvO2oiw/2hxAnkXI+5enms0AGNRZu5vPhw1PF5H1B2W8SbRZxqE/hkzMkWdIOO0MGPzg=="
       },
+      "followerbehaviorlab": {
+        "type": "Project",
+        "dependencies": {
+          "Mutagen.Bethesda.Skyrim": "[0.54.4, )"
+        }
+      },
       "MessagePack": {
         "type": "CentralTransitive",
         "requested": "[2.5.305, )",

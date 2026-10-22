@@ -102,6 +102,43 @@ class PortraitCache {
   // number of files removed (-1 and `error` when one could not be removed).
   int clear_renders(QString* error);
 
+  // ---- Inspector: what every file of the folder is, and whether it can still be used.
+  // One row per entry (a studio render, the render it replaced, a Skyrim capture) and one per image no entry names.
+  //   kind  render:   state valid | stale | damaged            (stale: the profile or the renderer moved on)
+  //         previous: state kept  | damaged                    (kept for comparison: it is expected to differ from the profile)
+  //         capture:  state kept  | damaged                    (the user's own file: never removed by the studio)
+  //         orphan:   state orphan                             (an image no entry names; "other" files are only listed)
+  // `code` is stable (for tests and the UI): ok, renderer-changed, profile-changed, resource-changed, image-missing, image-hash,
+  // entry-unreadable, entry-invalid, other-npc, unknown-source, orphan-image, unknown-file.
+  struct InspectRow {
+    QString name;          // entry_name of the NPC ("" for an orphan)
+    QString form_key;      // "" for an orphan or an entry that cannot be read
+    QString kind;
+    QString state;
+    QString code;
+    QString detail;        // the first changed data path, the renderer versions, the file name...
+    QStringList files;     // file names of this row inside the folder
+    qint64 bytes = 0;
+    QString created_at;
+    QString renderer_version;
+    int changed_resources = 0;  // how many recorded resources differ now (a stale render)
+  };
+  [[nodiscard]] QList<InspectRow> inspect(const QString& renderer_version, const QString& snapshot_digest,
+                                          const std::function<PortraitResource(const QString& path)>& current) const;
+  // True for the rows the studio may delete on its own: stale or damaged renders, damaged previous renders and studio-made
+  // images no entry names. Never a valid render, a render kept for comparison, a Skyrim capture or an unknown file.
+  [[nodiscard]] static bool is_unusable(const InspectRow& row);
+  struct PurgeResult {
+    int rows = 0;
+    int files = 0;
+    qint64 bytes = 0;
+    QStringList form_keys;  // NPCs that lost their current render
+  };
+  // Inspects again (nothing from an older inspection is trusted) and removes the files of the unusable rows. An image that a
+  // row that stays still names is kept. Nothing outside this folder is touched. `error` is set when a file could not be removed.
+  PurgeResult remove_unusable(const QString& renderer_version, const QString& snapshot_digest,
+                              const std::function<PortraitResource(const QString& path)>& current, QString* error);
+
  private:
   [[nodiscard]] std::optional<PortraitVersion> read_version(const QString& json_name, const QString& form_key, QString* reason) const;
   QString directory_;

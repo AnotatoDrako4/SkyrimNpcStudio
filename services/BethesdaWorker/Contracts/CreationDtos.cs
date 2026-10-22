@@ -29,6 +29,8 @@ public sealed record NativeNpcDraft
     public IReadOnlyList<NativeInventoryItem> Inventory { get; init; } = [];
     public IReadOnlyList<NativeFaction> Factions { get; init; } = [];
     public IReadOnlyList<string> PackageFormKeys { get; init; } = [];
+    public IReadOnlyList<string> SpellFormKeys { get; init; } = [];
+    public IReadOnlyList<string> PerkFormKeys { get; init; } = [];
     public NativePlacement? Placement { get; init; }
 }
 

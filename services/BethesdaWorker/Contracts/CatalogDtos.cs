@@ -97,6 +97,9 @@ public sealed record NpcSearchRequest
     /// <summary>"unique", "generic", "templated" or "preset".</summary>
     public string? Kind { get; init; }
 
+    /// <summary>Protocol 1.7, optional: only these NPCs (FormKeys, case-insensitive, at most 200 are honored). Used to put names on lists of FormKeys.</summary>
+    public IReadOnlyList<string>? FormKeys { get; init; }
+
     public int Offset { get; init; }
     public int Limit { get; init; } = 200;
 }
@@ -305,6 +308,12 @@ public sealed record SearchHeadPartsRequest
     public string? Type { get; init; }
     public string? Text { get; init; }
     public string? Plugin { get; init; }
+    /// <summary>
+    /// Resolve exactly these head parts ("05150F:Skyrim.esm", plugin name case-insensitive; at most 200), whatever their
+    /// race or sex: the studio resolves the parts a RaceMenu preset names to their EditorIDs (optional, protocol 1.6).
+    /// Only the search without <see cref="NpcFormKey"/> honors it.
+    /// </summary>
+    public IReadOnlyList<string>? FormKeys { get; init; }
     public int Limit { get; init; } = 200;
 }
 

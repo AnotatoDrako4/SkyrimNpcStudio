@@ -5,6 +5,7 @@ add_library(sns_mo2 STATIC
   src/profile.cpp
   src/plugin_header.cpp
   src/vfs.cpp
+  src/confined_file.cpp
   src/load_order.cpp)
 add_library(sns::mo2 ALIAS sns_mo2)
 target_include_directories(sns_mo2 PUBLIC include)

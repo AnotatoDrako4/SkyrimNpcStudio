@@ -105,6 +105,20 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
             parameters.Add(("$plugin", request.Plugin.Trim()));
         }
 
+        if (request.FormKeys is { Count: > 0 } npcKeys)
+        {
+            // Parameterized and bounded, like every filter: the keys come from the studio's own cache files.
+            var names = new List<string>();
+            for (var i = 0; i < npcKeys.Count && i < 200; i++)
+            {
+                var name = "$nk" + i.ToString(CultureInfo.InvariantCulture);
+                names.Add(name);
+                parameters.Add((name, (npcKeys[i] ?? "").Trim()));
+            }
+
+            where.Append(" AND w.form_key COLLATE NOCASE IN (" + string.Join(",", names) + ")");
+        }
+
         if (!string.IsNullOrWhiteSpace(request.Faction))
         {
             where.Append(" AND EXISTS (SELECT 1 FROM npc_factions f WHERE f.plugin_id = w.plugin_id AND f.form_key = w.form_key AND (f.faction = $faction OR f.faction IN (SELECT rw.form_key FROM record_winner rw JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key WHERE rw.record_type = 'FACT' AND r.editor_id = $faction COLLATE NOCASE)))");
@@ -765,6 +779,18 @@ internal sealed class CatalogQueries(CatalogStore store, LoadOrderSession sessio
         {
             where.Append(" AND p.file_name = $plugin COLLATE NOCASE");
             parameters.Add(("$plugin", request.Plugin.Trim()));
+        }
+        if (request.FormKeys is { Count: > 0 } formKeys)
+        {
+            // Parameterized, bounded: the keys come from a preset file, which is untrusted input.
+            var names = new List<string>();
+            for (var i = 0; i < formKeys.Count && i < 200; i++)
+            {
+                var name = "$fk" + i.ToString(CultureInfo.InvariantCulture);
+                names.Add(name);
+                parameters.Add((name, (formKeys[i] ?? "").Trim()));
+            }
+            where.Append(" AND rw.form_key COLLATE NOCASE IN (" + string.Join(",", names) + ")");
         }
 
         var countSql = "SELECT COUNT(*) FROM record_winner rw JOIN records r ON r.plugin_id = rw.plugin_id AND r.form_key = rw.form_key JOIN plugin_files p ON p.id = rw.plugin_id" + where;

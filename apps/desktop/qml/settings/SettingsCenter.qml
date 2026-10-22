@@ -558,7 +558,26 @@ Dialog {
                                            .arg(cacheBox.usage.renders).arg(center.formatBytes(cacheBox.usage.bytes)),
                                        () => { const e = center.studio.portraits.clearRenders(); cacheBox.message = e.length === 0 ? qsTr("Caché vaciada.") : "⚠ " + e })
             }
+            Button {
+                objectName: "inspectPortraitsButton"
+                text: qsTr("Inspeccionar la caché…")
+                enabled: cacheBox.usage.available === true
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Qué retratos siguen vigentes, cuáles caducaron y por qué; quita solo lo inservible")
+                onClicked: cacheInspector.open()
+            }
             Text { visible: cacheBox.message.length > 0; text: cacheBox.message; color: Theme.textDim; font.pixelSize: Theme.small }
+            PortraitCacheInspector {
+                id: cacheInspector
+                studio: center.studio
+                onRemoveUnusableRequested: confirm.ask(qsTr("¿Quitar lo inservible de la caché?"),
+                    qsTr("Se borrarán los retratos desactualizados o dañados y las imágenes sueltas del estudio (≈ %1). Los retratos vigentes, los anteriores y tus capturas de Skyrim se conservan; lo borrado se vuelve a generar al verlo.")
+                        .arg(cacheInspector.bytesText(cacheInspector.report.unusableBytes ?? 0)),
+                    () => center.studio.portraits.removeUnusable())
+                onClearVariantsRequested: confirm.ask(qsTr("¿Vaciar las imágenes del A/B?"),
+                    qsTr("Se borran solo las imágenes de la comparación de fuentes de apariencia; se vuelven a dibujar al abrir una comparación."),
+                    () => { const e = center.studio.portraits.clearVariants(); cacheBox.message = e.length === 0 ? qsTr("Imágenes del A/B quitadas.") : "⚠ " + e })
+            }
         }
     }
 

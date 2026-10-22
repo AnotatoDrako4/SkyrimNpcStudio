@@ -17,9 +17,18 @@ Item {
 
     // Frames the face: the largest head part that is not hair (long hair is larger than the head itself),
     // seen from the front at a fixed distance relative to its size. False when the scene has no head part.
+    // {center: vector3d, distance: real}: the framing of ANOTHER head of the same NPC (the A/B view of the appearance
+    // sources draws several FaceGen files of one NPC and every side must share one camera). null: frame this head.
+    property var fixedFrame: null
+
     function frameHead() {
         const heads = stage.scene.parts.filter(p => p.group === "head" && p.shownByDefault)
         if (heads.length === 0) return false
+        if (stage.fixedFrame) {
+            pivot.position = stage.fixedFrame.center
+            camera.z = stage.fixedFrame.distance
+            return true
+        }
         const faces = heads.filter(p => !p.hair)
         const pool = faces.length > 0 ? faces : heads
         let head = pool[0]

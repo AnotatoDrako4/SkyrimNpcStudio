@@ -5,6 +5,7 @@ using SkyrimNpcStudio.Worker.Contracts;
 using SkyrimNpcStudio.Worker.PatchBuilder;
 using SkyrimNpcStudio.Worker.Validation;
 using SkyrimNpcStudio.Worker.NpcCatalog;
+using SkyrimNpcStudio.Antigravity.FollowerBehaviorLab.Integration;
 
 namespace SkyrimNpcStudio.Worker.Rpc;
 
@@ -34,7 +35,8 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             ProtocolMinor = Protocol.Minor,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
-            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords],
+            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords,
+                Methods.CreationAnalyzeVoice, Methods.CreationGetBehaviorCatalog, Methods.CreationApplyArchetype, Methods.CreationUndoArchetype, Methods.CreationValidateBehavior],
         };
     }
 
@@ -134,6 +136,26 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     [JsonRpcMethod(Methods.CreationSearchRecords)]
     public IReadOnlyList<CreationRecord> SearchCreationRecords(CreationSearchRequest request) =>
         Guard(() => state.Read(c => CreationRecordQueries.Search(c.Session, request)));
+
+    [JsonRpcMethod(Methods.CreationAnalyzeVoice)]
+    public CreationAnalyzeVoiceResponse AnalyzeVoice(CreationAnalyzeVoiceRequest request) =>
+        Guard(() => FollowerBehaviorRpcDispatcher.HandleAnalyzeVoice(request));
+
+    [JsonRpcMethod(Methods.CreationGetBehaviorCatalog)]
+    public CreationBehaviorCatalogResponse GetBehaviorCatalog(CreationBehaviorCatalogRequest request) =>
+        Guard(() => FollowerBehaviorRpcDispatcher.HandleGetCatalog(request));
+
+    [JsonRpcMethod(Methods.CreationApplyArchetype)]
+    public CreationApplyArchetypeResponse ApplyArchetype(CreationApplyArchetypeRequest request) =>
+        Guard(() => FollowerBehaviorRpcDispatcher.HandleApplyArchetype(request));
+
+    [JsonRpcMethod(Methods.CreationUndoArchetype)]
+    public CreationUndoArchetypeResponse UndoArchetype(CreationUndoArchetypeRequest request) =>
+        Guard(() => FollowerBehaviorRpcDispatcher.HandleUndoArchetype(request));
+
+    [JsonRpcMethod(Methods.CreationValidateBehavior)]
+    public CreationValidateBehaviorResponse ValidateBehavior(CreationValidateBehaviorRequest request) =>
+        Guard(() => FollowerBehaviorRpcDispatcher.HandleValidateBehavior(request));
 
     internal static T Guard<T>(Func<T> body)
     {

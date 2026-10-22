@@ -33,6 +33,10 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QVariantMap visibility READ visibility NOTIFY visibilityChanged)
   Q_PROPERTY(QVariantList issues READ issues NOTIFY changed)
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
+  // Head <-> body skin match of the scene on view (an ESTIMATE of the seam at the neck, see sns::appearance::evaluate_skin_match):
+  // {state: "none" | "ready", verdict, message, worst, worstRole, codes, caveats, head: {label, color}, pairs: [{role, label, color,
+  // deltaE}]}. "none" while nothing is installed.
+  Q_PROPERTY(QVariantMap skinMatch READ skin_match NOTIFY changed)
   Q_PROPERTY(QVector3D center READ center NOTIFY changed)
   Q_PROPERTY(float radius READ radius NOTIFY changed)
   Q_PROPERTY(QQuick3DGeometry* skeleton READ skeleton NOTIFY changed)
@@ -56,6 +60,7 @@ class SceneViewModel : public QObject {
   QVariantMap visibility() const { return visibility_; }
   QVariantList issues() const { return issues_; }
   QVariantMap stats() const { return stats_; }
+  QVariantMap skin_match() const { return skin_match_.isEmpty() ? QVariantMap{{"state", "none"}} : skin_match_; }
   QVector3D center() const { return center_; }
   float radius() const { return radius_; }
   QQuick3DGeometry* skeleton() const { return skeleton_; }
@@ -93,6 +98,9 @@ class SceneViewModel : public QObject {
   void set_scene_cache(std::shared_ptr<rendering::SceneCache> cache) { own_cache_ = std::move(cache); }
   // Portraits: only the head is built, with textures no larger than a portrait needs.
   void set_portrait_mode(bool on) { portrait_mode_ = on; }
+  // Portraits of a variant (the A/B view of the appearance sources): files that replace Data paths for the next
+  // builds, e.g. another MO2 mod's FaceGen. Null: the profile's own files. Read-only: nothing is written anywhere.
+  void set_portrait_overlay(std::shared_ptr<const rendering::AssetOverlay> overlay) { portrait_overlay_ = std::move(overlay); }
   [[nodiscard]] QString npc_override() const { return npc_override_; }
  signals:
   void changed();
@@ -145,8 +153,10 @@ class SceneViewModel : public QObject {
   QString npc_override_;
   std::shared_ptr<rendering::SceneCache> own_cache_;
   bool portrait_mode_ = false;
+  std::shared_ptr<const rendering::AssetOverlay> portrait_overlay_;
   QVariantList parts_, issues_;
   QVariantMap stats_;
+  QVariantMap skin_match_;  // see the skinMatch property; empty until a scene is installed
   QVariantMap visibility_;
   QVector3D center_;
   float radius_ = 100;

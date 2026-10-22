@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('worker-unit', 'export-tests', 'all-worker', 'engine-security', 'export-destinations', 'workbench', 'settings', 'portrait-cache', 'concurrency', 'hostile-corpus', 'mock-destinations', 'acceptance-kits', 'ui-workbench', 'ui-settings', 'antigravity-self-tests', 'full-qa-gate')]
+    [ValidateSet('worker-unit', 'export-tests', 'all-worker', 'follower-behavior', 'reference-integration', 'engine-security', 'export-destinations', 'workbench', 'settings', 'portrait-cache', 'concurrency', 'hostile-corpus', 'mock-destinations', 'acceptance-kits', 'ui-workbench', 'ui-settings', 'antigravity-self-tests', 'full-qa-gate')]
     [string]$Suite = 'worker-unit',
     [string]$RunId
 )
@@ -46,6 +46,17 @@ if ($Suite -eq 'export-tests' -or $Suite -eq 'all-worker' -or $Suite -eq 'full-q
         Type             = 'Executable'
         Target           = 'dotnet'
         Arguments        = @('test', 'tests\export\SkyrimNpcStudio.ExportTests\SkyrimNpcStudio.ExportTests.csproj', '--no-build')
+        ExpectedExitCode = 0
+    })
+}
+
+# 2b. .NET Follower Behavior Lab Tests (AG-FOLLOWER-BEHAVIOR-01 & 02: 28 tests)
+if ($Suite -eq 'follower-behavior' -or $Suite -eq 'all-worker' -or $Suite -eq 'full-qa-gate') {
+    $testDefs.Add([PSCustomObject]@{
+        Name             = 'FollowerBehaviorLab_Unit_And_Rpc_Tests'
+        Type             = 'Executable'
+        Target           = 'dotnet'
+        Arguments        = @('test', 'tests\antigravity\follower-behavior-lab\FollowerBehaviorLab.Tests.csproj', '--no-build')
         ExpectedExitCode = 0
     })
 }
@@ -108,6 +119,23 @@ if ($Suite -eq 'portrait-cache' -or $Suite -eq 'full-qa-gate') {
         Arguments        = @()
         ExpectedExitCode = 0
     })
+}
+
+# 7b. C++ Catch2 Reference Integration Tests (Claude A1-A3: 60 cases / 335 assertions)
+if ($Suite -eq 'reference-integration' -or $Suite -eq 'full-qa-gate') {
+    $refExe = Join-Path $repoRoot 'build\refint\bin\sns_reference_tests.exe'
+    if (-not (Test-Path -LiteralPath $refExe)) {
+        $refExe = Join-Path $repoRoot 'build\refint-app\bin\sns_reference_tests.exe'
+    }
+    if (Test-Path -LiteralPath $refExe) {
+        $testDefs.Add([PSCustomObject]@{
+            Name             = 'Catch2_Reference_Integration_Tests'
+            Type             = 'Executable'
+            Target           = $refExe
+            Arguments        = @()
+            ExpectedExitCode = 0
+        })
+    }
 }
 
 # 8. Antigravity Concurrency & Busy-Lock Safety Auditor (AG-F14-LOCK: 6/6 contracts)

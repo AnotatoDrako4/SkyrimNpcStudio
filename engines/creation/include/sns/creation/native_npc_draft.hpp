@@ -26,6 +26,7 @@ struct NativeNpcDraft {
   int health = 100, magicka = 100, stamina = 100;
   std::map<std::string, int> skills;
   std::vector<std::string> head_part_form_keys, outfit_armor_form_keys, package_form_keys;
+  std::vector<std::string> spell_form_keys, perk_form_keys;
   std::string hair_color_form_key, head_texture_form_key;
   // Structured FaceValuesDto: 18 sliders, four presets, skinTone and tints. Persisted
   // unchanged; worker validates against Bethesda records before technical export.

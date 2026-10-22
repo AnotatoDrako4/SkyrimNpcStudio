@@ -58,6 +58,16 @@ internal static class NativeNpcBuilder
         npc.Items = new ExtendedList<ContainerEntry>();
         foreach (var item in d.Inventory) npc.Items.Add(new ContainerEntry { Item = new ContainerItem { Item = new FormLink<IItemGetter>(K(item.FormKey)), Count = item.Count } });
         foreach (var p in d.PackageFormKeys) npc.Packages.Add(new FormLink<IPackageGetter>(K(p)));
+        if (d.SpellFormKeys.Count > 0)
+        {
+            npc.ActorEffect ??= new ExtendedList<IFormLinkGetter<ISpellRecordGetter>>();
+            foreach (var s in d.SpellFormKeys) npc.ActorEffect.Add(new FormLink<ISpellRecordGetter>(K(s)));
+        }
+        if (d.PerkFormKeys.Count > 0)
+        {
+            npc.Perks ??= new ExtendedList<PerkPlacement>();
+            foreach (var pk in d.PerkFormKeys) npc.Perks.Add(new PerkPlacement { Perk = new FormLink<IPerkGetter>(K(pk)), Rank = 1 });
+        }
         if (d.Face is { } face) ApplyFace(npc, face);
         var records = new List<ExportedRecord> { Record(npc, "NPC_") };
         if (d.OutfitArmorFormKeys.Count > 0)

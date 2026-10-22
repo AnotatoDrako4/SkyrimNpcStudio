@@ -359,6 +359,20 @@ ScrollView {
             }
         }
 
+        // ---- head <-> body skin (an estimate of the seam at the neck, from the textures the studio draws)
+        SkinMatchCard {
+            Layout.fillWidth: true
+            visible: root.hasMap
+            studio: root.studio
+        }
+
+        // ---- every source the profile offers for this face, and the A/B comparison (read-only)
+        AppearanceSourceSection {
+            Layout.fillWidth: true
+            visible: root.hasMap
+            studio: root.studio
+        }
+
         // ---- parts
         Text {
             Layout.fillWidth: true

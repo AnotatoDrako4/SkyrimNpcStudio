@@ -15,6 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\tools\antigravity\follower-behavior-lab\FollowerBehaviorLab.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="SkyrimNpcStudio.BethesdaWorker.Tests" />
     <InternalsVisibleTo Include="SkyrimNpcStudio.ExportTests" />
   </ItemGroup>

@@ -59,6 +59,38 @@ public sealed class HeadPartQueriesTests : IDisposable
         Assert.Equal(ErrorCodes.RecordNotFound, error.Code);
     }
 
+    private SearchHeadPartsResponse ByFormKeys(params string[] keys) =>
+        _state.Read(c => c.Queries.SearchHeadParts(new SearchHeadPartsRequest { FormKeys = keys }));
+
+    [Fact]
+    public void FormKeys_ResolveExactlyThoseParts_WhateverTheRaceAndSex()
+    {
+        // A male part and a female part, asked for together: no NPC, so no race or sex filter.
+        var result = ByFormKeys(SyntheticLoadOrder.EyesBrown.ToString(), SyntheticLoadOrder.FemaleHeadNord.ToString());
+        Assert.Equal(2, result.Total);
+        Assert.Contains(result.Items, i => i.FormKey == SyntheticLoadOrder.EyesBrown.ToString() && !string.IsNullOrEmpty(i.EditorId));
+        var head = Assert.Single(result.Items, i => i.FormKey == SyntheticLoadOrder.FemaleHeadNord.ToString());
+        Assert.Equal("Face", head.Type);
+        Assert.False(string.IsNullOrEmpty(head.ModelPath));
+    }
+
+    [Fact]
+    public void FormKeys_AreMatchedCaseInsensitively_AndUnknownKeysAreIgnored()
+    {
+        var key = SyntheticLoadOrder.EyesGreen.ToString();
+        Assert.Single(ByFormKeys(key.ToLowerInvariant()).Items);
+        Assert.Empty(ByFormKeys("ABCDEF:Nope.esp").Items);
+    }
+
+    [Fact]
+    public void FormKeys_CannotInjectSql()
+    {
+        Assert.Empty(ByFormKeys("' OR 1=1 --").Items);
+        Assert.Empty(ByFormKeys("x') OR ('1'='1").Items);
+        // The catalog is intact afterwards.
+        Assert.NotEmpty(ByFormKeys(SyntheticLoadOrder.EyesGreen.ToString()).Items);
+    }
+
     public void Dispose()
     {
         _state.Dispose();

@@ -30,6 +30,7 @@
 #include "resource_context.hpp"
 #include "scene_viewmodel.hpp"
 #include "sns/assets/asset_resolver.hpp"
+#include "sns/core/text.hpp"
 
 namespace sns::app {
 namespace {
@@ -66,6 +67,7 @@ PortraitRenderer::PortraitRenderer(SceneViewModel* scene, QObject* parent) : QOb
     finish(QStringLiteral("error"), tr("Tiempo agotado al construir la cabeza (%1 s)").arg(kTimeoutMs / 1000));
   });
   connect(scene_, &SceneViewModel::ready, this, &PortraitRenderer::on_scene_ready);
+  connect(this, &PortraitRenderer::finished, this, &PortraitRenderer::on_redo_finished);
   // The render thread ends while the QML engine and the portrait scene still exist (both go before this object
   // at exit), not in the destructor.
   if (QCoreApplication::instance()) {
@@ -95,6 +97,8 @@ QVariantMap PortraitRenderer::stats() const {
           {"averageRenderMs", rendered_ > 0 ? total_render_ms_ / rendered_ : 0},
           {"totalCaptureMs", total_capture_ms_},
           {"secondFrames", second_frames_},
+          {"variantsFramed", variants_framed_},
+          {"variantsSelfFramed", variants_self_framed_},
           {"maxCaptureMs", max_capture_ms_},
           {"maxFrameMs", max_frame_ms_},
           {"maxSaveMs", max_save_ms_},
@@ -138,8 +142,17 @@ void PortraitRenderer::set_profile(SnapshotPtr snapshot, const QString& profile_
   snapshot_ = std::move(snapshot);
   profile_key_ = profile_key;
   snapshot_digest_.clear();
+  cache_report_ = {{"state", "idle"}};  // an inspection of the old profile in flight is dropped on return (serial)
+  emit cacheReportChanged();
+  redo_pending_.clear();  // a redo of the old profile stops: its answers are dropped with the states
+  redo_active_.clear();
+  redo_total_ = redo_done_ = redo_errors_ = 0;
+  redo_cancelled_ = false;
+  redo_ = {{"state", "idle"}};
+  emit redoProgressChanged();
   index_.clear();
   known_.clear();
+  frames_.clear();  // the framing of a head belongs to the files of the profile it was seen in
   index_ready_ = false;
   lookup_in_flight_ = false;  // a batch still running belongs to the old profile (serial): dropped on return
   const int serial = ++profile_serial_;
@@ -329,6 +342,202 @@ QString PortraitRenderer::clearRenders() {
   return {};
 }
 
+void PortraitRenderer::inspectCache() { run_inspection(false); }
+void PortraitRenderer::removeUnusable() { run_inspection(true); }
+
+void PortraitRenderer::run_inspection(bool purge) {
+  const auto unavailable = [this](const QString& why) {
+    cache_report_ = {{"state", "unavailable"}, {"reason", why}};
+    emit cacheReportChanged();
+  };
+  if (!cache_ || !snapshot_) return unavailable(tr("Sin perfil cargado: no hay caché de retratos activa."));
+  if (snapshot_digest_.isEmpty()) return unavailable(tr("El perfil se está indexando: aún no se puede comparar la caché con él."));
+  if (cache_report_.value("state").toString() == QLatin1String("running")) return;
+  const auto previous_purge = cache_report_.value("lastPurge");
+  cache_report_.insert("state", "running");
+  emit cacheReportChanged();
+  QThreadPool::globalInstance()->start([self = QPointer<PortraitRenderer>(this), dir = cache_->directory(), digest = snapshot_digest_,
+                                        snapshot = snapshot_, serial = profile_serial_, purge, previous_purge] {
+    QElapsedTimer clock;
+    clock.start();
+    PortraitCache cache(dir);
+    const auto current = [&snapshot](const QString& path) { return fingerprint_of(snapshot, path); };
+    PortraitCache::PurgeResult purged;
+    QString purge_error;
+    if (purge) purged = cache.remove_unusable(kRendererVersion, digest, current, &purge_error);
+    const auto rows = cache.inspect(kRendererVersion, digest, current);
+    const auto variants = PortraitCache(QDir(dir).filePath(QStringLiteral("variants"))).usage();
+    int valid = 0, stale = 0, damaged = 0, kept = 0, captures = 0, orphans = 0, unknown = 0, unusable_rows = 0;
+    qint64 bytes = 0, unusable_bytes = 0;
+    QVariantList list;
+    for (const auto& r : rows) {
+      bytes += r.bytes;
+      const bool unusable = PortraitCache::is_unusable(r);
+      if (unusable) {
+        ++unusable_rows;
+        unusable_bytes += r.bytes;
+      }
+      if (r.kind == QLatin1String("render") && r.state == QLatin1String("valid")) ++valid;
+      else if (r.kind == QLatin1String("render") && r.state == QLatin1String("stale")) ++stale;
+      else if (r.state == QLatin1String("damaged")) ++damaged;
+      else if (r.kind == QLatin1String("previous")) ++kept;
+      else if (r.kind == QLatin1String("capture")) ++captures;
+      else if (r.code == QLatin1String("orphan-image")) ++orphans;
+      else ++unknown;
+      if (list.size() < kMaxReportRows) {
+        list.push_back(QVariantMap{{"name", r.name}, {"formKey", r.form_key}, {"kind", r.kind}, {"state", r.state}, {"code", r.code},
+                                   {"detail", r.detail}, {"bytes", r.bytes}, {"createdAt", r.created_at},
+                                   {"rendererVersion", r.renderer_version}, {"changed", r.changed_resources}, {"unusable", unusable},
+                                   {"files", r.files}});
+      }
+    }
+    QVariantMap report{{"state", "ready"},
+                       {"ms", clock.elapsed()},
+                       {"directory", QDir::toNativeSeparators(dir)},
+                       {"counts", QVariantMap{{"valid", valid}, {"stale", stale}, {"damaged", damaged}, {"kept", kept}, {"captures", captures},
+                                              {"orphans", orphans}, {"unknown", unknown}}},
+                       {"bytes", bytes},
+                       {"unusableRows", unusable_rows},
+                       {"unusableBytes", unusable_bytes},
+                       {"rows", list},
+                       {"truncated", rows.size() > list.size()},
+                       {"total", static_cast<int>(rows.size())},
+                       {"variants", QVariantMap{{"files", variants.files}, {"bytes", variants.bytes}}},
+                       {"rendererVersion", kRendererVersion},
+                       {"checkedAt", now_iso()},
+                       {"lastPurge", purge ? QVariant(QVariantMap{{"rows", purged.rows}, {"files", purged.files}, {"bytes", purged.bytes}, {"error", purge_error}})
+                                           : previous_purge}};
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, serial, report = std::move(report), removed = purged.form_keys, purge]() mutable {
+          if (!self || serial != self->profile_serial_) return;
+          self->cache_report_ = std::move(report);
+          if (purge && !removed.isEmpty()) {
+            // The NPCs that lost their render are asked again (checked against the profile, rendered when a card needs them).
+            for (const auto& form_key : removed) {
+              const auto key = PortraitCache::entry_name(form_key);
+              self->index_.remove(key);
+              self->known_.remove(key);
+            }
+            ++self->revision_;
+            emit self->changed();
+            self->schedule_pump();
+          }
+          diag::record("portrait", QStringLiteral("cache inspected: %1 rows in %2 ms%3")
+                                       .arg(self->cache_report_.value("total").toInt()).arg(self->cache_report_.value("ms").toLongLong())
+                                       .arg(purge ? QStringLiteral(", purge removed %1 files").arg(self->cache_report_.value("lastPurge").toMap().value("files").toInt()) : QString())
+                                       .toStdString());
+          emit self->cacheReportChanged();
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+void PortraitRenderer::publish_redo(const QString& state) {
+  redo_ = {{"state", state},
+           {"total", redo_total_},
+           {"done", redo_done_},
+           {"errors", redo_errors_},
+           {"active", static_cast<int>(redo_active_.size())},
+           {"pending", static_cast<int>(redo_pending_.size())},
+           {"elapsedMs", redo_timer_.isValid() ? redo_timer_.elapsed() : 0},
+           {"lastError", redo_last_error_}};
+  emit redoProgressChanged();
+}
+
+void PortraitRenderer::redoStale() {
+  const auto state = redo_.value("state").toString();
+  if (state == QLatin1String("running") || state == QLatin1String("cancelling")) return;
+  if (!cache_ || !snapshot_ || snapshot_digest_.isEmpty()) {
+    redo_ = {{"state", "unavailable"}, {"reason", tr("Sin perfil cargado o aún indexándose: no se pueden rehacer retratos.")}};
+    emit redoProgressChanged();
+    return;
+  }
+  if (cache_report_.value("state").toString() != QLatin1String("ready")) {
+    redo_ = {{"state", "unavailable"}, {"reason", tr("Primero hay que comprobar la caché.")}};
+    emit redoProgressChanged();
+    return;
+  }
+  redo_pending_.clear();
+  redo_active_.clear();
+  QSet<QString> seen;
+  for (const auto& v : cache_report_.value("rows").toList()) {
+    const auto row = v.toMap();
+    if (row.value("kind").toString() != QLatin1String("render") || row.value("formKey").toString().isEmpty()) continue;
+    const auto s = row.value("state").toString();
+    if (s != QLatin1String("stale") && s != QLatin1String("damaged")) continue;
+    const auto key = PortraitCache::entry_name(row.value("formKey").toString());
+    if (seen.contains(key)) continue;
+    seen.insert(key);
+    redo_pending_ << row.value("formKey").toString();
+  }
+  redo_total_ = static_cast<int>(redo_pending_.size());
+  redo_done_ = redo_errors_ = 0;
+  redo_cancelled_ = false;
+  redo_last_error_.clear();
+  redo_timer_.start();
+  if (redo_total_ == 0) {
+    publish_redo(QStringLiteral("done"));
+    return;
+  }
+  publish_redo(QStringLiteral("running"));
+  feed_redo();
+}
+
+void PortraitRenderer::cancelRedo() {
+  if (redo_.value("state").toString() != QLatin1String("running")) return;
+  redo_cancelled_ = true;
+  redo_pending_.clear();
+  publish_redo(redo_active_.isEmpty() ? QStringLiteral("cancelled") : QStringLiteral("cancelling"));
+}
+
+void PortraitRenderer::feed_redo() {
+  if (redo_.value("state").toString() != QLatin1String("running")) return;
+  while (redo_active_.size() < kRedoWindow && !redo_pending_.isEmpty()) {
+    const auto form_key = redo_pending_.takeFirst();
+    const auto key = PortraitCache::entry_name(form_key);
+    if (key == PortraitCache::entry_name(current_)) {  // being drawn right now (a card asked for it): it will be fresh, count it
+      ++redo_done_;
+      continue;
+    }
+    redo_active_.insert(key);
+    refresh(form_key);  // forgets what is known of it, checks it against the profile again and renders it when it is out of date
+  }
+  if (redo_active_.isEmpty() && redo_pending_.isEmpty()) {
+    publish_redo(redo_cancelled_ ? QStringLiteral("cancelled") : QStringLiteral("done"));
+    if (cache_) run_inspection(false);  // the report shows what is left
+    return;
+  }
+  publish_redo(QStringLiteral("running"));
+}
+
+void PortraitRenderer::on_redo_finished(const QString& form_key, const QString& state) {
+  const auto key = PortraitCache::entry_name(form_key);
+  if (!redo_active_.remove(key)) return;  // not one of ours (a card asked for it)
+  ++redo_done_;
+  if (state == QLatin1String("error")) {
+    ++redo_errors_;
+    redo_last_error_ = form_key + ": " + states_.value(key).value("reason").toString();
+  }
+  const auto current = redo_.value("state").toString();
+  if (current == QLatin1String("cancelling") && redo_active_.isEmpty()) {
+    publish_redo(QStringLiteral("cancelled"));
+    if (cache_) run_inspection(false);
+    return;
+  }
+  feed_redo();
+}
+
+QString PortraitRenderer::clearVariants() {
+  if (!cache_) return tr("No hay un perfil cargado");
+  QString error;
+  const int removed = PortraitCache(QDir(cache_->directory()).filePath(QStringLiteral("variants"))).clear_renders(&error);
+  if (removed < 0) return tr("No se pudieron borrar todas las imágenes del A/B: %1").arg(error);
+  diag::record("portrait", QStringLiteral("cleared %1 A/B variant files in %2").arg(removed).arg(cache_->directory()).toStdString());
+  if (cache_report_.value("state").toString() == QLatin1String("ready")) run_inspection(false);
+  return {};
+}
+
 QVariantMap PortraitRenderer::stateOf(const QString& formKey, int revision) const {
   Q_UNUSED(revision)
   const auto it = states_.find(PortraitCache::entry_name(formKey));
@@ -343,6 +552,10 @@ void PortraitRenderer::refresh(const QString& formKey) {
 }
 
 void PortraitRenderer::cancelAll() {
+  // Variant renders (the A/B view) go with everything else; their owners are told once the state is consistent.
+  auto cancelled_variants = std::move(variant_jobs_);
+  variant_jobs_.clear();
+  probing_ = false;
   // Everything still waiting (for its verdict or for its render) is forgotten; verdicts already known stay.
   for (auto it = states_.begin(); it != states_.end();) {
     if (it->value("state").toString() == QLatin1String("queued")) {
@@ -368,6 +581,54 @@ void PortraitRenderer::cancelAll() {
   }
   ++revision_;
   emit changed();
+  for (auto& job : cancelled_variants) {
+    if (job.done) job.done(QImage(), {}, 0, tr("cancelado"));
+  }
+}
+
+void PortraitRenderer::submit_variant(const QString& key, VariantJob job) {
+  if (key.isEmpty() || !job.done || job.base_form_key.isEmpty()) return;
+  if (key == current_) return;  // already being drawn: its owner takes that image
+  render_queue_.removeAll(key);
+  variant_jobs_.insert(key, std::move(job));
+  render_queue_.prepend(key);  // an interactive request goes ahead of the gallery's renders
+  schedule_pump();
+}
+
+void PortraitRenderer::cancel_variant(const QString& key) {
+  if (key == current_ || !variant_jobs_.contains(key)) return;
+  render_queue_.removeAll(key);
+  auto job = variant_jobs_.take(key);
+  if (job.done) job.done(QImage(), {}, 0, tr("cancelado"));
+}
+
+QVariantMap PortraitRenderer::frameOf(const QString& formKey) const {
+  const auto it = frames_.constFind(PortraitCache::entry_name(formKey));
+  if (it == frames_.cend()) return {};
+  return {{"center", QVariantList{it->center.x(), it->center.y(), it->center.z()}}, {"distance", it->distance}};
+}
+
+std::optional<PortraitRenderer::Frame> PortraitRenderer::frame_of_scene() const {
+  // PortraitStage.frameHead(): the largest shown head part that is not hair (hair only when there is nothing else).
+  QList<QVariantMap> heads, faces;
+  for (const auto& p : scene_->parts()) {
+    const auto m = p.toMap();
+    if (m.value("group").toString() != QLatin1String("head") || !m.value("shownByDefault").toBool()) continue;
+    heads.push_back(m);
+    if (!m.value("hair").toBool()) faces.push_back(m);
+  }
+  const auto& pool = faces.isEmpty() ? heads : faces;
+  if (pool.isEmpty()) return std::nullopt;
+  auto best = pool.front();
+  for (const auto& m : pool) {
+    if (m.value("radius").toFloat() > best.value("radius").toFloat()) best = m;
+  }
+  return Frame{best.value("center").value<QVector3D>(), best.value("radius").toFloat() * 2.9f};
+}
+
+QString PortraitRenderer::scene_npc_of(const QString& key) const {
+  const auto it = variant_jobs_.constFind(key);
+  return it == variant_jobs_.cend() ? key : it->base_form_key;
 }
 
 QVariantMap PortraitRenderer::versionsOf(const QString& formKey, int revision) const {
@@ -607,7 +868,9 @@ void PortraitRenderer::route(const QString& form_key, const Known& known, Want w
 void PortraitRenderer::begin_render(const QString& form_key) {
   ++render_generation_;
   current_ = form_key;
-  {
+  const auto variant = variant_jobs_.constFind(form_key);
+  const bool is_variant = variant != variant_jobs_.cend();
+  if (!is_variant) {
     const auto key = PortraitCache::entry_name(form_key);
     QVariantMap s{{"state", "rendering"}};
     // The stored render stays on the card (marked provisional) until the new one replaces it.
@@ -621,11 +884,15 @@ void PortraitRenderer::begin_render(const QString& form_key) {
   diag::record("portrait", ("render " + form_key).toStdString());
   render_timer_.start();
   watchdog_.start();
-  scene_->set_npc_override(form_key);  // builds on the scene's own thread; ready() follows
+  // A variant draws the same NPC with its overlay files in place of some Data paths; a gallery render uses none.
+  // Its framing is the NPC's own head's, so the head is built without the overlay first when that is not known yet.
+  probing_ = is_variant && !frames_.contains(PortraitCache::entry_name(variant->base_form_key));
+  scene_->set_portrait_overlay(is_variant && !probing_ ? variant->overlay : nullptr);
+  scene_->set_npc_override(scene_npc_of(form_key));  // builds on the scene's own thread; ready() follows
 }
 
 void PortraitRenderer::on_scene_ready() {
-  if (current_.isEmpty() || scene_->npc_override() != current_) return;
+  if (current_.isEmpty() || scene_->npc_override() != scene_npc_of(current_)) return;
   for (const auto& issue : scene_->issues()) {
     const auto m = issue.toMap();
     const auto code = m.value("code").toString();
@@ -643,11 +910,32 @@ void PortraitRenderer::on_scene_ready() {
     finish(QStringLiteral("error"), tr("Sin cabeza que mostrar: el NPC no tiene FaceGen ni piezas de cabeza visibles"));
     return;
   }
+  const auto frame = frame_of_scene();
+  const auto variant = variant_jobs_.constFind(current_);
+  if (probing_ && variant != variant_jobs_.cend()) {
+    // The NPC's own head is built: its framing is what every side of the A/B view shares. Now the same NPC with the overlay.
+    probing_ = false;
+    if (frame) frames_.insert(PortraitCache::entry_name(variant->base_form_key), *frame);
+    scene_->set_portrait_overlay(variant->overlay);
+    scene_->set_npc_override(variant->base_form_key);  // ready() follows again
+    return;
+  }
+  if (variant == variant_jobs_.cend() && frame) frames_.insert(PortraitCache::entry_name(current_), *frame);
   QString error;
   if (!ensure_offscreen(&error)) {
     finish(QStringLiteral("error"), tr("Render fuera de pantalla no disponible: %1").arg(error));
     return;
   }
+  QVariant fixed;  // a variant takes the NPC's own framing; a gallery portrait frames its head itself
+  if (variant != variant_jobs_.cend()) {
+    if (const auto f = frames_.constFind(PortraitCache::entry_name(variant->base_form_key)); f != frames_.cend()) {
+      fixed = QVariantMap{{"center", QVariant::fromValue(f->center)}, {"distance", f->distance}};
+      ++variants_framed_;
+    } else {
+      ++variants_self_framed_;
+    }
+  }
+  if (stage_) stage_->setProperty("fixedFrame", fixed);
   QVariant framed;
   if (!stage_ || !QMetaObject::invokeMethod(stage_, "frameHead", Q_RETURN_ARG(QVariant, framed)) || !framed.toBool()) {
     finish(QStringLiteral("error"), tr("El escenario de retratos no pudo encuadrar la cabeza"));
@@ -802,6 +1090,10 @@ void PortraitRenderer::complete_capture(const QImage& image, const QString& fram
     finish(QStringLiteral("error"), tr("La captura salió vacía (%1 % de píxeles dibujados)").arg(drawn * 100, 0, 'f', 1));
     return;
   }
+  if (variant_jobs_.contains(current_)) {  // a variant is handed back as it is: its owner decides where it is kept
+    finish_variant(image);
+    return;
+  }
   QByteArray png;
   QBuffer buffer(&png);
   buffer.open(QIODevice::WriteOnly);
@@ -842,7 +1134,20 @@ void PortraitRenderer::complete_capture(const QImage& image, const QString& fram
 void PortraitRenderer::finish(const QString& state, const QString& reason, const QString& url, const QString& source,
                               const QStringList& missing) {
   watchdog_.stop();
+  probing_ = false;
   const auto form_key = current_;
+  if (auto it = variant_jobs_.find(form_key); it != variant_jobs_.end()) {  // a variant that failed: no gallery state, no cache
+    auto job = std::move(*it);
+    variant_jobs_.erase(it);
+    last_error_ = form_key + ": " + reason;
+    diag::record("portrait", ("variant error " + form_key + ": " + reason).toStdString());
+    current_.clear();
+    ++render_generation_;
+    clear_scene();
+    if (job.done) job.done(QImage(), {}, 0, reason.isEmpty() ? state : reason);
+    schedule_pump();
+    return;
+  }
   QVariantMap s{{"state", state}};
   if (!reason.isEmpty()) s["reason"] = reason;
   if (!url.isEmpty()) {
@@ -863,6 +1168,39 @@ void PortraitRenderer::finish(const QString& state, const QString& reason, const
   set_state(PortraitCache::entry_name(form_key), s);
   emit finished(form_key, state);
   schedule_pump();
+}
+
+void PortraitRenderer::finish_variant(const QImage& image) {
+  watchdog_.stop();
+  probing_ = false;
+  const auto key = current_;
+  auto it = variant_jobs_.find(key);
+  if (it == variant_jobs_.end()) return;
+  auto job = std::move(*it);
+  variant_jobs_.erase(it);
+  // What the picture was made from: the scene's own resources, except that a path replaced by the overlay is the
+  // file the overlay bytes came from, not the one the profile would have served.
+  auto resources = resources_of_scene();
+  for (auto& r : resources) {
+    if (const auto file = job.files.constFind(qs(text::data_path_key(ss(r.path)))); file != job.files.cend()) r = fingerprint_of_file(r.path, *file);
+  }
+  const auto elapsed = render_timer_.elapsed();
+  diag::record("portrait", QStringLiteral("variant %1 drawn in %2 ms").arg(key).arg(elapsed).toStdString());
+  current_.clear();
+  ++render_generation_;
+  clear_scene();
+  if (job.done) job.done(image, resources, elapsed, {});
+  schedule_pump();
+}
+
+PortraitResource PortraitRenderer::fingerprint_of_file(const QString& data_path, const QString& absolute_file) {
+  PortraitResource r{data_path, QStringLiteral("missing"), -1, -1};
+  const QFileInfo info(absolute_file);
+  if (!info.isFile()) return r;
+  r.location = QStringLiteral("loose:") + info.absoluteFilePath();
+  r.size = info.size();
+  r.modified_ms = info.lastModified().toMSecsSinceEpoch();
+  return r;
 }
 
 void PortraitRenderer::set_state(const QString& key, const QVariantMap& state) {

@@ -22,6 +22,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
   viewmodels/portrait_cache.cpp viewmodels/portrait_cache.hpp
   viewmodels/portrait_renderer.cpp viewmodels/portrait_renderer.hpp
+  viewmodels/appearance_sources.cpp viewmodels/appearance_sources.hpp
+  viewmodels/preset_head_checker.cpp viewmodels/preset_head_checker.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
   viewmodels/workbench_state.cpp viewmodels/workbench_state.hpp
   viewmodels/settings_service.cpp viewmodels/settings_service.hpp
@@ -64,6 +66,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/PortraitThumb.qml
     qml/settings/SettingControl.qml
     qml/settings/SettingsCenter.qml
+    qml/settings/PortraitCacheInspector.qml
     qml/charactercreator/FaceSliderGroup.qml
     qml/charactercreator/FaceProtectionCard.qml
     qml/charactercreator/FaceCustomizer.qml
@@ -73,6 +76,12 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/AppearanceControlPanel.qml
+    qml/charactercreator/SourceStatusBadge.qml
+    qml/charactercreator/SourceImagePane.qml
+    qml/charactercreator/AppearanceSourceCompareDialog.qml
+    qml/charactercreator/AppearanceSourceSection.qml
+    qml/charactercreator/SkinMatchCard.qml
+    qml/charactercreator/PresetHeadDialog.qml
     qml/charactercreator/CharacterCreator.qml
     qml/characterforge/AIGenerationPanel.qml
     qml/characterforge/ForgeAppearanceEditor.qml

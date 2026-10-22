@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>FollowerBehaviorLab.Tests</AssemblyName>
+    <RootNamespace>SkyrimNpcStudio.Antigravity.FollowerBehaviorLab.Tests</RootNamespace>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+    <NoWarn>$(NoWarn);CA1707;CA1805</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\tools\antigravity\follower-behavior-lab\FollowerBehaviorLab.csproj" />
+  </ItemGroup>
+
+</Project>

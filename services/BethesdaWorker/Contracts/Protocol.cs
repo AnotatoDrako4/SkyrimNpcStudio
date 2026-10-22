@@ -12,7 +12,7 @@ public static class Protocol
     public const int Major = 1;
 
     /// <summary>Additive changes (new optional fields, new methods) bump the minor version.</summary>
-    public const int Minor = 5;
+    public const int Minor = 6;
 }
 
 public static class Methods
@@ -38,6 +38,11 @@ public static class Methods
     public const string CreationValidateNpc = "creation.validateNpc";
     public const string CreationExportNpc = "creation.exportNpc";
     public const string CreationSearchRecords = "creation.searchRecords";
+    public const string CreationAnalyzeVoice = "creation.analyzeVoice";
+    public const string CreationGetBehaviorCatalog = "creation.getBehaviorCatalog";
+    public const string CreationApplyArchetype = "creation.applyArchetype";
+    public const string CreationUndoArchetype = "creation.undoArchetype";
+    public const string CreationValidateBehavior = "creation.validateBehavior";
 
     /// <summary>Server → client notification emitted while indexing.</summary>
     public const string IndexProgress = "catalog.progress";

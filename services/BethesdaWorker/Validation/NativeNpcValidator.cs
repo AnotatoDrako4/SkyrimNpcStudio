@@ -34,6 +34,8 @@ internal static partial class NativeNpcValidator
         ArgumentNullException.ThrowIfNull(d.Inventory);
         ArgumentNullException.ThrowIfNull(d.Factions);
         ArgumentNullException.ThrowIfNull(d.PackageFormKeys);
+        ArgumentNullException.ThrowIfNull(d.SpellFormKeys);
+        ArgumentNullException.ThrowIfNull(d.PerkFormKeys);
         var issues = new List<Issue>();
         var missing = new List<string>();
         var masters = new HashSet<ModKey>();
@@ -71,7 +73,7 @@ internal static partial class NativeNpcValidator
         Resolve<ICombatStyleGetter>(d.CombatStyleFormKey);
         Resolve<IColorRecordGetter>(d.HairColorFormKey);
         Resolve<ITextureSetGetter>(d.HeadTextureFormKey);
-        if (d.HeadPartFormKeys.Count > 64 || d.OutfitArmorFormKeys.Count > 64 || d.Inventory.Count > 256 || d.Factions.Count > 128 || d.PackageFormKeys.Count > 64)
+        if (d.HeadPartFormKeys.Count > 64 || d.OutfitArmorFormKeys.Count > 64 || d.Inventory.Count > 256 || d.Factions.Count > 128 || d.PackageFormKeys.Count > 64 || d.SpellFormKeys.Count > 64 || d.PerkFormKeys.Count > 64)
             issues.Add(Issue.Error("DraftTooLarge", "Draft collection limits exceeded."));
         var headTypes = new HashSet<HeadPart.TypeEnum>();
         var seen = new HashSet<FormKey>();
@@ -106,6 +108,8 @@ internal static partial class NativeNpcValidator
                 issues.Add(Issue.Error("FactionInvalid", "Faction rank must be -1–127 and memberships unique.", f.FormKey));
         }
         foreach (var key in d.PackageFormKeys) Resolve<IPackageGetter>(key, true);
+        foreach (var key in d.SpellFormKeys) Resolve<ISpellGetter>(key, true);
+        foreach (var key in d.PerkFormKeys) Resolve<IPerkGetter>(key, true);
         if (d.OutfitArmorFormKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != d.OutfitArmorFormKeys.Count)
             issues.Add(Issue.Error("OutfitDuplicate", "Outfit pieces must be unique."));
         if (d.PackageFormKeys.Count > 0) issues.Add(Issue.Warning("PackageBehaviorUnverified", "Package references resolve; quest-specific conditions and behavior require manual validation."));

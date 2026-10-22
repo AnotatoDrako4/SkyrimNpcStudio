@@ -1,5 +1,6 @@
 #include "appearance_stress.hpp"
 
+#include <QBuffer>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -18,6 +19,7 @@
 #include <QSet>
 #include <QUrl>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -387,14 +389,16 @@ struct Stress : std::enable_shared_from_this<Stress> {
   // purpose, so they pass false).
   static QStringList layout_problems(QQuickItem* container, bool elided_fails, int* inspected) {
     QStringList problems;
-    std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+    // Inside a view that scrolls sideways (a strip of cards with a scroll bar) what lies beyond the edge is reached by scrolling: not a spill.
+    std::function<void(QQuickItem*, bool)> visit = [&](QQuickItem* item, bool scrolls) {
       for (auto* child : item->childItems()) {
         if (!child->isVisible() || child->width() <= 0) continue;
         const QByteArray cls = child->metaObject()->className();
         const QRectF r = child->mapRectToItem(container, QRectF(0, 0, child->width(), child->height()));
         const QString text = child->property("text").toString().left(40);
         if (elided_fails && child->property("truncated").toBool()) problems << QStringLiteral("elided %1 '%2'").arg(QString(cls), text);
-        if (child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > container->width() + 1)
+        const bool child_scrolls = scrolls || (cls.contains("ListView") || cls.contains("Flickable")) && child->property("contentWidth").toReal() > child->width() + 1;
+        if (!scrolls && child->metaObject()->indexOfProperty("text") >= 0 && !text.isEmpty() && r.right() > container->width() + 1)
           problems << QStringLiteral("spills %1px '%2' (%3 at x %4, w %5)").arg(int(r.right() - container->width())).arg(text, QString(cls)).arg(int(r.x())).arg(int(r.width()));
         // Buttons with a label (custom-content buttons such as color swatches have none to elide).
         if (!text.isEmpty() && child->metaObject()->indexOfProperty("implicitContentWidth") >= 0 && child->metaObject()->indexOfProperty("checkable") >= 0) {
@@ -403,10 +407,10 @@ struct Stress : std::enable_shared_from_this<Stress> {
           if (need > child->width() + 0.5) problems << QStringLiteral("button '%1' needs %2px, has %3px").arg(text).arg(int(need)).arg(int(child->width()));
         }
         if (inspected) ++*inspected;
-        visit(child);
+        visit(child, child_scrolls);
       }
     };
-    visit(container);
+    visit(container, false);
     problems.removeDuplicates();
     return problems;
   }
@@ -3394,6 +3398,1161 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->studio->portraits()->cancelAll();
           g->browser->setProperty("viewMode", "list");
           self->step();
+        });
+      });
+    } else if (name == "source-compare") {
+      // Reference integration A1: the Appearance Source Matrix of the NPC on screen and its A/B view. Read-only: it checks
+      // that every source has an honest verdict, that the «Origen» section lists them, that the A/B dialog draws the two
+      // sources with the same stage and camera (two different pictures of the same size and framing), that the draft is
+      // written only to an isolated folder (SNS_SOURCE_DRAFT_DIR; otherwise those checks are skipped), and that the
+      // profile's FaceGen files are byte for byte what they were. Captures and metrics go to the work folder. Not part
+      // of "all": it needs an NPC with two drawable sources.
+      struct SourceRun {
+        QString a_id, b_id;
+        QByteArray before_hash;
+      };
+      auto run = std::make_shared<SourceRun>();
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(100, *tick);
+        };
+        (*tick)();
+      };
+      auto find_object = [self](const char* object_name) -> QObject* {
+        for (auto* o : self->window->findChildren<QObject*>()) {
+          if (o->objectName() == QLatin1String(object_name)) return o;
+        }
+        return nullptr;
+      };
+      // Hash of every file a candidate would be drawn from: the proof that nothing in the profile was written.
+      auto candidates_hash = [self] {
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        for (const auto& c : self->studio->sources()->matrix().value("candidates").toList()) {
+          for (const auto& o : c.toMap().value("overlay").toList()) {
+            QFile file(o.toMap().value("file").toString());
+            hash.addData(o.toMap().value("file").toString().toUtf8());
+            if (file.open(QIODevice::ReadOnly)) hash.addData(file.readAll());
+          }
+        }
+        return hash.result();
+      };
+      steps.push_back([self, run, wait_for, candidates_hash] {
+        wait_for([self] { return self->studio->sources()->matrix().value("state").toString() == QLatin1String("ready"); }, 90000,
+                 [self, run, candidates_hash](bool ok) {
+          const auto matrix = self->studio->sources()->matrix();
+          self->check(ok, "source matrix ready for " + matrix.value("formKey").toString());
+          const auto candidates = matrix.value("candidates").toList();
+          self->check(!candidates.isEmpty() && candidates.first().toMap().value("effective").toBool(), "the effective source is the first candidate");
+          QSet<QString> ids;
+          bool honest = true;
+          static const QSet<QString> statuses{"VALID", "UNVERIFIED", "CONFLICT", "AMBIGUOUS", "MISSING"};
+          for (const auto& c : candidates) {
+            const auto m = c.toMap();
+            ids.insert(m.value("id").toString());
+            honest = honest && statuses.contains(m.value("status").toString());
+            // Nothing unverified is presented as available: drawable => it says what the picture is; missing => never drawable.
+            if (m.value("renderable").toBool()) honest = honest && !m.value("renderNote").toString().isEmpty();
+            if (m.value("status").toString() == QLatin1String("MISSING")) honest = honest && !m.value("renderable").toBool();
+            self->log(QStringLiteral("source %1 [%2] record %3 (%4) facegen «%5» drawable=%6 codes=%7")
+                          .arg(m.value("id").toString(), m.value("status").toString(), m.value("recordPlugin").toString(), m.value("recordMod").toString(),
+                               m.value("facegenMod").toString()).arg(m.value("renderable").toBool()).arg(m.value("codes").toStringList().join(",")));
+          }
+          self->check(ids.size() == candidates.size(), QStringLiteral("%1 candidate ids, all unique").arg(candidates.size()));
+          self->check(honest, "every verdict is one of the five statuses and no unverified source is presented as drawable");
+          self->check(matrix.value("profileDigest").toString().size() == 64 && matrix.value("inputDigest").toString().size() == 64,
+                      "profile digest and input digest are SHA-256 (64 hex)");
+          self->log(QStringLiteral("source matrix: %1 ms, %2 B read, %3 drawable, skipped: %4")
+                        .arg(matrix.value("gatherMs").toLongLong()).arg(matrix.value("readBytes").toLongLong()).arg(matrix.value("renderable").toInt())
+                        .arg(matrix.value("skipped").toStringList().join(" | ")));
+          QFile out(QDir(self->work_dir).filePath("source-matrix.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(matrix)).toJson());
+          run->before_hash = candidates_hash();
+          self->step();
+        });
+      });
+      // The «Origen» tab lists them.
+      steps.push_back([self, find_object] {
+        auto* tabs = find_object("creatorRightTabs");
+        self->check(tabs != nullptr, "«Origen» tab found");
+        if (!tabs) { self->step(); return; }
+        tabs->setProperty("currentIndex", 5);
+        self->after(500, [self] {
+          QQuickItem* section = nullptr;
+          QQuickItem* panel = nullptr;
+          for (auto* item : self->window->findChildren<QQuickItem*>()) {
+            if (item->objectName() == QLatin1String("sourceSection")) section = item;
+            if (item->objectName() == QLatin1String("appearanceControlPanel")) panel = item;
+          }
+          // Repeater delegates are not QObject children of the window: walk the visual hierarchy.
+          int rows = 0;
+          std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+            for (auto* child : item->childItems()) {
+              if (child->objectName().startsWith(QLatin1String("sourceRow_")) && child->isVisible()) ++rows;
+              walk(child);
+            }
+          };
+          if (section) walk(section);
+          const int expected = self->studio->sources()->matrix().value("candidates").toList().size();
+          self->check(section && section->isVisible(), "«Fuentes de apariencia» section visible in «Origen»");
+          self->check(rows == expected, QStringLiteral("%1 source rows for %2 candidates").arg(rows).arg(expected));
+          // Scroll the tab to the section so the capture shows it.
+          if (section && panel) {
+            if (auto* flick = qvariant_cast<QQuickItem*>(panel->property("contentItem"))) {
+              if (auto* content = qvariant_cast<QQuickItem*>(flick->property("contentItem"))) {
+                flick->setProperty("contentY", std::max(0.0, section->mapToItem(content, QPointF(0, 0)).y() - 24.0));
+              }
+            }
+          }
+          self->after(300, [self] {
+            self->window->grabWindow().save(QDir(self->work_dir).filePath("source-section.png"));
+            self->step();
+          });
+        });
+      });
+      // The A/B dialog: two sources drawn with the same stage and camera.
+      steps.push_back([self, run, wait_for, find_object] {
+        const auto matrix = self->studio->sources()->matrix();
+        if (matrix.value("renderable").toInt() < 2) {
+          self->skip(QStringLiteral("A/B view: this NPC has %1 drawable source(s); it needs two (use an NPC with a shadowed FaceGen)").arg(matrix.value("renderable").toInt()));
+          self->step();
+          return;
+        }
+        auto* dialog = find_object("sourceCompareDialog");
+        self->check(dialog != nullptr, "A/B dialog found");
+        if (!dialog) { self->step(); return; }
+        QMetaObject::invokeMethod(dialog, "open");
+        const auto a = self->studio->sources()->candidate_a(), b = self->studio->sources()->candidate_b();
+        run->a_id = a;
+        run->b_id = b;
+        self->check(!a.isEmpty() && !b.isEmpty() && a != b, "A and B are two different sources: " + a + " vs " + b);
+        // Settled = both states are final AND the pictures are loaded by the dialog's (asynchronous) images, so the capture is not blank.
+        auto settled = [self, a, b, dialog] {
+          const auto ia = self->studio->sources()->imageOf(a), ib = self->studio->sources()->imageOf(b);
+          const auto done = [](const QVariantMap& i) {
+            const auto s = i.value("state").toString();
+            return s == QLatin1String("ready") || s == QLatin1String("error") || s == QLatin1String("unavailable");
+          };
+          if (!done(ia) || !done(ib)) return false;
+          auto* content = qvariant_cast<QQuickItem*>(dialog->property("contentItem"));
+          if (!content) return false;
+          std::function<QQuickItem*(QQuickItem*, const QString&)> find_in = [&](QQuickItem* root, const QString& name) -> QQuickItem* {
+            for (auto* child : root->childItems()) {
+              if (child->objectName() == name) return child;
+              if (auto* found = find_in(child, name)) return found;
+            }
+            return nullptr;
+          };
+          const auto loaded = [&](const QString& name, const QVariantMap& image) {
+            if (image.value("state").toString() != QLatin1String("ready")) return true;  // an explicit error needs no picture
+            auto* item = find_in(content, name);
+            return item && item->property("status").toInt() == 1;  // QQuickImage::Ready
+          };
+          return loaded(QStringLiteral("sourceImage_A"), ia) && loaded(QStringLiteral("sourceImage_B"), ib);
+        };
+        wait_for(settled, 180000, [self, run, dialog, a, b](bool ok) {
+          self->check(ok, "both pictures settled (ready or an explicit error)");
+          const auto ia = self->studio->sources()->imageOf(a), ib = self->studio->sources()->imageOf(b);
+          self->check(ia.value("state").toString() == QLatin1String("ready") && ib.value("state").toString() == QLatin1String("ready"),
+                      QStringLiteral("A %1 (%2), B %3 (%4)").arg(ia.value("state").toString(), ia.value("reason").toString(), ib.value("state").toString(), ib.value("reason").toString()));
+          const QImage img_a(QUrl(ia.value("url").toString()).toLocalFile()), img_b(QUrl(ib.value("url").toString()).toLocalFile());
+          if (img_a.isNull() || img_b.isNull()) { self->check(false, "both pictures are readable PNG files"); self->step(); return; }
+          self->check(img_a.size() == img_b.size() && img_a.width() >= 64, QStringLiteral("same size: %1x%2 vs %3x%4").arg(img_a.width()).arg(img_a.height()).arg(img_b.width()).arg(img_b.height()));
+          // Same stage and camera => same background and a head framed alike; the faces differ (different FaceGen files).
+          const auto fa = img_a.convertToFormat(QImage::Format_RGB32), fb = img_b.convertToFormat(QImage::Format_RGB32);
+          const QRgb bg_a = fa.pixel(0, 0), bg_b = fb.pixel(0, 0);
+          qint64 differ = 0, total = 0;
+          QRect box_a, box_b;
+          auto grow = [](QRect& box, int x, int y) { box = box.isNull() ? QRect(x, y, 1, 1) : box.united(QRect(x, y, 1, 1)); };
+          for (int y = 0; y < fa.height() && y < fb.height(); ++y) {
+            for (int x = 0; x < fa.width() && x < fb.width(); ++x) {
+              const QRgb pa = fa.pixel(x, y), pb = fb.pixel(x, y);
+              if (std::abs(qRed(pa) - qRed(pb)) + std::abs(qGreen(pa) - qGreen(pb)) + std::abs(qBlue(pa) - qBlue(pb)) > 24) ++differ;
+              if (std::abs(qRed(pa) - qRed(bg_a)) + std::abs(qGreen(pa) - qGreen(bg_a)) + std::abs(qBlue(pa) - qBlue(bg_a)) > 24) grow(box_a, x, y);
+              if (std::abs(qRed(pb) - qRed(bg_b)) + std::abs(qGreen(pb) - qGreen(bg_b)) + std::abs(qBlue(pb) - qBlue(bg_b)) > 24) grow(box_b, x, y);
+              ++total;
+            }
+          }
+          const double diff_share = total > 0 ? 100.0 * static_cast<double>(differ) / static_cast<double>(total) : 0.0;
+          self->check(bg_a == bg_b, "same stage background in both pictures");
+          // One camera for both sides, proved by the numbers: the NPC's own framing exists, every variant render took it and none
+          // framed itself. (The pixel boxes below only catch gross mis-framing: hair differs between the two faces.)
+          const auto frame = self->studio->portraits()->frameOf(self->studio->sources()->matrix().value("formKey").toString());
+          const auto stats = self->studio->portraits()->stats();
+          const auto source_metrics = self->studio->sources()->metrics();
+          if (source_metrics.value("variantsRendered").toInt() == 0 && source_metrics.value("variantCacheHits").toInt() > 0) {
+            // Nothing was drawn in this run: the picture comes from the verified cache, rendered earlier under the shared framing.
+            self->skip("shared-camera proof: B came from the verified cache (the proof is made by the run that renders it)");
+          } else {
+            self->check(!frame.isEmpty() && frame.value("distance").toFloat() > 0.0f,
+                        QStringLiteral("the NPC's own framing is known: distance %1").arg(frame.value("distance").toFloat()));
+            self->check(stats.value("variantsFramed").toInt() >= 1 && stats.value("variantsSelfFramed").toInt() == 0,
+                        QStringLiteral("variant renders with the shared camera: %1, framing themselves: %2")
+                            .arg(stats.value("variantsFramed").toInt()).arg(stats.value("variantsSelfFramed").toInt()));
+          }
+          const QRect overlap = box_a.intersected(box_b), joined = box_a.united(box_b);
+          const double iou = joined.isEmpty() ? 0.0 : static_cast<double>(overlap.width()) * overlap.height() / (static_cast<double>(joined.width()) * joined.height());
+          self->check(!box_a.isNull() && !box_b.isNull() && iou > 0.5,
+                      QStringLiteral("heads overlap alike (IoU %1): A box %2,%3 %4x%5, B box %6,%7 %8x%9").arg(iou, 0, 'f', 2).arg(box_a.x()).arg(box_a.y())
+                          .arg(box_a.width()).arg(box_a.height()).arg(box_b.x()).arg(box_b.y()).arg(box_b.width()).arg(box_b.height()));
+          self->log(QStringLiteral("A/B pictures differ in %1 % of the pixels (%2 of %3)").arg(diff_share, 0, 'f', 2).arg(differ).arg(total));
+          self->check(diff_share > 0.05, QStringLiteral("the two sources produce different faces (%1 % of pixels differ)").arg(diff_share, 0, 'f', 2));
+          const QImage shot = self->window->grabWindow();
+          shot.save(QDir(self->work_dir).filePath("source-compare-ab.png"));
+          img_a.save(QDir(self->work_dir).filePath("source-picture-A.png"));
+          img_b.save(QDir(self->work_dir).filePath("source-picture-B.png"));
+          int inspected = 0;
+          auto* content = qvariant_cast<QQuickItem*>(dialog->property("contentItem"));
+          const auto problems = content ? layout_problems(content, false, &inspected) : QStringList{QStringLiteral("no content item")};
+          self->check(problems.isEmpty(), QStringLiteral("A/B dialog %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+          // Keyboard: the dialog's content holds the focus; Space alternates between A and B.
+          QTest::keyClick(self->window, Qt::Key_Space);
+          self->check(dialog->property("blink").toBool() && dialog->property("showingB").toBool(), "Space switches to the alternate view showing B");
+          QTest::keyClick(self->window, Qt::Key_Space);
+          self->check(!dialog->property("showingB").toBool(), "Space again shows A");
+          // Alternate view and shared zoom.
+          dialog->setProperty("blink", true);
+          dialog->setProperty("showingB", true);
+          self->after(300, [self, dialog] {
+            self->window->grabWindow().save(QDir(self->work_dir).filePath("source-compare-blink-B.png"));
+            dialog->setProperty("showingB", false);
+            QMetaObject::invokeMethod(dialog, "applyZoom", Q_ARG(QVariant, 2.5));
+            self->after(300, [self, dialog] {
+              self->check(dialog->property("zoom").toReal() > 2.4, "zoom shared by both sides: " + dialog->property("zoom").toString());
+              self->window->grabWindow().save(QDir(self->work_dir).filePath("source-compare-blink-A-zoom.png"));
+              dialog->setProperty("blink", false);
+              QMetaObject::invokeMethod(dialog, "resetView");
+              self->step();
+            });
+          });
+        });
+      });
+      // The grid of 3-4 sources at once (needs an NPC with three drawable sources).
+      steps.push_back([self, wait_for, find_object] {
+        const auto matrix = self->studio->sources()->matrix();
+        if (matrix.value("renderable").toInt() < 3) {
+          self->skip(QStringLiteral("grid of several sources: this NPC has %1 drawable source(s); it needs three").arg(matrix.value("renderable").toInt()));
+          self->step();
+          return;
+        }
+        auto* dialog = find_object("sourceCompareDialog");
+        self->check(dialog != nullptr, "the compare dialog is still there");
+        auto* content = dialog ? qvariant_cast<QQuickItem*>(dialog->property("contentItem")) : nullptr;
+        if (!content) { self->step(); return; }
+        auto find_in = std::make_shared<std::function<QQuickItem*(QQuickItem*, const QString&)>>();
+        *find_in = [find_in](QQuickItem* root, const QString& name) -> QQuickItem* {
+          for (auto* child : root->childItems()) {
+            if (child->objectName() == name) return child;
+            if (auto* found = (*find_in)(child, name)) return found;
+          }
+          return nullptr;
+        };
+        // The way a person does it: the switch of the dialog.
+        auto* toggle = (*find_in)(content, QStringLiteral("sourceMultiSwitch"));
+        self->check(toggle != nullptr && toggle->isEnabled(), "the 'several at once' switch is enabled with three drawable sources");
+        if (!toggle) { self->step(); return; }
+        QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, toggle->mapToScene(QPointF(toggle->width() / 2, toggle->height() / 2)).toPoint());
+        self->check(dialog->property("multi").toBool(), "the dialog is in grid mode");
+        auto ids = [dialog] { return dialog->property("multiIds").toStringList(); };
+        self->check(ids().size() >= 3 && ids().size() <= 4, QStringLiteral("the grid starts with %1 sources (3-4)").arg(ids().size()));
+        auto settled = [self, dialog, content, find_in, ids] {
+          const auto list = ids();
+          for (int i = 0; i < list.size(); ++i) {
+            const auto image = self->studio->sources()->imageOf(list[i]);
+            const auto state = image.value("state").toString();
+            if (state != QLatin1String("ready") && state != QLatin1String("error") && state != QLatin1String("unavailable")) return false;
+            if (state == QLatin1String("ready")) {
+              auto* item = (*find_in)(content, QStringLiteral("sourceImage_%1").arg(i + 1));
+              if (!item || item->property("status").toInt() != 1) return false;
+            }
+          }
+          return !list.isEmpty();
+        };
+        wait_for(settled, 240000, [self, dialog, content, find_in, ids](bool ok) {
+          self->check(ok, "every picture of the grid settled");
+          const auto list = ids();
+          std::vector<QImage> images;
+          for (const auto& id : list) {
+            const auto image = self->studio->sources()->imageOf(id);
+            self->check(image.value("state").toString() == QLatin1String("ready"), QStringLiteral("%1: %2 %3").arg(id, image.value("state").toString(), image.value("reason").toString()));
+            images.emplace_back(QUrl(image.value("url").toString()).toLocalFile());
+          }
+          bool same_size = true, all_readable = true;
+          for (const auto& image : images) {
+            all_readable &= !image.isNull();
+            same_size &= !image.isNull() && image.size() == images.front().size();
+          }
+          self->check(all_readable && same_size, "all pictures of the grid are readable and the same size");
+          // Every pair of sources produces a different face, over one background (same stage, camera and lights).
+          bool distinct = true;
+          QStringList shares;
+          for (std::size_t i = 0; i < images.size() && all_readable && same_size; ++i) {
+            for (std::size_t j = i + 1; j < images.size(); ++j) {
+              const auto fa = images[i].convertToFormat(QImage::Format_RGB32), fb = images[j].convertToFormat(QImage::Format_RGB32);
+              qint64 differ = 0, total = 0;
+              for (int y = 0; y < fa.height(); ++y)
+                for (int x = 0; x < fa.width(); ++x, ++total) {
+                  const QRgb pa = fa.pixel(x, y), pb = fb.pixel(x, y);
+                  if (std::abs(qRed(pa) - qRed(pb)) + std::abs(qGreen(pa) - qGreen(pb)) + std::abs(qBlue(pa) - qBlue(pb)) > 24) ++differ;
+                }
+              const double share = total > 0 ? 100.0 * static_cast<double>(differ) / static_cast<double>(total) : 0.0;
+              shares << QStringLiteral("%1-%2: %3 %").arg(i + 1).arg(j + 1).arg(share, 0, 'f', 1);
+              distinct &= share > 0.05;
+              distinct &= fa.pixel(0, 0) == fb.pixel(0, 0);
+            }
+          }
+          self->log("grid pairs differ: " + shares.join(", "));
+          self->check(distinct, "every pair of sources in the grid differs and shares the stage background");
+          // Panes on screen, one per source; zoom is shared by all of them.
+          int panes = 0;
+          for (int i = 1; i <= 4; ++i) {
+            if (auto* pane = (*find_in)(content, QStringLiteral("sourcePane_%1").arg(i)); pane && pane->isVisible()) ++panes;
+          }
+          self->check(panes == list.size(), QStringLiteral("%1 panes are visible for %2 sources").arg(panes).arg(list.size()));
+          auto* note = (*find_in)(content, QStringLiteral("sourceGridNote"));
+          self->check(note && note->isVisible(), "the 'not a Skyrim capture' notice is on screen in grid mode");
+          int inspected = 0;
+          const auto problems = layout_problems(content, false, &inspected);
+          self->check(problems.isEmpty(), QStringLiteral("grid dialog %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+          self->window->grabWindow().save(QDir(self->work_dir).filePath("source-compare-grid.png"));
+          QMetaObject::invokeMethod(dialog, "applyZoom", Q_ARG(QVariant, 2.0));
+          self->after(300, [self, dialog, content, find_in, list] {
+            bool shared = true;
+            for (int i = 1; i <= list.size(); ++i) {
+              auto* pane = (*find_in)(content, QStringLiteral("sourcePane_%1").arg(i));
+              shared &= pane && pane->property("zoom").toReal() > 1.9;
+            }
+            self->check(shared, "zoom is shared by every pane of the grid");
+            self->window->grabWindow().save(QDir(self->work_dir).filePath("source-compare-grid-zoom.png"));
+            QMetaObject::invokeMethod(dialog, "resetView");
+            // Back to the A/B view.
+            QMetaObject::invokeMethod(dialog, "setMulti", Q_ARG(QVariant, false));
+            self->after(300, [self, dialog, content, find_in] {
+              auto* pane_a = (*find_in)(content, QStringLiteral("sourcePane_A"));
+              self->check(!dialog->property("multi").toBool() && pane_a && pane_a->isVisible(), "switching the grid off brings the A/B view back");
+              self->step();
+            });
+          });
+        });
+      });
+      // Draft: only in an isolated folder, never the user's.
+      steps.push_back([self] {
+        const auto isolated = qEnvironmentVariable("SNS_SOURCE_DRAFT_DIR");
+        const auto path = self->studio->sources()->draft().value("path").toString();
+        if (isolated.isEmpty() || !QDir::fromNativeSeparators(path).startsWith(QDir::fromNativeSeparators(isolated), Qt::CaseInsensitive)) {
+          self->skip("draft checks: SNS_SOURCE_DRAFT_DIR is not set (the user's own draft file is never written by a harness)");
+          self->step();
+          return;
+        }
+        auto* s = self->studio->sources();
+        self->check(s->draft().value("state").toString() == QLatin1String("empty"), "no draft at the start: " + s->draft().value("state").toString());
+        const auto error = s->saveDraft(s->candidate_b(), QStringLiteral("harness"));
+        self->check(error.isEmpty(), "draft saved: " + error);
+        self->check(s->draft().value("state").toString() == QLatin1String("fresh") && QFile::exists(path), "draft is fresh and its file exists: " + path);
+        self->check(s->draft().value("chosen").toString() == s->candidate_b(), "the preferred source is stored");
+        // A draft names only sources the matrix offers.
+        self->check(!s->setCompare(QStringLiteral("facegen:no-such-mod"), s->candidate_b()), "an unknown source is refused");
+        s->clearDraft();
+        self->check(s->draft().value("state").toString() == QLatin1String("empty"), "draft discarded");
+        self->step();
+      });
+      steps.push_back([self, run, candidates_hash] {
+        auto* s = self->studio->sources();
+        const auto m = s->metrics();
+        self->log(QStringLiteral("source metrics: gathers %1, last gather %2 ms (max %3), read %4 B, variants requested %5 / rendered %6 / cache hits %7 / errors %8, "
+                                 "variant render avg %9 ms max %10 ms, GUI-thread handlers p95 %11 ms max %12 ms (%13 samples)")
+                      .arg(m.value("gathers").toInt()).arg(m.value("lastGatherMs").toLongLong()).arg(m.value("maxGatherMs").toLongLong())
+                      .arg(m.value("lastReadBytes").toLongLong()).arg(m.value("variantsRequested").toInt()).arg(m.value("variantsRendered").toInt())
+                      .arg(m.value("variantCacheHits").toInt()).arg(m.value("variantErrors").toInt()).arg(m.value("averageVariantRenderMs").toLongLong())
+                      .arg(m.value("maxVariantRenderMs").toLongLong()).arg(m.value("guiP95Ms").toLongLong()).arg(m.value("guiMaxMs").toLongLong())
+                      .arg(m.value("guiSamples").toInt()));
+        QFile out(QDir(self->work_dir).filePath("source-metrics.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(m)).toJson());
+        self->check(m.value("variantErrors").toInt() == 0, "no variant render failed");
+        // Read-only: the profile's FaceGen files are what they were (no write path exists, this proves it held).
+        self->check(candidates_hash() == run->before_hash, "the FaceGen files the sources were drawn from are unchanged");
+        self->step();
+      });
+    } else if (name == "preset-head-check") {
+      // Reference integration A3: Preset <-> Export Head readiness of EVERY .jslot of the real profile. Diagnosis only: nothing is
+      // applied or exported. Checks the invariants (a valid verdict, the UNVERIFIED_IN_SKYRIM caveat, never READY with an unreadable
+      // head, a chosen head that exists), the manual choice, and writes one row per preset plus captures of the dialog. Not in "all".
+      auto rows = std::make_shared<QJsonArray>();
+      auto presets = std::make_shared<QVariantList>();
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(50, *tick);
+        };
+        (*tick)();
+      };
+      auto settled = [self] {
+        const auto s = self->studio->preset_heads()->report().value("state").toString();
+        return s == QLatin1String("ready") || s == QLatin1String("error");
+      };
+      steps.push_back([self, presets] {
+        self->studio->appearance()->loadPresetsFromVfs();
+        *presets = self->studio->appearance()->property("presetsList").toList();
+        self->check(!presets->isEmpty(), QStringLiteral("%1 .jslot presets found in the profile").arg(presets->size()));
+        self->step();
+      });
+      steps.push_back([self, rows, presets, wait_for, settled] {
+        auto index = std::make_shared<int>(0);
+        auto next = std::make_shared<std::function<void()>>();
+        *next = [self, rows, presets, wait_for, settled, index, next] {
+          if (*index >= presets->size()) { self->step(); return; }
+          const auto preset = presets->at((*index)++).toMap();
+          self->studio->preset_heads()->check(preset.value("diskPath").toString());
+          // The report of the PREVIOUS preset is still there for a moment: wait for this one's.
+          wait_for([self, preset, settled] {
+                     const auto r = self->studio->preset_heads()->report();
+                     return settled() && r.value("preset").toMap().value("path").toString() == preset.value("diskPath").toString();
+                   }, 120000,
+                   [self, rows, preset, next](bool ok) {
+            const auto r = self->studio->preset_heads()->report();
+            const auto verdict = r.value("verdict").toString();
+            static const QSet<QString> verdicts{"READY_FOR_REVIEW", "NEEDS_ASSET", "NEEDS_CHOICE", "FACEGEN_UNREADABLE", "HEAD_PART_MISMATCH", "UNSUPPORTED_TOPOLOGY"};
+            const auto name = preset.value("name").toString();
+            self->check(ok && r.value("state").toString() == QLatin1String("ready"),
+                        QStringLiteral("%1: checked (%2) %3").arg(name, r.value("state").toString(), r.value("error").toString()));
+            self->check(verdicts.contains(verdict), QStringLiteral("%1: verdict %2").arg(name, verdict));
+            self->check(r.value("caveats").toStringList().contains(QStringLiteral("UNVERIFIED_IN_SKYRIM")), name + ": carries the UNVERIFIED_IN_SKYRIM caveat");
+            const auto chosen = r.value("chosen").toMap();
+            if (verdict == QLatin1String("READY_FOR_REVIEW")) {
+              self->check(!chosen.isEmpty() && chosen.value("readable").toBool(), name + ": READY only with a readable chosen head");
+            }
+            if (verdict == QLatin1String("NEEDS_CHOICE")) self->check(r.value("needsManualChoice").toBool() && chosen.isEmpty(), name + ": NEEDS_CHOICE has no head chosen");
+            self->log(QStringLiteral("preset %1 -> %2 [%3] head %4 (%5 ranked) :: %6")
+                          .arg(name, verdict, r.value("codes").toStringList().join(","), chosen.value("path").toString(),
+                               QString::number(r.value("ranked").toList().size()), r.value("message").toString().left(140)));
+            rows->append(QJsonObject{{"preset", name}, {"mod", preset.value("sourceMod").toString()}, {"verdict", verdict},
+                                     {"codes", QJsonArray::fromStringList(r.value("codes").toStringList())}, {"head", chosen.value("path").toString()},
+                                     {"ranked", r.value("ranked").toList().size()}, {"message", r.value("message").toString()},
+                                     {"checkMs", r.value("timings").toMap().value("checkMs").toLongLong()}});
+            self->after(0, *next);
+          });
+        };
+        (*next)();
+      });
+      steps.push_back([self, rows] {
+        QMap<QString, int> counts;
+        for (const auto& v : *rows) ++counts[v.toObject().value("verdict").toString()];
+        QStringList parts;
+        for (auto it = counts.begin(); it != counts.end(); ++it) parts << QStringLiteral("%1=%2").arg(it.key()).arg(it.value());
+        const auto heads = self->studio->preset_heads()->heads();
+        self->log(QStringLiteral("preset heads: %1 presets, verdicts: %2; %3 export heads read (%4 unreadable) in %5 ms")
+                      .arg(rows->size()).arg(parts.join(", ")).arg(heads.value("count").toInt()).arg(heads.value("unreadable").toInt()).arg(heads.value("ms").toLongLong()));
+        QFile out(QDir(self->work_dir).filePath("preset-head-report.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*rows).toJson());
+        self->check(heads.value("state").toString() == QLatin1String("ready") && heads.value("count").toInt() > 0, "the export heads of the profile were indexed");
+        self->step();
+      });
+      // Manual choice on the first preset, then the dialog captured.
+      steps.push_back([self, presets, wait_for, settled] {
+        if (presets->isEmpty()) { self->step(); return; }
+        auto* checker = self->studio->preset_heads();
+        const auto preset = presets->first().toMap();
+        checker->check(preset.value("diskPath").toString());
+        wait_for(settled, 120000, [self, checker, preset, wait_for, settled](bool) {
+          const auto all = checker->report().value("allHeads").toList();
+          if (all.isEmpty()) { self->skip("manual choice: the profile has no export heads"); self->step(); return; }
+          const int pick = all.last().toMap().value("index").toInt();
+          self->check(checker->choose(pick), "choose() accepts a head of the profile");
+          self->check(!checker->choose(100000), "choose() refuses an unknown head");
+          const auto head_label = all.last().toMap().value("label").toString();
+          const auto preset_key = preset.value("diskPath").toString().toLower();
+          wait_for([checker, pick] { const auto r = checker->report(); return r.value("manual").toBool() && r.value("chosen").toMap().value("index").toInt() == pick; }, 60000,
+                   [self, checker, pick, head_label, preset_key, wait_for](bool ok) {
+            self->check(ok, QStringLiteral("the manual choice (head #%1) became the chosen one and is flagged manual").arg(pick));
+            // The choice is remembered per profile. Only in an isolated folder: a harness never writes the user's own choices file.
+            const auto file = checker->choices_file();
+            const auto isolated = qEnvironmentVariable("SNS_PRESET_HEAD_DIR");
+            if (file.isEmpty() || isolated.isEmpty() || !QDir::fromNativeSeparators(file).startsWith(QDir::fromNativeSeparators(isolated), Qt::CaseInsensitive)) {
+              self->skip("remembered choices: SNS_PRESET_HEAD_DIR is not set (the user's own choices file is never written by a harness)");
+              checker->clearChoice();
+              self->step();
+              return;
+            }
+            const auto read = [](const QString& path) { QFile f(path); return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray(); };
+            const auto write = [](const QString& path, const QByteArray& bytes) {
+              QFile f(path);
+              if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(bytes);
+            };
+            const auto original = read(file);
+            const auto doc = QJsonDocument::fromJson(original).object();
+            bool found = false;
+            for (const auto& v : doc.value("choices").toArray()) {
+              const auto o = v.toObject();
+              found |= o.value("preset").toString() == preset_key && o.value("head").toString() == head_label && !o.value("chosenAt").toString().isEmpty();
+            }
+            self->check(doc.value("schema").toInt() == 1 && found, "the manual choice was written to the choices file with its date");
+            const auto manual_pick = [checker, pick] {
+              const auto r = checker->report();
+              return r.value("state").toString() == QLatin1String("ready") && r.value("manual").toBool() && !r.value("manualStale").toBool() &&
+                     r.value("chosen").toMap().value("index").toInt() == pick;
+            };
+            // A remembered head that is no longer in the profile is ignored and said so.
+            write(file, QJsonDocument(QJsonObject{{"schema", 1}, {"profileKey", "harness"},
+                                                  {"choices", QJsonArray{QJsonObject{{"preset", preset_key}, {"head", "Gone mod: SKSE\\Plugins\\CharGen\\gone.nif"}, {"chosenAt", "2026-01-01T00:00:00.000+00:00"}}}}})
+                      .toJson());
+            checker->reloadChoices();
+            wait_for([checker] {
+              const auto r = checker->report();
+              return r.value("state").toString() == QLatin1String("ready") && r.value("manualStale").toBool() && !r.value("manual").toBool();
+            }, 60000, [self, checker, file, original, read, write, manual_pick, wait_for](bool stale_ok) {
+              self->check(stale_ok, "a remembered choice whose head is gone is ignored and flagged (manualStale)");
+              write(file, original);
+              checker->reloadChoices();  // what the next session finds
+              wait_for(manual_pick, 60000, [self, checker, file, original, read, write, manual_pick, wait_for](bool back_ok) {
+                self->check(back_ok, "after reloading, the remembered choice pairs the same head again");
+                write(file, QByteArray("{ not json"));
+                checker->reloadChoices();
+                wait_for([checker] { return !checker->report().value("persistError").toString().isEmpty(); }, 60000,
+                         [self, checker, file, original, read, write, manual_pick, wait_for](bool bad_ok) {
+                  self->check(bad_ok, "an unreadable choices file is reported to the person");
+                  checker->choose(0);
+                  self->after(600, [self, checker, file, original, read, write, manual_pick, wait_for] {
+                    self->check(read(file) == QByteArray("{ not json"), "an unreadable choices file is never overwritten");
+                    write(file, original);
+                    checker->reloadChoices();
+                    wait_for(manual_pick, 60000, [self, checker, file, read, wait_for](bool) {
+                      checker->clearChoice();
+                      wait_for([checker] { return !checker->report().value("manual").toBool(); }, 60000, [self, file, read](bool cleared) {
+                        self->check(cleared && QJsonDocument::fromJson(read(file)).object().value("choices").toArray().isEmpty(), "removing the choice removes it from the file");
+                        self->step();
+                      });
+                    });
+                  });
+                });
+              });
+            });
+          });
+        });
+      });
+      steps.push_back([self, rows, presets, wait_for, settled] {
+        // Capture the dialog for the first READY preset and the first one that is not (if any).
+        QVariantList wanted;
+        QSet<QString> seen;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(rows->size()) && wanted.size() < 2; ++i) {
+          const auto verdict = rows->at(static_cast<int>(i)).toObject().value("verdict").toString();
+          const bool ready = verdict == QLatin1String("READY_FOR_REVIEW");
+          if (seen.contains(ready ? "r" : "o")) continue;
+          seen.insert(ready ? "r" : "o");
+          wanted << presets->at(static_cast<int>(i));
+        }
+        auto index = std::make_shared<int>(0);
+        auto next = std::make_shared<std::function<void()>>();
+        *next = [self, wanted, wait_for, settled, index, next] {
+          if (*index >= wanted.size()) { self->step(); return; }
+          const auto preset = wanted.at((*index)++).toMap();
+          QObject* dialog = nullptr;
+          for (auto* o : self->window->findChildren<QObject*>()) {
+            if (o->objectName() == QLatin1String("presetHeadDialog")) dialog = o;
+          }
+          self->check(dialog != nullptr, "the Export Head dialog exists");
+          if (!dialog) { self->step(); return; }
+          self->studio->preset_heads()->check(preset.value("diskPath").toString());
+          QMetaObject::invokeMethod(dialog, "open");
+          wait_for([self, preset, settled] {
+                     return settled() && self->studio->preset_heads()->report().value("preset").toMap().value("path").toString() == preset.value("diskPath").toString();
+                   }, 120000,
+                   [self, dialog, preset, next, index](bool) {
+            self->after(500, [self, dialog, preset, next, index] {
+              QString file = preset.value("name").toString();
+              file.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")), QStringLiteral("_"));
+              self->window->grabWindow().save(QDir(self->work_dir).filePath(QStringLiteral("preset-head-dialog-%1.png").arg(file)));
+              QMetaObject::invokeMethod(dialog, "close");
+              self->after(150, *next);
+            });
+          });
+        };
+        (*next)();
+      });
+    } else if (name == "cache-inspector") {
+      // Reference integration A2: the portrait cache inspector against the REAL profile. Only runs in an isolated portrait cache
+      // folder (SNS_PORTRAIT_CACHE_DIR): it seeds known cases there (valid, stale for each reason, damaged, previous, capture, orphan,
+      // a foreign file, A/B variants), checks the counts and what may be removed, opens the dialog from the Settings Center, removes
+      // the unusable and proves that everything else survived. Not in "all".
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(50, *tick);
+        };
+        (*tick)();
+      };
+      auto find_item = std::make_shared<std::function<QQuickItem*(QQuickItem*, const QString&)>>();
+      *find_item = [find_item](QQuickItem* root, const QString& name) -> QQuickItem* {
+        if (!root) return nullptr;
+        if (root->objectName() == name && root->isVisible()) return root;
+        for (auto* child : root->childItems())
+          if (auto* hit = (*find_item)(child, name)) return hit;
+        return nullptr;
+      };
+      auto ready = [self] { return self->studio->portraits()->cache_report().value("state").toString() == QLatin1String("ready"); };
+      // The inspector dialog, from any visible item of its content: the QObject ancestor named portraitCacheInspector.
+      auto dialog_of = [](QQuickWindow* window, const std::function<QQuickItem*(QQuickItem*, const QString&)>& find) -> QObject* {
+        for (QObject* o = find(window->contentItem(), QStringLiteral("inspectorSummary")); o; o = o->parent()) {
+          if (o->objectName() == QLatin1String("portraitCacheInspector")) return o;
+        }
+        return nullptr;
+      };
+      steps.push_back([self, wait_for] {
+        const auto isolated = qEnvironmentVariable("SNS_PORTRAIT_CACHE_DIR");
+        auto* portraits = self->studio->portraits();
+        const auto dir = portraits->cache_directory();
+        if (isolated.isEmpty() || dir.isEmpty() || !QDir::fromNativeSeparators(dir).startsWith(QDir::fromNativeSeparators(isolated), Qt::CaseInsensitive)) {
+          self->skip("cache-inspector: SNS_PORTRAIT_CACHE_DIR is not set (the user's own portrait cache is never seeded or emptied by a harness)");
+          self->finish();
+          return;
+        }
+        wait_for([portraits] { return !portraits->snapshot_digest().isEmpty(); }, 120000, [self](bool ok) {
+          self->check(ok, "the profile's digest is ready");
+          self->step();
+        });
+      });
+      // The empty folder first.
+      steps.push_back([self, wait_for, ready] {
+        self->studio->portraits()->inspectCache();
+        wait_for(ready, 60000, [self](bool ok) {
+          const auto r = self->studio->portraits()->cache_report();
+          self->check(ok, "an empty cache is inspected");
+          self->check(r.value("total").toInt() == 0 && r.value("unusableRows").toInt() == 0, "an empty cache has nothing to decide");
+          self->step();
+        });
+      });
+      steps.push_back([self] {
+        auto* portraits = self->studio->portraits();
+        const auto dir = portraits->cache_directory();
+        const auto digest = portraits->snapshot_digest();
+        PortraitCache cache(dir);
+        QString error;
+        const auto png = [](QColor color) {
+          QImage image(64, 64, QImage::Format_RGB32);
+          image.fill(color);
+          QByteArray bytes;
+          QBuffer buffer(&bytes);
+          buffer.open(QIODevice::WriteOnly);
+          image.save(&buffer, "PNG");
+          return bytes;
+        };
+        const QString mesh = QStringLiteral("meshes\\actors\\character\\facegendata\\facegeom\\skyrim.esm\\000a2c8e.nif");
+        const auto real = PortraitRenderer::fingerprint_of(portraits->snapshot(), mesh);
+        const auto stamp = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+        const auto make = [&](const QString& form_key, const QString& renderer, const QString& snapshot_digest, QList<PortraitResource> resources) {
+          PortraitEntry e;
+          e.form_key = form_key;
+          e.renderer_version = renderer;
+          e.snapshot_digest = snapshot_digest;
+          e.resources = std::move(resources);
+          e.width = 64;
+          e.height = 64;
+          e.created_at = stamp;
+          return e;
+        };
+        const auto renderer = PortraitRenderer::kRendererVersion;
+        bool stored = true;
+        stored &= cache.store(make("0A2C8E:Skyrim.esm", renderer, digest, {real}), png(Qt::red), &error);            // valid, real fingerprint
+        stored &= cache.store(make("013364:Skyrim.esm", renderer, digest, {}), png(Qt::green), &error);               // valid
+        stored &= cache.store(make("01A690:Skyrim.esm", renderer, digest, {}), png(Qt::blue), &error);                // valid + previous
+        stored &= cache.store(make("01A690:Skyrim.esm", renderer, digest, {}), png(Qt::yellow), &error);
+        stored &= cache.store(make("000001:Skyrim.esm", QStringLiteral("portrait-v0"), digest, {}), png(Qt::cyan), &error);        // stale: renderer
+        stored &= cache.store(make("000002:Skyrim.esm", renderer, QStringLiteral("another-profile"), {}), png(Qt::magenta), &error);  // stale: profile
+        auto moved = real;
+        moved.size += 7;
+        stored &= cache.store(make("000003:Skyrim.esm", renderer, digest, {moved}), png(Qt::gray), &error);                // stale: a resource
+        stored &= cache.store(make("000004:Skyrim.esm", renderer, digest, {}), png(Qt::darkRed), &error);                  // damaged: image gone
+        self->check(stored, "the cache was seeded: " + error);
+        if (const auto damaged = cache.current("000004:Skyrim.esm")) QFile::remove(damaged->image_path);
+        const QDir folder(dir);
+        QFile orphan(folder.filePath("00000005_skyrim.esm-bbbbbbbbbbbb.png"));
+        if (orphan.open(QIODevice::WriteOnly)) orphan.write("orphan");
+        QFile foreign(folder.filePath("notes.txt"));
+        if (foreign.open(QIODevice::WriteOnly)) foreign.write("not the studio's");
+        const auto shot = QDir(self->work_dir).filePath("game-shot.png");
+        QImage picture(32, 32, QImage::Format_RGB32);
+        picture.fill(Qt::white);
+        picture.save(shot, "PNG");
+        self->check(cache.store_game_capture("0A2C8E:Skyrim.esm", shot, stamp, &error), "a Skyrim capture was attached: " + error);
+        PortraitCache variants(folder.filePath("variants"));
+        self->check(variants.store(make("variant:test", renderer, digest, {}), png(Qt::darkBlue), &error), "an A/B variant was stored: " + error);
+        self->step();
+      });
+      steps.push_back([self, wait_for, ready] {
+        self->studio->portraits()->inspectCache();
+        wait_for(ready, 60000, [self](bool ok) {
+          auto* portraits = self->studio->portraits();
+          const auto r = portraits->cache_report();
+          const auto c = r.value("counts").toMap();
+          self->check(ok, "the seeded cache is inspected");
+          self->log(QStringLiteral("cache report: %1 rows in %2 ms, counts valid=%3 stale=%4 damaged=%5 kept=%6 captures=%7 orphans=%8 unknown=%9, unusable %10 rows / %11 B")
+                        .arg(r.value("total").toInt()).arg(r.value("ms").toLongLong()).arg(c.value("valid").toInt()).arg(c.value("stale").toInt())
+                        .arg(c.value("damaged").toInt()).arg(c.value("kept").toInt()).arg(c.value("captures").toInt()).arg(c.value("orphans").toInt())
+                        .arg(c.value("unknown").toInt()).arg(r.value("unusableRows").toInt()).arg(r.value("unusableBytes").toLongLong()));
+          self->check(c.value("valid").toInt() == 3, "3 renders are valid (one with a real fingerprint of the profile)");
+          self->check(c.value("stale").toInt() == 3, "3 renders are stale");
+          self->check(c.value("damaged").toInt() == 1, "1 render is damaged");
+          self->check(c.value("kept").toInt() == 1 && c.value("captures").toInt() == 1, "the previous render and the Skyrim capture are kept");
+          self->check(c.value("orphans").toInt() == 1 && c.value("unknown").toInt() == 1, "1 orphan image and 1 foreign file");
+          self->check(r.value("unusableRows").toInt() == 5, "5 rows can be removed: 3 stale, 1 damaged, 1 orphan");
+          QSet<QString> reasons;
+          bool protected_ok = true;
+          for (const auto& v : r.value("rows").toList()) {
+            const auto row = v.toMap();
+            reasons.insert(row.value("code").toString());
+            const auto kind = row.value("kind").toString();
+            if (row.value("unusable").toBool() && (row.value("state").toString() == QLatin1String("valid") || kind == QLatin1String("capture") ||
+                                                  kind == QLatin1String("previous") || row.value("code").toString() == QLatin1String("unknown-file"))) {
+              protected_ok = false;
+            }
+          }
+          self->check(protected_ok, "a valid render, a previous render, a capture and a foreign file are never removable");
+          for (const auto& code : {"renderer-changed", "profile-changed", "resource-changed", "image-missing", "orphan-image", "unknown-file", "ok"}) {
+            self->check(reasons.contains(QString::fromLatin1(code)), QStringLiteral("a row explains itself with %1").arg(code));
+          }
+          self->check(r.value("variants").toMap().value("files").toInt() == 2, "the A/B variant folder is counted apart (entry + image)");
+          // The inspector agrees with the cache's own lookup() on every render.
+          PortraitCache cache(portraits->cache_directory());
+          const auto snapshot = portraits->snapshot();
+          int disagree = 0;
+          for (const auto& v : r.value("rows").toList()) {
+            const auto row = v.toMap();
+            if (row.value("kind").toString() != QLatin1String("render") || row.value("formKey").toString().isEmpty()) continue;
+            const auto found = cache.lookup(row.value("formKey").toString(), PortraitRenderer::kRendererVersion, portraits->snapshot_digest(),
+                                            [&snapshot](const QString& p) { return PortraitRenderer::fingerprint_of(snapshot, p); });
+            if ((found.state == PortraitCacheState::Valid) != (row.value("state").toString() == QLatin1String("valid"))) ++disagree;
+          }
+          self->check(disagree == 0, "the inspector and PortraitCache::lookup() agree on every render");
+          QFile out(QDir(self->work_dir).filePath("cache-report.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(r)).toJson());
+          self->step();
+        });
+      });
+      // The dialog, reached the way a person reaches it: Settings Center -> portrait cache -> "Inspeccionar la caché…".
+      steps.push_back([self, wait_for, find_item] {
+        auto* center = self->window->findChild<QObject*>(QStringLiteral("settingsCenter"));
+        self->check(center != nullptr, "the Settings Center exists");
+        if (!center) { self->step(); return; }
+        QMetaObject::invokeMethod(center, "openAt", Q_ARG(QVariant, QStringLiteral("npc")), Q_ARG(QVariant, QStringLiteral("npc.portraitCache")));
+        wait_for([self, find_item] { return (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton")) != nullptr; }, 15000,
+                 [self, find_item, wait_for](bool ok) {
+          self->check(ok, "the Settings Center shows the portrait cache panel with its inspector button");
+          if (!ok) { self->step(); return; }
+          auto* button = (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton"));
+          self->check(button->isEnabled(), "the inspector button is enabled with a profile loaded");
+          // The Settings Center scrolls to the setting it was asked for: click when the button has stopped moving and is on screen.
+          auto last = std::make_shared<QPointF>(-1, -1);
+          auto stable = std::make_shared<int>(0);
+          wait_for([self, find_item, last, stable] {
+            auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton"));
+            if (!b) return false;
+            const auto at = b->mapToScene(QPointF(b->width() / 2, b->height() / 2));
+            const bool on_screen = at.y() > 140 && at.y() < self->window->height() - 110 && at.x() > 0 && at.x() < self->window->width();
+            *stable = (on_screen && at == *last) ? *stable + 1 : 0;
+            *last = at;
+            return *stable >= 6;  // 300 ms without moving
+          }, 15000, [self, find_item, wait_for](bool settled) {
+            self->check(settled, "the inspector button is on screen and still");
+            auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton"));
+            if (!settled || !b) { self->step(); return; }
+            self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-settings-panel.png"));
+            const auto p = b->mapToScene(QPointF(b->width() / 2, b->height() / 2)).toPoint();
+            QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, p);
+            self->step();
+          });
+        });
+      });
+      steps.push_back([self, wait_for, ready, find_item, dialog_of] {
+        // The dialog lives inside a Component of the Settings Center (not in the window's QObject tree): it is reached through
+        // an item of its content, which is only in the item tree while the popup is open.
+        wait_for([self, find_item] { return (*find_item)(self->window->contentItem(), QStringLiteral("inspectorSummary")) != nullptr; }, 10000,
+                 [self, wait_for, ready, find_item, dialog_of](bool opened) {
+          QObject* dialog = dialog_of(self->window, *find_item);
+          self->check(opened && dialog != nullptr, "clicking the button opened the inspector dialog");
+          if (!dialog) { self->step(); return; }
+          wait_for([dialog] { return dialog->property("opened").toBool(); }, 10000, [self, dialog, wait_for, ready](bool ok) {
+          self->check(ok, "the inspector reports itself opened");
+          wait_for(ready, 60000, [self, dialog, wait_for](bool) {
+            self->after(400, [self, dialog, wait_for] {
+              self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-inspector-attention.png"));
+              const auto shown = dialog->property("shown").toList();
+              self->check(shown.size() == 5, QStringLiteral("the default filter lists the 5 rows that need a decision (%1)").arg(shown.size()));
+              int inspected = 0;
+              auto* content = qvariant_cast<QQuickItem*>(dialog->property("contentItem"));
+              const auto problems = content ? layout_problems(content, false, &inspected) : QStringList{QStringLiteral("no content item")};
+              self->check(problems.isEmpty(), QStringLiteral("inspector %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+              dialog->setProperty("filter", QStringLiteral("all"));
+              self->after(400, [self, dialog, wait_for] {
+                self->check(dialog->property("shown").toList().size() == 11, "the 'all' filter lists the 11 rows");
+                // The names of the NPCs come from the catalog of the real profile (Lydia and Ingun are in the seeded cache).
+                const auto key_of = [self](const QString& form_key) { return self->studio->npcKey(form_key); };
+                wait_for([self, key_of] {
+                  const auto names = self->studio->npc_names();
+                  return !names.value(key_of("0A2C8E:Skyrim.esm")).toString().isEmpty() && !names.value(key_of("013364:Skyrim.esm")).toString().isEmpty();
+                }, 30000, [self, dialog, key_of](bool named) {
+                  const auto names = self->studio->npc_names();
+                  const auto lydia = names.value(key_of("0A2C8E:Skyrim.esm")).toString();
+                  const auto ingun = names.value(key_of("013364:Skyrim.esm")).toString();
+                  self->log("npc names: 0A2C8E = '" + lydia + "', 013364 = '" + ingun + "', 000001 = '" + names.value(key_of("000001:Skyrim.esm")).toString() + "'");
+                  self->check(named && lydia.contains(QStringLiteral("Lydia"), Qt::CaseInsensitive) && ingun.contains(QStringLiteral("Ingun"), Qt::CaseInsensitive),
+                              "the catalog's names appear for the NPCs of the cache (Lydia, Ingun)");
+                  self->check(names.contains(key_of("000001:Skyrim.esm")) && names.value(key_of("000001:Skyrim.esm")).toString().isEmpty(), "an NPC the catalog does not have is remembered as unknown (not asked again)");
+                  self->after(400, [self, dialog] {
+                    self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-inspector-all.png"));
+                    dialog->setProperty("filter", QStringLiteral("attention"));
+                    self->step();
+                  });
+                });
+              });
+            });
+          });
+          });
+        });
+      });
+      // What the confirm dialog of the Settings Center asks for: remove the unusable, nothing else.
+      steps.push_back([self, wait_for, find_item, dialog_of] {
+        auto* portraits = self->studio->portraits();
+        const QDir folder(portraits->cache_directory());
+        const auto outside = QDir(self->work_dir).filePath("game-shot.png");
+        const auto good = portraits->cache_report().value("rows").toList();
+        QStringList survivors;
+        for (const auto& v : good) {
+          const auto row = v.toMap();
+          if (!row.value("unusable").toBool()) survivors << row.value("files").toStringList();
+        }
+        portraits->removeUnusable();
+        wait_for([portraits] { const auto r = portraits->cache_report(); return r.value("state").toString() == QLatin1String("ready") && r.value("lastPurge").isValid() && !r.value("lastPurge").isNull(); }, 60000,
+                 [self, portraits, folder, outside, survivors, find_item, dialog_of](bool ok) {
+          const auto r = portraits->cache_report();
+          const auto purge = r.value("lastPurge").toMap();
+          const auto c = r.value("counts").toMap();
+          self->check(ok, "the removal finished");
+          self->log(QStringLiteral("purge: %1 rows, %2 files, %3 B, error '%4'; after: valid=%5 stale=%6 damaged=%7 kept=%8 captures=%9 orphans=%10 unknown=%11")
+                        .arg(purge.value("rows").toInt()).arg(purge.value("files").toInt()).arg(purge.value("bytes").toLongLong()).arg(purge.value("error").toString())
+                        .arg(c.value("valid").toInt()).arg(c.value("stale").toInt()).arg(c.value("damaged").toInt()).arg(c.value("kept").toInt())
+                        .arg(c.value("captures").toInt()).arg(c.value("orphans").toInt()).arg(c.value("unknown").toInt()));
+          self->check(purge.value("rows").toInt() == 5 && purge.value("files").toInt() == 8 && purge.value("error").toString().isEmpty(),
+                      "5 rows / 8 files were removed (3 stale entries and images, 1 damaged entry, 1 orphan) without errors");
+          self->check(c.value("stale").toInt() == 0 && c.value("damaged").toInt() == 0 && c.value("orphans").toInt() == 0 && r.value("unusableRows").toInt() == 0, "nothing unusable is left");
+          self->check(c.value("valid").toInt() == 3 && c.value("kept").toInt() == 1 && c.value("captures").toInt() == 1 && c.value("unknown").toInt() == 1,
+                      "the 3 valid renders, the previous one, the capture and the foreign file survived");
+          bool all_there = true;
+          for (const auto& f : survivors) all_there &= QFile::exists(folder.filePath(f));
+          self->check(all_there, QStringLiteral("every file of a row that stays is still on disk (%1 files)").arg(survivors.size()));
+          self->check(QFile::exists(folder.filePath("notes.txt")) && QFile::exists(outside), "the foreign file and the user's own image were not touched");
+          self->check(r.value("variants").toMap().value("files").toInt() == 2, "the A/B variants were not touched by this removal");
+          QObject* dialog = dialog_of(self->window, *find_item);
+          self->after(400, [self, dialog] {
+            self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-inspector-after-purge.png"));
+            if (dialog) QMetaObject::invokeMethod(dialog, "close");
+            self->step();
+          });
+        });
+      });
+      steps.push_back([self, wait_for] {
+        auto* portraits = self->studio->portraits();
+        self->check(portraits->clearVariants().isEmpty(), "the A/B images were removed");
+        wait_for([portraits] { return portraits->cache_report().value("variants").toMap().value("files").toInt() == 0; }, 30000, [self, portraits](bool ok) {
+          self->check(ok, "the report shows no A/B files any more");
+          self->check(portraits->cache_report().value("counts").toMap().value("valid").toInt() == 3, "the gallery's renders were not touched by clearing the A/B images");
+          self->step();
+        });
+      });
+    } else if (name == "skin-match") {
+      // Reference integration A4: the head <-> body skin match (an ESTIMATE of the seam at the neck) of several real NPCs of the profile.
+      // Checks the invariants of every result (verdict, thresholds, ΔE of each part, the ESTIMATE / UNVERIFIED_IN_SKYRIM caveats, an
+      // unmeasured body said as such) and captures the card in «Origen». Writes skin-match-report.json. Not in "all".
+      auto rows = std::make_shared<QJsonArray>();
+      QStringList npcs = {self->primary_npc, QStringLiteral("013364:Skyrim.esm"), QStringLiteral("013BB4:Skyrim.esm"), QStringLiteral("0136BE:Skyrim.esm"),
+                          QStringLiteral("01412C:Skyrim.esm"), QStringLiteral("01325C:Skyrim.esm"), QStringLiteral("013B99:Skyrim.esm"),
+                          QStringLiteral("01361F:Skyrim.esm"), QStringLiteral("0918E2:Skyrim.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      auto index = std::make_shared<int>(0);
+      auto next = std::make_shared<std::function<void()>>();
+      auto captured = std::make_shared<bool>(false);
+      *next = [self, rows, npcs, index, next, captured] {
+        if (*index >= npcs.size()) { self->step(); return; }
+        const auto form_key = npcs.at((*index)++);
+        self->studio->selectNpc(form_key);
+        self->when_idle([self, rows, form_key, next, captured] {
+          const auto m = self->scene()->skin_match();
+          const auto verdict = m.value("verdict").toString();
+          static const QSet<QString> verdicts{"CONSISTENT", "NOTICEABLE", "LIKELY_SEAM", "UNKNOWN"};
+          self->check(m.value("state").toString() == QLatin1String("ready") && verdicts.contains(verdict), form_key + ": a skin match with verdict " + verdict);
+          const auto caveats = m.value("caveats").toStringList();
+          self->check(caveats.contains(QStringLiteral("ESTIMATE")) && caveats.contains(QStringLiteral("UNVERIFIED_IN_SKYRIM")), form_key + ": carries ESTIMATE and UNVERIFIED_IN_SKYRIM");
+          const auto pairs = m.value("pairs").toList();
+          const double consistent = m.value("consistentMax").toDouble(), noticeable = m.value("noticeableMax").toDouble();
+          double worst = 0;
+          QStringList parts;
+          bool finite = true;
+          for (const auto& p : pairs) {
+            const auto d = p.toMap().value("deltaE").toDouble();
+            finite &= std::isfinite(d) && d >= 0.0;
+            worst = std::max(worst, d);
+            parts << QStringLiteral("%1 %2 %3 «%4»").arg(p.toMap().value("role").toString()).arg(d, 0, 'f', 1, QLatin1Char(' ')).arg(p.toMap().value("color").toString(), p.toMap().value("label").toString().left(60));
+          }
+          self->check(finite, form_key + ": every ΔE is finite and not negative");
+          if (verdict == QLatin1String("UNKNOWN")) {
+            self->check(pairs.isEmpty() && !m.value("codes").toStringList().isEmpty(), form_key + ": UNKNOWN names why (" + m.value("codes").toStringList().join(",") + ")");
+          } else {
+            self->check(!pairs.isEmpty() && std::abs(worst - m.value("worst").toDouble()) < 1e-9, form_key + ": the worst ΔE is the largest of the parts");
+            const bool matches = verdict == QLatin1String("CONSISTENT") ? worst <= consistent
+                               : verdict == QLatin1String("NOTICEABLE") ? worst > consistent && worst <= noticeable : worst > noticeable;
+            self->check(matches, QStringLiteral("%1: the verdict %2 agrees with its thresholds (worst ΔE %3)").arg(form_key, verdict).arg(worst, 0, 'f', 1));
+          }
+          // Which textures each skin shape was measured on (to explain a surprising number).
+          for (const auto& part : self->scene()->parts()) {
+            const auto row = part.toMap();
+            if (row.value("group").toString() != QLatin1String("skin") && row.value("group").toString() != QLatin1String("head")) continue;
+            const auto insp = row.value("inspector").toMap();
+            QStringList textures;
+            for (const auto& t : insp.value("textures").toList()) {
+              const auto tm = t.toMap();
+              if (tm.value("role").toString().startsWith(QLatin1String("Effective")) || tm.value("role").toString() == QLatin1String("Diffuse"))
+                textures << tm.value("role").toString() + "=" + tm.value("path").toString().right(60) + " @ " + tm.value("location").toString().left(40);
+            }
+            self->log(QStringLiteral("  skin part %1 [%2] slots %3 shader %4 shown %5 :: %6")
+                          .arg(row.value("label").toString().left(50), row.value("group").toString(), insp.value("slots").toString(), insp.value("shader").toString().right(30))
+                          .arg(row.value("shownByDefault").toBool()).arg(textures.join(" | ")));
+          }
+          self->log(QStringLiteral("skin match %1 (%2): %3 [%4] head %5 :: %6")
+                        .arg(form_key, self->appearance()->npc_label(), verdict, parts.join(", "), m.value("head").toMap().value("color").toString(), m.value("message").toString().left(110)));
+          rows->append(QJsonObject{{"npc", form_key}, {"name", self->appearance()->npc_label()}, {"verdict", verdict}, {"worst", worst},
+                                   {"codes", QJsonArray::fromStringList(m.value("codes").toStringList())}, {"parts", QJsonArray::fromStringList(parts)}});
+          // Capture the card for the first NPC that could be measured (and one that could not, to show the honest message).
+          if (!*captured && verdict != QLatin1String("UNKNOWN")) {
+            *captured = true;
+            if (auto* tabs = self->window->findChild<QObject*>(QStringLiteral("creatorRightTabs"))) tabs->setProperty("currentIndex", 5);
+            self->after(600, [self, next] {
+              QQuickItem* card = nullptr;
+              std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+                for (auto* child : item->childItems()) {
+                  if (child->objectName() == QLatin1String("skinMatchCard") && child->isVisible()) card = child;
+                  walk(child);
+                }
+              };
+              walk(self->window->contentItem());
+              self->check(card != nullptr, "the skin match card is on screen in «Origen»");
+              if (card) {
+                int inspected = 0;
+                const auto problems = layout_problems(card, false, &inspected);
+                self->check(problems.isEmpty(), QStringLiteral("skin match card %1 items, layout %2").arg(inspected).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+              }
+              self->window->grabWindow().save(QDir(self->work_dir).filePath("skin-match-card.png"));
+              self->after(0, *next);
+            });
+            return;
+          }
+          self->after(0, *next);
+        });
+      };
+      steps.push_back([next] { (*next)(); });
+      steps.push_back([self, rows] {
+        QMap<QString, int> counts;
+        for (const auto& v : *rows) ++counts[v.toObject().value("verdict").toString()];
+        QStringList parts;
+        for (auto it = counts.begin(); it != counts.end(); ++it) parts << QStringLiteral("%1=%2").arg(it.key()).arg(it.value());
+        self->log(QStringLiteral("skin match: %1 NPCs, verdicts: %2").arg(rows->size()).arg(parts.join(", ")));
+        QFile out(QDir(self->work_dir).filePath("skin-match-report.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*rows).toJson());
+        self->check(rows->size() >= 6, "several NPCs were measured");
+        self->step();
+      });
+    } else if (name == "cache-redo") {
+      // Reference integration A2 (redo): "Rehacer los desactualizados" with the REAL profile. Seeds stale portraits of real NPCs (they must
+      // really be drawn again) and of an NPC that does not exist (a render error must be counted, not hang), clicks the button in the
+      // inspector, follows the progress, and then proves cancellation with more stale entries than the window. Isolated cache only. Not in "all".
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(50, *tick);
+        };
+        (*tick)();
+      };
+      auto find_item = std::make_shared<std::function<QQuickItem*(QQuickItem*, const QString&)>>();
+      *find_item = [find_item](QQuickItem* root, const QString& name) -> QQuickItem* {
+        if (!root) return nullptr;
+        if (root->objectName() == name && root->isVisible()) return root;
+        for (auto* child : root->childItems())
+          if (auto* hit = (*find_item)(child, name)) return hit;
+        return nullptr;
+      };
+      auto report_ready = [self] { return self->studio->portraits()->cache_report().value("state").toString() == QLatin1String("ready"); };
+      auto seed = [self](const QStringList& form_keys) {
+        auto* portraits = self->studio->portraits();
+        PortraitCache cache(portraits->cache_directory());
+        QImage image(64, 64, QImage::Format_RGB32);
+        image.fill(Qt::darkGray);
+        QByteArray png;
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG");
+        QString error;
+        bool ok = true;
+        for (const auto& form_key : form_keys) {
+          PortraitEntry e;
+          e.form_key = form_key;
+          e.renderer_version = QStringLiteral("portrait-v0");  // an old renderer: stale
+          e.snapshot_digest = portraits->snapshot_digest();
+          e.width = 64;
+          e.height = 64;
+          e.created_at = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+          ok &= cache.store(e, png, &error);
+        }
+        return ok;
+      };
+      auto redo_state = [self] { return self->studio->portraits()->redo_progress().value("state").toString(); };
+      steps.push_back([self, wait_for] {
+        const auto isolated = qEnvironmentVariable("SNS_PORTRAIT_CACHE_DIR");
+        auto* portraits = self->studio->portraits();
+        const auto dir = portraits->cache_directory();
+        if (isolated.isEmpty() || dir.isEmpty() || !QDir::fromNativeSeparators(dir).startsWith(QDir::fromNativeSeparators(isolated), Qt::CaseInsensitive)) {
+          self->skip("cache-redo: SNS_PORTRAIT_CACHE_DIR is not set (the user's own portrait cache is never seeded or redone by a harness)");
+          self->finish();
+          return;
+        }
+        wait_for([portraits] { return !portraits->snapshot_digest().isEmpty(); }, 120000, [self](bool ok) {
+          self->check(ok, "the profile's digest is ready");
+          self->step();
+        });
+      });
+      steps.push_back([self, seed, wait_for, report_ready] {
+        self->check(seed({"0A2C8E:Skyrim.esm", "013364:Skyrim.esm", "01A690:Skyrim.esm", "000001:Skyrim.esm"}), "4 stale portraits were seeded (3 real NPCs, 1 that does not exist)");
+        self->studio->portraits()->inspectCache();
+        wait_for(report_ready, 60000, [self](bool ok) {
+          const auto c = self->studio->portraits()->cache_report().value("counts").toMap();
+          self->check(ok && c.value("stale").toInt() == 4, QStringLiteral("the inspection finds the 4 stale portraits (%1)").arg(c.value("stale").toInt()));
+          self->step();
+        });
+      });
+      // Open the inspector the way a person does.
+      steps.push_back([self, wait_for, find_item] {
+        auto* center = self->window->findChild<QObject*>(QStringLiteral("settingsCenter"));
+        self->check(center != nullptr, "the Settings Center exists");
+        if (!center) { self->finish(); return; }
+        QMetaObject::invokeMethod(center, "openAt", Q_ARG(QVariant, QStringLiteral("npc")), Q_ARG(QVariant, QStringLiteral("npc.portraitCache")));
+        auto last = std::make_shared<QPointF>(-1, -1);
+        auto stable = std::make_shared<int>(0);
+        wait_for([self, find_item, last, stable] {
+          auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton"));
+          if (!b) return false;
+          const auto at = b->mapToScene(QPointF(b->width() / 2, b->height() / 2));
+          const bool on_screen = at.y() > 140 && at.y() < self->window->height() - 110 && at.x() > 0 && at.x() < self->window->width();
+          *stable = (on_screen && at == *last) ? *stable + 1 : 0;
+          *last = at;
+          return *stable >= 6;
+        }, 20000, [self, find_item](bool ok) {
+          self->check(ok, "the inspector button is on screen and still");
+          auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectPortraitsButton"));
+          if (ok && b) QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, b->mapToScene(QPointF(b->width() / 2, b->height() / 2)).toPoint());
+          self->step();
+        });
+      });
+      steps.push_back([self, wait_for, find_item, report_ready] {
+        wait_for([self, find_item] { return (*find_item)(self->window->contentItem(), QStringLiteral("inspectorRedoStale")) != nullptr; }, 10000, [self, wait_for, find_item, report_ready](bool opened) {
+          self->check(opened, "the inspector is open with its redo button");
+          if (!opened) { self->finish(); return; }
+          wait_for([self, find_item, report_ready] {
+            auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectorRedoStale"));
+            return report_ready() && b && b->isEnabled();
+          }, 30000, [self, find_item, wait_for](bool enabled) {
+            self->check(enabled, "the redo button is enabled when there is something stale");
+            auto* b = (*find_item)(self->window->contentItem(), QStringLiteral("inspectorRedoStale"));
+            if (!enabled || !b) { self->finish(); return; }
+            self->log("redo button: " + b->property("text").toString());
+            QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, b->mapToScene(QPointF(b->width() / 2, b->height() / 2)).toPoint());
+            // Follow the progress: it never goes back, and it is shown on screen.
+            auto last_done = std::make_shared<int>(0);
+            auto monotonic = std::make_shared<bool>(true);
+            auto captured = std::make_shared<bool>(false);
+            wait_for([self, last_done, monotonic, captured] {
+              const auto p = self->studio->portraits()->redo_progress();
+              const int done = p.value("done").toInt();
+              if (done < *last_done) *monotonic = false;
+              *last_done = done;
+              if (!*captured && p.value("state").toString() == QLatin1String("running")) {
+                *captured = true;
+                self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-redo-running.png"));
+              }
+              return p.value("state").toString() == QLatin1String("done");
+            }, 300000, [self, monotonic, captured](bool finished) {
+              const auto p = self->studio->portraits()->redo_progress();
+              self->log(QStringLiteral("redo: state %1, %2 of %3 done, %4 errors, %5 ms, last error '%6'")
+                            .arg(p.value("state").toString()).arg(p.value("done").toInt()).arg(p.value("total").toInt()).arg(p.value("errors").toInt())
+                            .arg(p.value("elapsedMs").toLongLong()).arg(p.value("lastError").toString().left(120)));
+              self->check(finished, "the redo finished");
+              self->check(*monotonic, "the progress never went backwards");
+              self->check(*captured, "the progress was visible while it ran");
+              self->check(p.value("total").toInt() == 4 && p.value("done").toInt() == 4, "all 4 portraits were handled");
+              self->check(p.value("errors").toInt() == 1, "the NPC that does not exist counted as 1 error instead of hanging");
+              self->step();
+            });
+          });
+        });
+      });
+      steps.push_back([self, wait_for, report_ready] {
+        // The 3 real NPCs have a new, valid, 256x256 render made from the real profile; the old one is kept for comparison.
+        auto* portraits = self->studio->portraits();
+        wait_for([portraits] { return portraits->cache_report().value("state").toString() == QLatin1String("ready") && portraits->cache_report().value("counts").toMap().value("valid").toInt() >= 3; }, 60000,
+                 [self, portraits](bool ok) {
+          const auto c = portraits->cache_report().value("counts").toMap();
+          self->log(QStringLiteral("after redo: valid=%1 stale=%2 damaged=%3 kept=%4").arg(c.value("valid").toInt()).arg(c.value("stale").toInt()).arg(c.value("damaged").toInt()).arg(c.value("kept").toInt()));
+          self->check(ok && c.value("valid").toInt() == 3, "3 portraits are valid again");
+          self->check(c.value("kept").toInt() == 3, "the 3 replaced renders are kept for comparison");
+          self->check(c.value("stale").toInt() == 1, "only the NPC that does not exist is still stale");
+          PortraitCache cache(portraits->cache_directory());
+          const auto snapshot = portraits->snapshot();
+          for (const auto& fk : {"0A2C8E:Skyrim.esm", "013364:Skyrim.esm", "01A690:Skyrim.esm"}) {
+            const auto form_key = QString::fromLatin1(fk);
+            const auto found = cache.lookup(form_key, PortraitRenderer::kRendererVersion, portraits->snapshot_digest(),
+                                            [&snapshot](const QString& p) { return PortraitRenderer::fingerprint_of(snapshot, p); });
+            self->check(found.state == PortraitCacheState::Valid, form_key + ": the cache lookup is valid with the real fingerprints");
+            QImage image(found.image_path);
+            self->check(!image.isNull() && image.width() == PortraitRenderer::kSize, form_key + QStringLiteral(": the new portrait is %1 px").arg(PortraitRenderer::kSize));
+            const auto prev = cache.previous(form_key);
+            self->check(prev && prev->entry.renderer_version == QLatin1String("portrait-v0"), form_key + ": the previous render (old renderer) is kept");
+          }
+          self->window->grabWindow().save(QDir(self->work_dir).filePath("cache-redo-done.png"));
+          self->step();
+        });
+      });
+      // Cancellation: more stale entries than the window, cancelled after the first one finishes.
+      steps.push_back([self, seed, wait_for, report_ready, redo_state] {
+        QStringList many;
+        for (int i = 0; i < 9; ++i) many << QStringLiteral("%1:Skyrim.esm").arg(0x20 + i, 6, 16, QLatin1Char('0'));
+        self->check(seed(many), "9 stale portraits of NPCs that do not exist were seeded");
+        auto* portraits = self->studio->portraits();
+        portraits->inspectCache();
+        wait_for(report_ready, 60000, [self, portraits, wait_for, redo_state](bool) {
+          portraits->redoStale();
+          wait_for([portraits] { return portraits->redo_progress().value("done").toInt() >= 1; }, 120000, [self, portraits, wait_for, redo_state](bool started) {
+            self->check(started, "the redo started and finished its first portrait");
+            portraits->cancelRedo();
+            wait_for([redo_state] { return redo_state() == QLatin1String("cancelled"); }, 120000, [self, portraits](bool cancelled) {
+              const auto p = portraits->redo_progress();
+              self->log(QStringLiteral("cancelled: %1 of %2 handled, active %3, pending %4").arg(p.value("done").toInt()).arg(p.value("total").toInt()).arg(p.value("active").toInt()).arg(p.value("pending").toInt()));
+              self->check(cancelled, "the redo reports cancelled once what was in flight finished");
+              self->check(p.value("total").toInt() >= 9 && p.value("done").toInt() < p.value("total").toInt(), "cancelling stopped it before every portrait was asked for");
+              self->check(p.value("active").toInt() == 0 && p.value("pending").toInt() == 0, "nothing is left in flight or waiting");
+              self->step();
+            });
+          });
         });
       });
     } else if (name == "quit-during-build") {

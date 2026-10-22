@@ -28,6 +28,11 @@ ScrollView {
         }
     }
 
+    PresetHeadDialog {
+        id: headDialog
+        studio: root.studio
+    }
+
     Dialog {
         id: compatDialog
         title: qsTr("Informe de Compatibilidad de Preset")
@@ -146,6 +151,16 @@ ScrollView {
                             color: Theme.textDim
                             font.pixelSize: Theme.micro
                             elide: Text.ElideRight
+                        }
+                    }
+
+                    Button {
+                        objectName: "presetHeadButton"
+                        text: qsTr("Export Head…")
+                        Accessible.name: qsTr("Comprobar la cabeza exportada de %1").arg(modelData.name)
+                        onClicked: {
+                            root.studio.presetHeads.check(modelData.diskPath)
+                            headDialog.open()
                         }
                     }
 

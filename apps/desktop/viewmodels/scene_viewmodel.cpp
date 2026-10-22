@@ -10,6 +10,7 @@
 #include "appearance_editor.hpp"
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
+#include "sns/appearance/skin_match.hpp"
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/ipc/protocol.hpp"
 
@@ -77,6 +78,38 @@ QString slots_of(std::uint32_t mask) {
   QStringList out;
   for (int bit = 0; bit < 32; ++bit) if (mask & (1u << bit)) out << QString::number(bit + 30);
   return out.join(", ");
+}
+
+// The skin match of what is on screen: the head against the body, hands and feet that the viewer draws (an estimate; see skin_match.hpp).
+// A body covered by the outfit is not drawn, so it is not measured: the result says so (BodyNotMeasured) instead of guessing.
+QVariantMap skin_match_of(const rendering::CharacterScene& scene) {
+  std::vector<appearance::SkinSample> samples;
+  for (const auto& part : scene.parts) {
+    if (!part.has_skin_median) continue;
+    samples.push_back({part.group == "head" ? std::string("head") : appearance::skin_role_of_slots(part.slot_mask),
+                       part.label + " / " + part.shape_name, part.skin_median});
+  }
+  const auto match = appearance::evaluate_skin_match(samples);
+  const auto hex = [](const std::array<float, 3>& c) { return QColor::fromRgbF(c[0], c[1], c[2]).name(); };
+  QStringList codes, caveats;
+  for (const auto& c : match.codes) codes << qs(c);
+  for (const auto& c : match.caveats) caveats << qs(c);
+  QVariantMap head;
+  QVariantList pairs;
+  std::size_t next_pair = 0;
+  for (const auto& s : samples) {
+    if (s.role == "head") {
+      if (head.isEmpty()) head = {{"label", qs(s.label)}, {"color", hex(s.rgb)}};
+    } else if (s.role == "body" || s.role == "hands" || s.role == "feet") {
+      if (next_pair < match.pairs.size()) {
+        const auto& d = match.pairs[next_pair++];
+        pairs.push_back(QVariantMap{{"role", qs(d.role)}, {"label", qs(d.label)}, {"color", hex(s.rgb)}, {"deltaE", d.delta_e}});
+      }
+    }
+  }
+  return {{"state", "ready"}, {"verdict", qs(std::string(appearance::to_string(match.verdict)))}, {"message", qs(match.message)},
+          {"worst", match.worst}, {"worstRole", qs(match.worst_role)}, {"codes", codes}, {"caveats", caveats},
+          {"head", head}, {"pairs", pairs}, {"consistentMax", appearance::kConsistentMax}, {"noticeableMax", appearance::kNoticeableMax}};
 }
 
 // Everything the inspector shows for one part, as plain strings (QML only lays it out).
@@ -249,7 +282,7 @@ void SceneViewModel::cancel() {
 }
 
 void SceneViewModel::clear() {
-  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
+  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); skin_match_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
   status_.clear();
   last_appearance_ = nullptr;
   last_request_key_.clear();
@@ -393,9 +426,9 @@ void SceneViewModel::reload() {
                             .arg(task).arg(effective, armor_preview_ ? "armor-preview" : "main",
                                            preview.npc_form_key.empty() ? "record" : "draft")
                             .arg(preview.geometry_revision).toStdString());
-  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_](const Json& data) {
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_, portrait_overlay = portrait_overlay_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, own_cache, portrait] {
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, own_cache, portrait, portrait_overlay] {
       auto prepared = std::make_shared<Prepared>();
       prepared->task = task;
       prepared->preview = preview;
@@ -428,7 +461,7 @@ void SceneViewModel::reload() {
           options.diffuse_max_dimension = 512;
           options.normal_max_dimension = 512;
         }
-        options.overlay = preview.overlay;
+        options.overlay = preview.overlay ? preview.overlay : portrait_overlay;
         op.stage("build_character_scene");
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
         if (display_mode == "piece" || display_mode == "mannequin") {
@@ -573,6 +606,7 @@ void SceneViewModel::install(Prepared& prepared) {
     {"textures", scene.stats.textures_loaded}, {"missingTextures", scene.stats.textures_missing},
     {"skinnedShapes", scene.stats.skinned_shapes}, {"bones", static_cast<qlonglong>(scene.skeleton_bones)}, {"missingBones", scene.stats.bones_missing},
     {"hiddenShapes", scene.stats.hidden_shapes}, {"texturesReduced", scene.stats.textures_reduced}, {"piecesUnequipped", scene.stats.pieces_unequipped}};
+  skin_match_ = skin_match_of(scene);
   installed_ = true;
   installed_npc_ = prepared.npc;
   installed_preview_ = prepared.preview;

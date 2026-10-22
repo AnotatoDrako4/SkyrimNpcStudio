@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "creation.analyzeVoice",
+  "params": {
+    "fixtureDirectory": "tests/antigravity/follower-behavior-lab/fixtures/basic",
+    "voiceFormKey": "013AD2:Skyrim.esm",
+    "female": true
+  }
+}

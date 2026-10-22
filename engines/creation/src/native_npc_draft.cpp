@@ -31,7 +31,7 @@ void validate_native_draft(const NativeNpcDraft& d) {
   if (!std::isfinite(d.height) || d.height < 0.5f || d.height > 2 || !std::isfinite(d.weight) || d.weight < 0 || d.weight > 100) fail("Invalid native NPC height or weight");
   if (d.level < 1 || d.level > 32767 || d.min_level < 1 || d.max_level < d.min_level || d.max_level > 32767 || d.health < 1 || d.health > 65535 || d.magicka < 0 || d.magicka > 65535 || d.stamina < 0 || d.stamina > 65535) fail("Invalid native NPC statistics");
   if (d.level_multiplier && (!std::isfinite(*d.level_multiplier) || *d.level_multiplier <= 0 || *d.level_multiplier > 10)) fail("Invalid level multiplier");
-  if (d.inventory.size() > 256 || d.factions.size() > 128 || d.head_part_form_keys.size() > 64 || d.outfit_armor_form_keys.size() > 64 || d.package_form_keys.size() > 64) fail("Native draft collection limit exceeded");
+  if (d.inventory.size() > 256 || d.factions.size() > 128 || d.head_part_form_keys.size() > 64 || d.outfit_armor_form_keys.size() > 64 || d.package_form_keys.size() > 64 || d.spell_form_keys.size() > 64 || d.perk_form_keys.size() > 64) fail("Native draft collection limit exceeded");
   for (const auto& item : d.inventory) if (item.count < 1 || item.count > 100000) fail("Invalid inventory count");
   for (const auto& faction : d.factions) if (faction.rank < -1 || faction.rank > 127) fail("Invalid faction rank");
   if (d.placement && (!std::isfinite(d.placement->x) || !std::isfinite(d.placement->y) || !std::isfinite(d.placement->z) || !std::isfinite(d.placement->rotation_z))) fail("Invalid placement coordinates");
@@ -63,6 +63,8 @@ Json native_npc_to_json(const NativeNpcDraft& d) {
   j["headPartFormKeys"] = d.head_part_form_keys;
   j["outfitArmorFormKeys"] = d.outfit_armor_form_keys;
   j["packageFormKeys"] = d.package_form_keys;
+  j["spellFormKeys"] = d.spell_form_keys;
+  j["perkFormKeys"] = d.perk_form_keys;
   j["hairColorFormKey"] = d.hair_color_form_key;
   j["headTextureFormKey"] = d.head_texture_form_key;
   j["face"] = d.face;
@@ -101,6 +103,8 @@ NativeNpcDraft native_npc_from_json(const Json& j) {
   d.head_part_form_keys = j.value("headPartFormKeys", d.head_part_form_keys);
   d.outfit_armor_form_keys = j.value("outfitArmorFormKeys", d.outfit_armor_form_keys);
   d.package_form_keys = j.value("packageFormKeys", d.package_form_keys);
+  d.spell_form_keys = j.value("spellFormKeys", d.spell_form_keys);
+  d.perk_form_keys = j.value("perkFormKeys", d.perk_form_keys);
   d.hair_color_form_key = j.value("hairColorFormKey", d.hair_color_form_key);
   d.head_texture_form_key = j.value("headTextureFormKey", d.head_texture_form_key);
   d.face = j.value("face", d.face);

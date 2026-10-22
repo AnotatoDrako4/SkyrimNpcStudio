@@ -171,6 +171,63 @@ TEST_CASE("Alpha translation follows the NiAlphaProperty and the alpha that real
   CHECK(sns::rendering::to_string(AlphaMode::BlendWithDepthPrepass) == "blendPrepass");
 }
 
+TEST_CASE("Median skin color is measured where the shape's UVs are, ignoring padding, make-up, tattoos and transparent texels", "[scene][skin]") {
+  using sns::rendering::median_skin_color;
+  using sns::rendering::RenderPart;
+  // A shape whose UV triangles cover the left half of the atlas (u 0..0.5): two triangles, 18 floats per vertex, UV at 6 and 7.
+  const auto make_part = [](float u0, float v0, float u1, float v1) {
+    RenderPart part;
+    const float uv[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+    part.vertices.assign(4 * sns::rendering::kFloatsPerVertex, 0.0f);
+    for (int i = 0; i < 4; ++i) {
+      part.vertices[i * sns::rendering::kFloatsPerVertex + 6] = uv[i][0];
+      part.vertices[i * sns::rendering::kFloatsPerVertex + 7] = uv[i][1];
+    }
+    part.indices = {0, 1, 2, 0, 2, 3};
+    return part;
+  };
+  // The atlas: skin on the left half; the right half is padding in an unrelated dark red (as in real skin atlases, where the islands
+  // of a hands shape are a small part of the canvas). Inside the covered half: a 12 % dark patch (tattoo), a 10 % transparent band
+  // and one row of strong red (lips). None of them may move the median, and the padding must not count at all.
+  auto atlas = image(128, 128, Rgba{210, 160, 130, 255});
+  auto* data = reinterpret_cast<std::uint8_t*>(atlas.data.data());
+  for (std::uint32_t y = 0; y < 128; ++y)
+    for (std::uint32_t x = 0; x < 128; ++x) {
+      auto* p = data + (static_cast<std::size_t>(y) * 128 + x) * 4;
+      if (x >= 64) { p[0] = 110; p[1] = 56; p[2] = 57; p[3] = 255; continue; }
+      if (y < 15) { p[0] = 20; p[1] = 20; p[2] = 25; }
+      else if (y >= 115) { p[3] = 0; p[0] = 255; p[1] = 0; p[2] = 255; }
+      else if (y == 60) { p[0] = 180; p[1] = 60; p[2] = 70; }
+    }
+  const auto left = median_skin_color(atlas, make_part(0.0f, 0.0f, 0.5f, 1.0f));
+  REQUIRE(left);
+  CHECK((*left)[0] == Catch::Approx(210.0f / 255.0f).margin(0.01));
+  CHECK((*left)[1] == Catch::Approx(160.0f / 255.0f).margin(0.01));
+  CHECK((*left)[2] == Catch::Approx(130.0f / 255.0f).margin(0.01));
+  // The same atlas read through a shape that lives on the right half measures the padding color: it is the UVs that choose.
+  const auto right = median_skin_color(atlas, make_part(0.5f, 0.0f, 1.0f, 1.0f));
+  REQUIRE(right);
+  CHECK((*right)[0] == Catch::Approx(110.0f / 255.0f).margin(0.01));
+  CHECK((*right)[1] == Catch::Approx(56.0f / 255.0f).margin(0.01));
+  // A shape using the whole canvas sees half skin, half padding: it still answers (one of the two, never an invented color).
+  CHECK(median_skin_color(atlas, make_part(0.0f, 0.0f, 1.0f, 1.0f)));
+
+  // Without anything to measure there is no answer rather than a wrong color.
+  RenderPart no_triangles;
+  CHECK_FALSE(median_skin_color(atlas, no_triangles));
+  CHECK_FALSE(median_skin_color(atlas, make_part(0.0f, 0.0f, 0.0f, 0.0f)));    // degenerate (zero-area) triangles
+  CHECK_FALSE(median_skin_color(atlas, make_part(1.5f, 1.5f, 2.5f, 2.5f)));    // UVs outside the atlas
+  CHECK_FALSE(median_skin_color(image(32, 32, Rgba{200, 150, 120, 0}), make_part(0.0f, 0.0f, 1.0f, 1.0f)));  // nothing opaque
+  CHECK_FALSE(median_skin_color(sns::textures::DdsImage{}, make_part(0.0f, 0.0f, 1.0f, 1.0f)));
+  auto compressed = image(32, 32, Rgba{200, 150, 120, 255});
+  compressed.format = sns::textures::TextureFormat::BC1;
+  CHECK_FALSE(median_skin_color(compressed, make_part(0.0f, 0.0f, 1.0f, 1.0f)));
+  // A very large texture is sampled on a grid, not walked texel by texel: same answer.
+  const auto big = median_skin_color(image(4096, 2048, Rgba{100, 120, 140, 255}), make_part(0.0f, 0.0f, 1.0f, 1.0f));
+  REQUIRE(big);
+  CHECK((*big)[2] == Catch::Approx(140.0f / 255.0f).margin(0.005));
+}
+
 TEST_CASE("DDS uses the stored mip that fits and decodes real alpha of BC1, BC3 and BC7", "[textures]") {
   using namespace sns::textures;
   // 8x8 BC1 with three stored levels: red (8x8), green (4x4), blue (2x2).

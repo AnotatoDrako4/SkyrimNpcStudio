@@ -166,6 +166,10 @@ struct RenderPart {
   bool shown_by_default = true;
   std::string hidden_reason;
 
+  // Median color (sRGB 0..1) of the skin this shape shows: the head with its FaceGen tint, a body / hands / feet addon with the skin
+  // tone. Measured on the composited diffuse (what is drawn); only for skin shapes. An estimate of the seam at the neck, nothing more.
+  bool has_skin_median = false;
+  std::array<float, 3> skin_median{};
   std::string addon_form_key;                // ARMA the mesh comes from ("" for FaceGen)
   std::array<std::string, 9> texture_slots;  // BSShaderTextureSet as stored in the NIF
   bool degenerate_uvs = false;               // textured, but every UV triangle has zero area
@@ -321,6 +325,12 @@ std::string hidden_reason(const nif::Shape& shape, const std::vector<std::string
 
 // Slot rules: a skin addon is hidden by any outfit piece sharing a slot; hair hides under 31/41.
 bool is_covered(std::uint32_t slots, std::uint32_t covered);
+
+// Per-channel median color (sRGB 0..1) of the texels of an RGBA8 image that THE SHAPE USES (those its UV triangles cover; the rest of
+// a skin atlas is padding, often a flat unrelated color, and would decide a whole-texture median) and that are at least half opaque,
+// over at most ~65k samples. The median, not the mean: make-up, tattoos, scars and lips are a small share of the covered skin and must
+// not move the result. nullopt for a missing or non-RGBA8 image, a shape with no usable UV triangle, or no opaque covered texel.
+std::optional<std::array<float, 3>> median_skin_color(const textures::DdsImage& image, const RenderPart& part);
 inline constexpr std::uint32_t kHairSlots = (1u << (31 - 30)) | (1u << (41 - 30));
 
 }  // namespace sns::rendering

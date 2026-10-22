@@ -15,8 +15,13 @@
 #include <QtQml/qqmlregistration.h>
 #include <memory>
 
+#include <QVector3D>
+#include <functional>
+#include <optional>
+
 #include "mo2_snapshot.hpp"
 #include "portrait_cache.hpp"
+#include "sns/rendering/scene.hpp"
 
 class QQuickRenderControl;
 class QThread;
@@ -47,6 +52,11 @@ class PortraitRenderer : public QObject {
   // Settings Center (npc.portraitInstantCache): a card shows the render stored in the cache at once, marked
   // provisional, while it is verified against the profile (or redone when it is out of date).
   Q_PROPERTY(bool instantCache READ instant_cache WRITE set_instant_cache NOTIFY changed)
+  // The cache inspector (Settings Center): what every file of this profile's portrait folder is. See inspectCache().
+  Q_PROPERTY(QVariantMap cacheReport READ cache_report NOTIFY cacheReportChanged)
+  // Progress of redoStale(): {state: "idle" | "running" | "cancelling" | "cancelled" | "done" | "unavailable", reason, total, done, errors,
+  //  active, pending, elapsedMs, lastError}.
+  Q_PROPERTY(QVariantMap redoProgress READ redo_progress NOTIFY redoProgressChanged)
 
  public:
   // Bump when the framing, lights, materials or image size change: every cached portrait is redone.
@@ -82,11 +92,60 @@ class PortraitRenderer : public QObject {
   // nothing visible is waiting, rendered at low priority; a new call replaces the list. Never on screen by
   // itself: a card still asks with request().
   Q_INVOKABLE void prefetch(const QStringList& formKeys);
+
+  // ---- Variants (the A/B view of the appearance sources, AppearanceSources)
+  // One render of an NPC with other files in place of some Data paths (another MO2 mod's FaceGen), drawn by the very
+  // same stage, camera and lights as a gallery portrait so two images differ only by what they were made from. It goes
+  // ahead of the gallery's renders, never touches the gallery's states or cache folder, and hands the image back to
+  // `done` (on the GUI thread) instead of storing it. Read-only: nothing is written to the profile or the game.
+  struct VariantJob {
+    QString base_form_key;                                   // the NPC to draw
+    std::shared_ptr<const rendering::AssetOverlay> overlay;  // consulted before the MO2 files and the BSAs
+    QHash<QString, QString> files;                           // lower-case Data path -> absolute file its overlay bytes came from
+    // `image` is null and `error` says why when it could not be drawn (cancelled, empty capture, scene failure).
+    std::function<void(const QImage& image, const QList<PortraitResource>& resources, qint64 render_ms, const QString& error)> done;
+  };
+  // `key` identifies the job (it must not look like a gallery NPC key); a job with that key already waiting is replaced.
+  void submit_variant(const QString& key, VariantJob job);
+  // Drops a job that has not started; one being drawn finishes (its owner ignores it).
+  void cancel_variant(const QString& key);
+  [[nodiscard]] bool variant_pending(const QString& key) const { return variant_jobs_.contains(key); }
+  // The framing the NPC's own head got this session ({center: [x, y, z], distance}), which every variant of it shares;
+  // empty when it has not been seen yet. Used by the harness to prove that two sides share one camera.
+  Q_INVOKABLE QVariantMap frameOf(const QString& formKey) const;
+  // The digest every portrait of this profile is bound to (empty while it is being computed).
+  [[nodiscard]] QString snapshot_digest() const { return snapshot_digest_; }
+  [[nodiscard]] SnapshotPtr snapshot() const { return snapshot_; }
+  // Thread-safe: what one resource is in this snapshot now (used by the background verifications too).
+  [[nodiscard]] static PortraitResource fingerprint_of(const SnapshotPtr& snapshot, const QString& path);
+  // Thread-safe: a loose file by its absolute path, size and modification time.
+  [[nodiscard]] static PortraitResource fingerprint_of_file(const QString& data_path, const QString& absolute_file);
   // What the profile's cache folder holds: {directory, renders, captures, files, bytes, indexed, verified,
   // outdated}. `revision` only makes bindings re-read it.
   Q_INVOKABLE QVariantMap cacheUsage(int revision = 0) const;
   // Removes this profile's studio renders (Skyrim captures attached by the user stay). Empty string or why not.
   Q_INVOKABLE QString clearRenders();
+  // ---- Cache inspector. Both run on the thread pool and report through `cacheReport`:
+  // {state: "idle" | "running" | "ready" | "unavailable", reason, ms, directory,
+  //  counts: {valid, stale, damaged, kept, orphans, unknown, captures}, bytes, unusableRows, unusableBytes,
+  //  rows: [{name, formKey, kind, state, code, detail, bytes, createdAt, rendererVersion, changed, unusable}] (at most kMaxReportRows),
+  //  truncated, variants: {files, bytes}, lastPurge: {rows, files, bytes, error}}.
+  // inspectCache() reads every entry and image (hash) and compares each render with the profile now; it changes nothing.
+  Q_INVOKABLE void inspectCache();
+  // Removes what cannot be used again (stale or damaged renders, damaged previous renders, images no entry names): never a valid
+  // render, a render kept for comparison, a Skyrim capture or a file that is not the studio's. It inspects anew first.
+  Q_INVOKABLE void removeUnusable();
+  // Removes the renders of the A/B view (AppearanceSources); they are redone when a comparison is opened. Empty string or why not.
+  Q_INVOKABLE QString clearVariants();
+  // Redoes the portraits the last inspection found stale or damaged, a few at a time, the NPCs the person never scrolled to included.
+  // Each one is checked against the profile again first (one that is valid by now is just counted). cancelRedo() stops asking for more;
+  // the ones in flight finish. Nothing is deleted: a render replaces its entry and keeps the previous one for comparison.
+  Q_INVOKABLE void redoStale();
+  Q_INVOKABLE void cancelRedo();
+  [[nodiscard]] QVariantMap redo_progress() const { return redo_; }
+  static constexpr int kRedoWindow = 4;  // portraits asked for at a time (the render queue holds kMaxQueue)
+  [[nodiscard]] QVariantMap cache_report() const { return cache_report_; }
+  static constexpr int kMaxReportRows = 3000;
   [[nodiscard]] bool instant_cache() const { return instant_cache_; }
   void set_instant_cache(bool on);
   // What the cache holds for this NPC besides the card portrait, each read back with its hash:
@@ -105,6 +164,8 @@ class PortraitRenderer : public QObject {
 
  signals:
   void changed();
+  void cacheReportChanged();
+  void redoProgressChanged();
   void finished(const QString& formKey, const QString& state);
 
  private:
@@ -118,8 +179,16 @@ class PortraitRenderer : public QObject {
   // Folder of the portrait caches of every profile (SNS_PORTRAIT_CACHE_DIR or the app's local data).
   [[nodiscard]] static QString portrait_base_directory();
   [[nodiscard]] PortraitResource fingerprint(const QString& path) const;
-  // Thread-safe: what one resource is in this snapshot now (used by the background verifications too).
-  [[nodiscard]] static PortraitResource fingerprint_of(const SnapshotPtr& snapshot, const QString& path);
+  void finish_variant(const QImage& image);
+  // Framing of a head: where the camera looks and how far it is (PortraitStage.frameHead's rule, in C++). A variant is
+  // framed like the NPC's own head so that two FaceGen files of one NPC are seen through one camera.
+  struct Frame {
+    QVector3D center;
+    float distance = 0.0f;
+  };
+  [[nodiscard]] std::optional<Frame> frame_of_scene() const;
+  // The NPC the scene must show for a render key (a gallery key is the NPC itself; a variant key names its NPC).
+  [[nodiscard]] QString scene_npc_of(const QString& key) const;
   // Verdict of PortraitCache::lookup() for one NPC in the current profile.
   struct Known {
     bool valid = false;
@@ -166,7 +235,22 @@ class PortraitRenderer : public QObject {
   bool lookup_in_flight_ = false;
   quint64 lookup_generation_ = 0;  // a cancel or a new profile drops the verdicts of a batch in flight
   bool instant_cache_ = true;
-  QString current_;                     // FormKey being rendered
+  QVariantMap cache_report_{{"state", "idle"}};
+  void run_inspection(bool purge);  // inspectCache() / removeUnusable()
+  void feed_redo();
+  void on_redo_finished(const QString& form_key, const QString& state);
+  void publish_redo(const QString& state);
+  QVariantMap redo_{{"state", "idle"}};
+  QStringList redo_pending_;    // FormKeys not asked for yet
+  QSet<QString> redo_active_;   // entry_name of the ones asked for and not finished
+  int redo_total_ = 0, redo_done_ = 0, redo_errors_ = 0;
+  bool redo_cancelled_ = false;
+  QString redo_last_error_;
+  QElapsedTimer redo_timer_;
+  QHash<QString, VariantJob> variant_jobs_;  // waiting or being drawn, by job key (they also sit in render_queue_)
+  QHash<QString, Frame> frames_;             // entry_name(NPC) -> framing of its own head, seen this session
+  bool probing_ = false;                     // a variant job builds the NPC's own head first, only to learn its framing
+  QString current_;                     // FormKey being rendered (or the key of a variant job)
   QHash<QString, QVariantMap> states_;  // PortraitCache::entry_name -> stateOf()
   QTimer watchdog_;
   QElapsedTimer render_timer_;
@@ -192,6 +276,7 @@ class PortraitRenderer : public QObject {
   // Measurements (stats()).
   int requested_ = 0, cache_hits_ = 0, rendered_ = 0, errors_ = 0, stale_ = 0, dropped_ = 0, cancelled_ = 0, max_queue_ = 0;
   int second_frames_ = 0;
+  int variants_framed_ = 0, variants_self_framed_ = 0;  // variant renders that took the NPC's own framing / framed themselves
   int provisional_ = 0, prefetched_ = 0, lookup_batches_ = 0, verified_ = 0, prefetch_requests_ = 0;
   qint64 max_lookup_ms_ = 0, index_ms_ = 0;
   qint64 total_render_ms_ = 0, max_render_ms_ = 0, total_capture_ms_ = 0;
