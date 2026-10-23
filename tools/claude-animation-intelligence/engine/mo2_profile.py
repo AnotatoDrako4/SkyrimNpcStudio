@@ -170,6 +170,39 @@ def parse_plain_list(text: str) -> list[str]:
     return [x.strip() for x in text.splitlines() if x.strip() and not x.strip().startswith("#")]
 
 
+# The order in which primaryPlugins() lists the base masters.
+BASE_MASTER_ORDER = ("skyrim.esm", "update.esm", "dawnguard.esm", "hearthfires.esm", "dragonborn.esm")
+
+
+def load_order(instance: Instance, profile: Profile, budget: Budget) -> list[str]:
+    """Lower-cased plugin load order: base masters, Skyrim.ccc entries, then the
+    starred plugins in plugins.txt order.
+
+    GameSkyrimSE declares LoadOrderMechanism::PluginsTxt (gameskyrimse.cpp), so the
+    position in plugins.txt is the load position, after the primary plugins.
+    """
+    order: list[str] = list(BASE_MASTER_ORDER)
+    seen = set(order)
+    if instance.game_path:
+        ccc = Path(instance.game_path) / "Skyrim.ccc"
+        if ccc.is_file():
+            try:
+                text = sandbox.read_text_confined(ccc, budget, max_bytes=1024 * 1024)
+            except sandbox.SandboxError:
+                text = ""
+            for line in text.splitlines():
+                name = line.strip().lower()
+                if name and name not in seen:
+                    order.append(name)
+                    seen.add(name)
+    for name, active in profile.plugins:
+        lowered = name.lower()
+        if active and lowered not in seen:
+            order.append(lowered)
+            seen.add(lowered)
+    return order
+
+
 def primary_plugins(instance: Instance, budget: Budget) -> tuple[frozenset[str], str]:
     """Plugins the game loads regardless of ``plugins.txt``, lower-cased.
 

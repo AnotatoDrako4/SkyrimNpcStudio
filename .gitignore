@@ -18,6 +18,7 @@ TestResults/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.ai-coordination/locks/
 
 # Python artifacts
 __pycache__/

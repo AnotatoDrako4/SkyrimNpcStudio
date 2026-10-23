@@ -302,6 +302,30 @@ class ExitCodeTests(FixtureCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertNotIn("generating", second.stdout, "a marked fixture is reused, not rebuilt")
 
+    def test_S10j_progress_events_are_json_lines_on_stderr(self) -> None:
+        import json
+
+        root = build_instance(
+            self.tmp / "inst",
+            {f"Mod{i}": {MT_IDLE: str(i).encode()} for i in range(3)},
+            [f"+Mod{i}" for i in range(3)],
+        )
+        done = self._run(
+            "scan", "--instance", str(root), "--profile", "TestProfile",
+            "--out", str(self.tmp / "out"), "--progress",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        events = [json.loads(line) for line in done.stderr.splitlines() if line.startswith("{")]
+        self.assertTrue(events, "progress mode must emit JSON events")
+        phases = [e["phase"] for e in events if e["event"] == "phase"]
+        self.assertEqual(phases, ["walk", "oar", "dar", "behavior", "archives", "issues"])
+        walk = [e for e in events if e["event"] == "progress"]
+        self.assertEqual([e["done"] for e in walk], list(range(len(walk))))
+        self.assertTrue(all(e["total"] == len(walk) for e in walk))
+        self.assertEqual(events[-1]["event"], "done")
+        self.assertEqual(events[-1]["exitCode"], 0)
+        self.assertIn("scan complete", done.stdout, "stdout stays human-readable")
+
     def test_S10g_verify_manifest_without_a_manifest_is_an_input_error(self) -> None:
         empty = self.tmp / "empty"
         empty.mkdir()

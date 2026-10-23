@@ -164,6 +164,8 @@ class ArchiveRecord:
     index: BsaIndex
     plugin_loaded: str = "unknown"  # "yes" | "no" | "unknown"
     relevant: dict[str, str] = field(default_factory=dict)  # norm key -> kind
+    plugin: str = ""  # the loaded plugin this archive was matched to
+    load_index: int | None = None  # that plugin's position in the load order
 
 
 @dataclass
@@ -202,10 +204,12 @@ def index_archives(
     budget: Budget,
     loaded_plugins: frozenset[str] | set[str] | None = None,
     listed_plugins: frozenset[str] | set[str] | None = None,
+    load_order: list[str] | None = None,
 ) -> ArchiveCatalog:
     """Read the name table of every archive the loose walk found, and mark each one
     as indexed in ``loose.archives`` so the loose-only coverage note stays accurate."""
     catalog = ArchiveCatalog()
+    position = {name: i for i, name in enumerate(load_order or [])}
     for entry in loose.archives:
         absolute = Path(str(entry["absolute"]))
         index = read_bsa_names(absolute, budget)
@@ -224,6 +228,12 @@ def index_archives(
                 record.plugin_loaded = "yes"
             elif listed_plugins is not None and any(c in listed_plugins for c in candidates):
                 record.plugin_loaded = "no"
+        if position:
+            # Longest matching plugin name first: candidates are ordered that way.
+            for candidate in _plugin_candidates(record.path):
+                if candidate in position:
+                    record.plugin, record.load_index = candidate, position[candidate]
+                    break
         for archived in index.paths:
             kind = classify(archived)
             if kind in ANIMATION_KINDS:
@@ -303,23 +313,52 @@ def archive_issues(catalog: ArchiveCatalog, loose: LooseIndex, budget: Budget) -
 
     for key in overlapping[: budget.max_html_rows]:
         owners = rel[key]
+        names = ", ".join(sorted({a.path for a in owners}))
+        resolvable = all(a.load_index is not None for a in owners)
+        if resolvable:
+            ordered = sorted(owners, key=lambda a: a.load_index or 0, reverse=True)
+            winner = ordered[0]
+            observed = (
+                f"{len({a.path for a in owners})} archives contain this path: {names}. By plugin "
+                f"load order the last one loaded is {winner.path} (via {winner.plugin})."
+            )
+            why = (
+                "Between archives the copy from the plugin loaded LAST is used. The order comes "
+                "from plugins.txt (MO2 LoadOrderMechanism::PluginsTxt) after the primary "
+                "plugins; the engine's mounting order itself was not verified, hence 'likely'."
+            )
+            providers = [
+                issues.ProviderRef(
+                    mod=a.mod, priority=a.priority, path=a.path, bytes=a.bytes,
+                    role=("winner" if a is winner else "overridden")
+                    + f" (load #{a.load_index}, {a.plugin})",
+                )
+                for a in ordered
+            ]
+            confidence = issues.LIKELY
+        else:
+            observed = f"{len({a.path for a in owners})} archives contain this path: {names}"
+            why = (
+                "Between archives the winner follows the load order of the plugins that load "
+                "them, not MO2 mod priority. At least one archive has no loaded plugin to "
+                "place it, so no winner is stated."
+            )
+            providers = refs(owners)
+            confidence = issues.UNVERIFIABLE
         out.append(
             issues.Issue(
                 category=issues.ARCHIVE_PATH_OVERLAP,
                 subject=key,
-                what_was_observed=(
-                    f"{len({a.path for a in owners})} archives contain this path: "
-                    + ", ".join(sorted({a.path for a in owners}))
-                ),
-                why_it_matters=(
-                    "Between archives the winner follows the load order of the plugins that "
-                    "load them, not MO2 mod priority, so no winner is stated here."
-                ),
+                what_was_observed=observed,
+                why_it_matters=why,
                 action="Check plugin load order if the wrong version of this clip appears.",
-                confidence=issues.UNVERIFIABLE,
+                confidence=confidence,
                 runtime_verification=issues.NOT_VERIFIED_IN_GAME,
-                providers=refs(owners),
-                source_reference=SOURCE_FORMAT,
+                providers=providers,
+                source_reference=(
+                    f"{SOURCE_FORMAT}; ModOrganizer2/modorganizer-game_skyrimse "
+                    "src/gameskyrimse.cpp loadOrderMechanism()"
+                ),
             )
         )
 
