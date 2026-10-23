@@ -229,6 +229,7 @@ Item {
             }
             TextField {
                 Layout.fillWidth: true
+                Accessible.name: qsTr("Nombre del proyecto")
                 text: root.forge.projectName
                 placeholderText: qsTr("Nombre del proyecto")
                 enabled: root.forge.hasProject && !root.forge.busy
@@ -242,6 +243,7 @@ Item {
             TextArea {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Theme.px(100)
+                Accessible.name: qsTr("Descripción interna")
                 text: root.forge.description
                 placeholderText: qsTr("Descripción interna")
                 wrapMode: TextEdit.WordWrap

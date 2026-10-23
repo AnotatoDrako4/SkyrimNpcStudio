@@ -21,7 +21,11 @@ Rectangle {
     border.color: control.activeFocus ? Theme.borderFocus : Theme.border
     border.width: control.activeFocus ? Theme.focusWidth : 1
     activeFocusOnTab: true
+    // What a screen reader announces for the whole control: its own name, else the options and the chosen one.
+    property string accessibleName: ""
     Accessible.role: Accessible.PageTabList
+    Accessible.name: accessibleName.length > 0 ? accessibleName
+                     : model.map(e => labelOf(e)).join(" / ") + (currentIndex >= 0 && currentIndex < model.length ? ": " + labelOf(model[currentIndex]) : "")
 
     function labelOf(entry) { return typeof entry === "string" ? entry : (entry.label ?? "") }
     function glyphOf(entry) { return typeof entry === "string" ? "" : (entry.glyph ?? "") }

@@ -742,6 +742,10 @@ struct Check : std::enable_shared_from_this<Check> {
     });
     // ---- UX06 U16: a catalog row's tooltip carries the full identity (name, EditorID, FormKey, slots, plugin).
     steps.push_back([this] {
+      select_workspace(1);
+      QMetaObject::invokeMethod(window.data(), "showCatalog");  // the Outfit armor catalog on screen
+    });
+    steps.push_back([this] {
       auto* list = visible_named("armorListView");
       QQuickItem* row = nullptr;
       if (list)
@@ -766,7 +770,15 @@ struct Check : std::enable_shared_from_this<Check> {
         std::function<void(QQuickItem*)> walk = [&](QQuickItem* i) {
           for (auto* c : i->childItems()) {
             if (!c->isVisible()) continue;
-            if (c->inherits("QQuickAbstractButton") || c->inherits("QQuickTextInput") || c->inherits("QQuickComboBox") ||
+            // The text field inside a ComboBox is its display, read through the ComboBox itself.
+            if (c->inherits("QQuickComboBox")) {
+              ++controls;
+              QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(c);
+              if (!iface || iface->text(QAccessible::Name).trimmed().isEmpty())
+                *missing << QStringLiteral("QQuickComboBox(%1)").arg(c->objectName());
+              continue;
+            }
+            if (c->inherits("QQuickAbstractButton") || c->inherits("QQuickTextInput") ||
                 c->inherits("QQuickSlider") || c->inherits("QQuickSpinBox") || c->objectName() == QLatin1String("npcViewSwitch") ||
                 c->objectName() == QLatin1String("armorViewSwitch") || c->objectName() == QLatin1String("armorTypeFilter")) {
               ++controls;
