@@ -81,8 +81,12 @@ def overlap_issues(catalog: OarCatalog, budget: Budget) -> list[issues.Issue]:
         top_priority = ordered[0].priority
         tied = [s for s in ordered if s.priority == top_priority]
         unconditional = [s for s in ordered if s.classification == ALWAYS_STATIC_IF_NO_CONDITIONS]
+        provider_mods = sorted({s.provider_mod for s in ordered})
+        cross_mod = len(provider_mods) > 1
 
-        if len(tied) > 1:
+        # A tie inside ONE mod is the author's design (on the real profile: weapon-specific
+        # jump submods sharing priority 99999), so it falls through to INTRA_MOD_OVERLAP.
+        if len(tied) > 1 and cross_mod:
             out.append(
                 issues.Issue(
                     category=issues.PRIORITY_TIE,
@@ -109,8 +113,6 @@ def overlap_issues(catalog: OarCatalog, budget: Budget) -> list[issues.Issue]:
             )
             continue
 
-        provider_mods = sorted({s.provider_mod for s in ordered})
-        cross_mod = len(provider_mods) > 1
         confidence = issues.LIKELY if len(unconditional) >= 2 else issues.UNVERIFIABLE
         observed = (
             f"{len(claimants)} active submods replace this animation path. Evaluation order "
@@ -121,6 +123,11 @@ def overlap_issues(catalog: OarCatalog, budget: Budget) -> list[issues.Issue]:
             observed += (
                 f" {len(unconditional)} of them declare no conditions at all, so the "
                 "highest-priority unconditional submod would normally apply."
+            )
+        if len(tied) > 1:
+            observed += (
+                f" {len(tied)} of them share priority {top_priority}; within one mod this is "
+                "normally deliberate (e.g. mutually exclusive weapon or gender conditions)."
             )
         if cross_mod:
             why = (
