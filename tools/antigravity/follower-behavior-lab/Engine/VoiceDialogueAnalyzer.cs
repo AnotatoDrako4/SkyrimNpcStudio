@@ -13,6 +13,9 @@ namespace SkyrimNpcStudio.Antigravity.FollowerBehaviorLab.Engine;
 /// </summary>
 public static class VoiceDialogueAnalyzer
 {
+    private static readonly string[] FollowerListFamily = ["VoicesFollower", "VoicesFollowerAll", "VoicesFollowerNeutral", "VoicesFollowerRough", "VoicesFollowerOrc"];
+    private static readonly string[] MarriageListFamily = ["VoicesMarriage", "VoicesMarriageAll", "VoicesMarriageNeutral", "VoicesMarriageRough", "VoicesMarriageArrogant", "VoicesMarriageNord", "VoicesMarriageOrc", "VoicesMarriageArgonian"];
+
     public static readonly FormKey VanillaVoicesFollowerKey = LabSyntheticFixture.VoicesFollowerList;
     public static readonly FormKey VanillaVoicesMarriageKey = LabSyntheticFixture.VoicesMarriageList;
     public static readonly FormKey VanillaPotentialFollowerFactionKey = LabSyntheticFixture.PotentialFollowerFaction;
@@ -203,17 +206,20 @@ public static class VoiceDialogueAnalyzer
     {
         var chain = new List<(LoadedPluginInfo Plugin, IFormListGetter Record, bool HasVoice)>();
 
+        // The real game has no FLST named "VoicesFollower" / "VoicesMarriage": it has VoicesFollowerAll / VoicesFollowerNeutral / ...Rough / ...Orc
+        // and VoicesMarriageAll / ...Neutral / ...Rough / ...Arrogant / ...Nord / ...Orc / ...Argonian (the ...Adoption* lists are for adoption
+        // dialogue, not marriage). A voice counts when any list of the family has it; the bare name stays for profiles that define it.
+        var family = string.Equals(expectedEditorId, "VoicesMarriage", StringComparison.OrdinalIgnoreCase) ? MarriageListFamily : FollowerListFamily;
         foreach (var plugin in context.EnabledPlugins)
         {
-            var match = plugin.Mod.FormLists.FirstOrDefault(fl =>
-                fl.FormKey == targetListKey ||
-                string.Equals(fl.EditorID, expectedEditorId, StringComparison.OrdinalIgnoreCase));
-
-            if (match is not null && !match.IsDeleted)
-            {
-                bool contains = match.Items.Any(i => i.FormKey == voiceKey);
-                chain.Add((plugin, match, contains));
-            }
+            var matches = plugin.Mod.FormLists
+                .Where(fl => !fl.IsDeleted && (fl.FormKey == targetListKey || (fl.EditorID is not null && family.Contains(fl.EditorID, StringComparer.OrdinalIgnoreCase))))
+                .ToArray();
+            if (matches.Length == 0) continue;
+            // The list reported as "the" list is the canonical ...All one (or the one that was asked for by key), the rest only add evidence.
+            var representative = matches.FirstOrDefault(fl => fl.FormKey == targetListKey) ?? matches[0];
+            bool contains = matches.Any(fl => fl.Items.Any(i => i.FormKey == voiceKey));
+            chain.Add((plugin, representative, contains));
         }
 
         if (chain.Count == 0)

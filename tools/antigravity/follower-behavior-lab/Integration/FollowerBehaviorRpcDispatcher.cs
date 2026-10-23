@@ -69,6 +69,12 @@ public static class FollowerBehaviorRpcDispatcher
         }
     }
 
+    // ----------------------------------------------------------------------------------------------------------------
+    // Two ways in. The overloads taking a (fixture directory) are the LABORATORY'S: they open a fixture folder and may build the
+    // synthetic one. The overloads taking a PluginContext are the PRODUCTION ones: the BethesdaWorker passes the context it builds
+    // from its indexed load-order session, and nothing here opens or creates a fixture on that path.
+    // ----------------------------------------------------------------------------------------------------------------
+
     public static CreationAnalyzeVoiceResponse HandleAnalyzeVoice(CreationAnalyzeVoiceRequest req, string? defaultFixtureDir = null)
     {
         if (string.IsNullOrWhiteSpace(req.VoiceFormKey))
@@ -77,6 +83,16 @@ public static class FollowerBehaviorRpcDispatcher
         }
 
         using var ctx = OpenContext(req.FixtureDirectory, defaultFixtureDir, req.ProfileName);
+        return HandleAnalyzeVoice(ctx, req);
+    }
+
+    public static CreationAnalyzeVoiceResponse HandleAnalyzeVoice(PluginContext ctx, CreationAnalyzeVoiceRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.VoiceFormKey))
+        {
+            throw new LabUsageException("InvalidArgument", "voiceFormKey is required.");
+        }
+
         var analysis = VoiceDialogueAnalyzer.AnalyzeVoice(ctx, req.VoiceFormKey, req.Female, req.Factions);
 
         return new CreationAnalyzeVoiceResponse
@@ -94,8 +110,18 @@ public static class FollowerBehaviorRpcDispatcher
             throw new LabUsageException("InvalidArgument", "FilterText exceeds maximum length of 160 characters.");
         }
 
-        int limit = Math.Clamp(req.Limit <= 0 ? 200 : req.Limit, 1, 500);
         using var ctx = OpenContext(req.FixtureDirectory, defaultFixtureDir, req.ProfileName);
+        return HandleGetCatalog(ctx, req);
+    }
+
+    public static CreationBehaviorCatalogResponse HandleGetCatalog(PluginContext ctx, CreationBehaviorCatalogRequest req)
+    {
+        if (req.FilterText.Length > 160)
+        {
+            throw new LabUsageException("InvalidArgument", "FilterText exceeds maximum length of 160 characters.");
+        }
+
+        int limit = Math.Clamp(req.Limit <= 0 ? 200 : req.Limit, 1, 500);
 
         var classes = CombatClassCatalog.EnumerateActiveClasses(ctx)
             .Where(c => c.EditorId.Contains(req.FilterText, StringComparison.OrdinalIgnoreCase)
@@ -142,9 +168,17 @@ public static class FollowerBehaviorRpcDispatcher
     public static CreationApplyArchetypeResponse HandleApplyArchetype(CreationApplyArchetypeRequest req, string? defaultFixtureDir = null)
     {
         ArgumentNullException.ThrowIfNull(req.Npc);
-        var template = ArchetypePlanner.GetById(req.ArchetypeId);
+        _ = ArchetypePlanner.GetById(req.ArchetypeId); // an unknown archetype is refused before any fixture is opened
 
         using var ctx = OpenContext(req.FixtureDirectory, defaultFixtureDir, req.ProfileName);
+        return HandleApplyArchetype(ctx, req);
+    }
+
+    public static CreationApplyArchetypeResponse HandleApplyArchetype(PluginContext ctx, CreationApplyArchetypeRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req.Npc);
+        var template = ArchetypePlanner.GetById(req.ArchetypeId);
+
         var report = BulkArchetypeEngine.ApplyArchetypeDryRun(ctx, [req.Npc], template, req.Categories);
         var entry = report.Entries[0];
 
@@ -196,6 +230,12 @@ public static class FollowerBehaviorRpcDispatcher
     {
         ArgumentNullException.ThrowIfNull(req.Npc);
         using var ctx = OpenContext(req.FixtureDirectory, defaultFixtureDir, req.ProfileName);
+        return HandleValidateBehavior(ctx, req);
+    }
+
+    public static CreationValidateBehaviorResponse HandleValidateBehavior(PluginContext ctx, CreationValidateBehaviorRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req.Npc);
         var verdict = FollowerValidationEngine.ValidatePlan(ctx, req.Npc);
 
         var workerIssues = verdict.Issues

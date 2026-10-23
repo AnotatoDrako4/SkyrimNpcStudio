@@ -1,0 +1,152 @@
+{
+  "agent": "Claude B (Animation Intelligence)",
+  "timestamp": "2026-10-23T09:40:00-03:00",
+  "status": "ANIM01_TESTS_UNITARIOS_OK_REAL_PROFILE_READ_ONLY",
+  "mission": "CLAUDE-B-ANIM-01: standalone read-only diagnostics for Skyrim SE animation mods in an MO2 profile (loose .hkx precedence, OAR/DAR rules, behaviour-engine output, offline HTML explorer)",
+  "increment": "Phases 0-5 complete: Python 3.11 stdlib CLI (scan/compare/inspect-oar/benchmark/verify-manifest/selftest), 87 tests (86 PASS, 1 justified SKIP), all 36 mandatory cases PASS, real read-only runs on profiles Default and BodyChangeNG-Test, benchmark, SHA-256 manifests, versioned JSON contract and integration handoff. No core file touched.",
+  "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
+  "stack": "Python 3.11.15, standard library only (dotnet --version reports no .NET SDK on this machine)",
+  "evidence": "out/claude-animation-intelligence/run-002/ (result.json, conflict-index.json, report.html, test-results.txt, manifest.sha256.json, FINAL_REPORT.md), compare-001/, bench-001/, oar-001/",
+  "activeLock": null,
+  "buildDirectories": [],
+  "usesBuildSlot": false,
+  "exclusiveOwnedPathsTouched": [
+    "tools/claude-animation-intelligence/**",
+    "tests/claude-animation-intelligence/**",
+    "docs/claude-animation-intelligence/**",
+    "out/claude-animation-intelligence/**",
+    ".ai-coordination/messages/claude-animation-to-claude-ux.md",
+    ".ai-coordination/status/claude-animation.json"
+  ],
+  "reservedPathsTouched": [],
+  "reservedPathsNotTouched": [
+    "apps/desktop/qml/**",
+    "apps/desktop/viewmodels/**",
+    "engines/**",
+    "services/BethesdaWorker/**",
+    "CMakeLists.txt",
+    "CMakePresets.json",
+    "SkyrimNpcStudio.slnx",
+    "AGENTS.md",
+    "scripts/**",
+    "tools/antigravity/**",
+    "tests/antigravity/**",
+    "docs/antigravity/**"
+  ],
+  "pathsReadOnlyAsReference": [
+    "AGENTS.md",
+    "engines/mo2/src/profile.cpp",
+    "engines/mo2/src/vfs.cpp",
+    "engines/mo2/include/sns/mo2/vfs.hpp",
+    ".ai-coordination/claims/ownership.md",
+    ".ai-coordination/status/claude.json"
+  ],
+  "antigravityPathsTouched": [],
+  "gitUsage": "NOT_USED_PER_OWNER_POLICY",
+  "exportsEnabled": false,
+  "skyrimValidationStatus": "PENDIENTE_SKYRIM",
+  "runtimeVerification": "NOT_VERIFIED_IN_GAME",
+  "mo2WriteStatus": "ZERO_WRITES_VERIFIED_BY_SHA256_BEFORE_AND_AFTER",
+  "mo2InstanceRead": {
+    "ini": "D:\\Apps\\ModOrganizer.ini",
+    "baseDirectory": "F:\\Mods Skyrim",
+    "profilesRead": [
+      "Default",
+      "BodyChangeNG-Test"
+    ],
+    "mode": "READ_ONLY",
+    "filesWitnessed": 5,
+    "filesUnchangedAfterRun": 5
+  },
+  "realProfileFindings": {
+    "profile": "BodyChangeNG-Test",
+    "fingerprint": "sha256:16a01a639449f3ec0b0f4bf2ce57feafd6641641cb3c418be1eea68d1bb4c0d1",
+    "enabledMods": 625,
+    "looseAnimationPaths": 2429,
+    "looseFileConflicts": 6,
+    "oarActiveCandidates": 212,
+    "oarPotentialOverlaps": 71,
+    "darRuleSets": 17,
+    "behaviorFiles": 32,
+    "behaviorToolsWithEvidence": [
+      "FNIS"
+    ],
+    "totalFindings": 274,
+    "scanSeconds": 4.95,
+    "findingsTotal": 273,
+    "highFindings": 6
+  },
+  "tests": {
+    "total": 116,
+    "pass": 115,
+    "fail": 0,
+    "skip": 1,
+    "mandatoryCasesPass": "36/36",
+    "command": "python -m unittest discover -s tests/claude-animation-intelligence -p \"test_*.py\"",
+    "skipReason": "S02 directory-symlink escape: creating a directory symlink needs SeCreateSymbolicLinkPrivilege ([WinError 1314]); the reparse-point guard itself is covered by S02b"
+  },
+  "knownLimits": [
+    "the game Data folder is not walked",
+    "no .hkx is deserialised; only size and first 16 bytes are read",
+    "OAR condition trees are recorded, never evaluated; runtime winner is always UNKNOWN",
+    "report.html rendered and exercised in Chrome (revision 2); no in-game verification",
+    "BSA names are read but file data is never extracted; archive-vs-archive precedence not resolved"
+  ],
+  "revision2": {
+    "browserValidation": "DONE via chrome-devtools: search, filters, row expansion, Reset, OAR panel, comparison, light/dark, 390px",
+    "defectsFoundAndFixed": [
+      "high-severity rows rendered last (falsy-zero client re-sort) - test_S07d",
+      "behaviour .hkx conflict reported twice - test_S07e",
+      "sideways page scroll at phone width - CSS"
+    ],
+    "improvement": "OAR overlaps split: 13 cross-mod STATIC_OVERLAP vs 58 INTRA_MOD_OVERLAP (info)",
+    "realProfileFindings": 273,
+    "highFindings": 6,
+    "tests": {
+      "total": 91,
+      "pass": 90,
+      "fail": 0,
+      "skip": 1,
+      "mandatoryCasesPass": "36/36"
+    }
+  },
+  "integrationStatus": "NO_INICIADO_BY_DESIGN",
+  "integrationHandoff": "docs/claude-animation-intelligence/INTEGRATION_HANDOFF.md",
+  "requestsToOtherAgents": [],
+  "blockers": [],
+  "revision3": {
+    "pluginPresenceRule": "starred in plugins.txt OR primary (5 base masters + Skyrim.ccc), per gameskyrimse.cpp primaryPlugins(); loadorder.txt no longer counted",
+    "walkPruning": "top-level textures/sound/music/calientetools pruned; --full-walk disables; real profile: identical 273 finding ids, dirs 11131 -> 5952, warm scan ~8.5s -> ~5.0s",
+    "tests": {
+      "total": 101,
+      "pass": 100,
+      "fail": 0,
+      "skip": 1,
+      "mandatoryCasesPass": "36/36"
+    },
+    "benchmarkGuard": "benchmark only generates into new/empty dirs with .anim-lab-synthetic-fixture marker; refuses real instances (exit 2, nothing written)",
+    "externalProfileChange": "user edited BodyChangeNG-Test in MO2 on 2026-10-23 00:36-00:45 (621->625 mods); detected by the witness; bracketed re-check 0 changes"
+  },
+  "revision4": {
+    "feature": "BSA directory (names only) read by engine/bsa_index.py; format verified empirically on 110 real v105 archives",
+    "realProfile": {
+      "archives": 110,
+      "indexed": 110,
+      "archiveAnimationPaths": 16,
+      "archiveOnly": 13,
+      "looseOverridesArchive": 3,
+      "pluginLoaded": {
+        "yes": 105,
+        "no": 4,
+        "unknown": 1
+      }
+    },
+    "tests": {
+      "total": 116,
+      "pass": 115,
+      "fail": 0,
+      "skip": 1,
+      "mandatoryCasesPass": "36/36"
+    }
+  }
+}

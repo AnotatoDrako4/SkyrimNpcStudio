@@ -16,6 +16,13 @@ Rectangle {
     readonly property bool hasGeometry: scene.hasModel
     property real yaw: 0
     readonly property bool selectionShown: selectionBox.visible  // 3D nodes are not QObject children of the window
+    // The "Empezar" card asks the workspace for these; it owns the dialogs and the tool selection.
+    signal newProjectRequested()
+    signal openProjectRequested()
+    signal toolRequested(string tool)
+    // Nothing loaded, loading or failed: the start card replaces the plain message only in the quiet state.
+    readonly property bool idle: !hasGeometry && !scene.busy && scene.state !== "error" && scene.state !== "cancelled"
+                                 && scene.state !== "unsupported" && !scene.fileName && !(forge.workspace.model)
     color: Theme.surface
 
     // Camera on the rendered bounds (RuntimeLoader.bounds: "may not be available before the first
@@ -330,12 +337,34 @@ Rectangle {
                 visible: running
             }
 
-            // Empty, unsupported, error and loading states (no sample character is ever shown).
+            // Start card: real next steps only (no sample character, no step without a backend).
+            EmptyState {
+                objectName: "forgeStartCard"
+                anchors.fill: parent
+                visible: root.idle
+                glyph: root.forge.hasProject ? "folder-open" : "forge"
+                title: root.forge.hasProject ? qsTr("Proyecto listo: añade un modelo o define el NPC") : qsTr("Empezar en Character Forge")
+                message: root.forge.hasProject
+                    ? qsTr("1. Importa un modelo GLB o glTF para verlo aquí.  2. Define identidad, estadísticas y comportamiento en «NPC nativo».  3. Valida antes de exportar.")
+                    : qsTr("Crea un proyecto .sncf nuevo o abre uno guardado. El borrador es independiente: nada se escribe en Skyrim ni en MO2.")
+                note: qsTr("No se muestra ningún personaje de ejemplo. FaceGen nativo pendiente: la exportación jugable sigue bloqueada.")
+                actions: root.forge.hasProject ? [
+                    { label: qsTr("Importar modelo GLB/glTF"), trigger: () => root.toolRequested("import") },
+                    { label: qsTr("Crear NPC"), trigger: () => root.toolRequested("native") },
+                    { label: qsTr("Biblioteca de modelos"), trigger: () => root.toolRequested("library") }
+                ] : [
+                    { label: qsTr("Nuevo proyecto"), enabled: !root.forge.busy, trigger: () => root.newProjectRequested() },
+                    { label: qsTr("Abrir .sncf…"), enabled: !root.forge.busy, trigger: () => root.openProjectRequested() },
+                    { label: qsTr("Biblioteca de modelos"), trigger: () => root.toolRequested("library") }
+                ]
+            }
+
+            // Unsupported, error and loading states (no sample character is ever shown).
             ColumnLayout {
                 anchors.centerIn: parent
                 width: Math.min(parent.width - 48, 480)
                 spacing: 12
-                visible: !root.hasGeometry
+                visible: !root.hasGeometry && !root.idle
                 Text {
                     Layout.fillWidth: true
                     text: root.scene.fileName || (root.forge.workspace.model ? root.forge.workspace.model.name : qsTr("Tu personaje empieza aquí"))

@@ -19,6 +19,12 @@ TestResults/
 *.sqlite-wal
 *.sqlite-shm
 
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+tests/claude-animation-intelligence/fixtures/perf/
+
 # Never commit game data or third-party mod content
 *.esp
 *.esm

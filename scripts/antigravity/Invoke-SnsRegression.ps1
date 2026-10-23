@@ -15,12 +15,20 @@
 param(
     [ValidateSet('worker-unit', 'export-tests', 'all-worker', 'follower-behavior', 'reference-integration', 'engine-security', 'export-destinations', 'workbench', 'settings', 'portrait-cache', 'concurrency', 'hostile-corpus', 'mock-destinations', 'acceptance-kits', 'ui-workbench', 'ui-settings', 'antigravity-self-tests', 'full-qa-gate')]
     [string]$Suite = 'worker-unit',
-    [string]$RunId
+    [string]$RunId,
+    # AG05: a build folder other than build\debug (relative to the repo or absolute) and a run folder other than out\antigravity\runs, so the gate
+    # can run against an isolated build without touching another agent's binaries or output. Defaults keep the old behavior.
+    [string]$BuildDir = 'build\debug',
+    [string]$OutRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $baselineRunner = Join-Path $PSScriptRoot 'Invoke-SnsQaBaseline.ps1'
+$buildRoot = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repoRoot $BuildDir }
+$binDir = Join-Path $buildRoot 'bin'
+$buildName = Split-Path -Leaf $buildRoot
+$effectiveOutRoot = if ($OutRoot) { $OutRoot } else { Join-Path $repoRoot 'out\antigravity\runs' }
 
 if (-not $RunId) {
     $RunId = "regression-" + $Suite + "-" + ([System.DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss"))
@@ -63,7 +71,7 @@ if ($Suite -eq 'follower-behavior' -or $Suite -eq 'all-worker' -or $Suite -eq 'f
 
 # 3. C++ Catch2 Engine Security & Audit Tests (F-10, F-14 busy-retry)
 if ($Suite -eq 'engine-security' -or $Suite -eq 'full-qa-gate') {
-    $engineExe = Join-Path $repoRoot 'build\debug\bin\sns_engine_tests.exe'
+    $engineExe = Join-Path $binDir 'sns_engine_tests.exe'
     $testDefs.Add([PSCustomObject]@{
         Name             = 'Catch2_Engine_Security_Audit_Tests'
         Type             = 'Executable'
@@ -75,7 +83,7 @@ if ($Suite -eq 'engine-security' -or $Suite -eq 'full-qa-gate') {
 
 # 4. C++ Catch2 Export Destination Refusal Tests (F-13)
 if ($Suite -eq 'export-destinations' -or $Suite -eq 'full-qa-gate') {
-    $destExe = Join-Path $repoRoot 'build\debug\bin\sns_export_destination_tests.exe'
+    $destExe = Join-Path $binDir 'sns_export_destination_tests.exe'
     $testDefs.Add([PSCustomObject]@{
         Name             = 'Catch2_Export_Destination_Refusal_Tests'
         Type             = 'Executable'
@@ -87,7 +95,7 @@ if ($Suite -eq 'export-destinations' -or $Suite -eq 'full-qa-gate') {
 
 # 5. C++ Catch2 Workbench State Tests (10 cases / 150 assertions)
 if ($Suite -eq 'workbench' -or $Suite -eq 'full-qa-gate') {
-    $wbExe = Join-Path $repoRoot 'build\debug\bin\sns_workbench_tests.exe'
+    $wbExe = Join-Path $binDir 'sns_workbench_tests.exe'
     $testDefs.Add([PSCustomObject]@{
         Name             = 'Catch2_Workbench_State_Tests'
         Type             = 'Executable'
@@ -99,7 +107,7 @@ if ($Suite -eq 'workbench' -or $Suite -eq 'full-qa-gate') {
 
 # 6. C++ Catch2 Settings Center Tests (9 cases / 743 assertions)
 if ($Suite -eq 'settings' -or $Suite -eq 'full-qa-gate') {
-    $settingsExe = Join-Path $repoRoot 'build\debug\bin\sns_settings_tests.exe'
+    $settingsExe = Join-Path $binDir 'sns_settings_tests.exe'
     $testDefs.Add([PSCustomObject]@{
         Name             = 'Catch2_Settings_Center_Tests'
         Type             = 'Executable'
@@ -111,7 +119,7 @@ if ($Suite -eq 'settings' -or $Suite -eq 'full-qa-gate') {
 
 # 7. C++ Catch2 Portrait Cache Tests (9 cases / 128 assertions)
 if ($Suite -eq 'portrait-cache' -or $Suite -eq 'full-qa-gate') {
-    $portraitExe = Join-Path $repoRoot 'build\debug\bin\sns_portrait_cache_tests.exe'
+    $portraitExe = Join-Path $binDir 'sns_portrait_cache_tests.exe'
     $testDefs.Add([PSCustomObject]@{
         Name             = 'Catch2_Portrait_Cache_Tests'
         Type             = 'Executable'
@@ -123,9 +131,10 @@ if ($Suite -eq 'portrait-cache' -or $Suite -eq 'full-qa-gate') {
 
 # 7b. C++ Catch2 Reference Integration Tests (Claude A1-A3: 60 cases / 335 assertions)
 if ($Suite -eq 'reference-integration' -or $Suite -eq 'full-qa-gate') {
-    $refExe = Join-Path $repoRoot 'build\refint\bin\sns_reference_tests.exe'
-    if (-not (Test-Path -LiteralPath $refExe)) {
-        $refExe = Join-Path $repoRoot 'build\refint-app\bin\sns_reference_tests.exe'
+    $refExe = Join-Path $binDir 'sns_reference_tests.exe'
+    if (-not (Test-Path -LiteralPath $refExe) -and $BuildDir -eq 'build\debug') {
+        $refExe = Join-Path $repoRoot 'build\refint\bin\sns_reference_tests.exe'
+        if (-not (Test-Path -LiteralPath $refExe)) { $refExe = Join-Path $repoRoot 'build\refint-app\bin\sns_reference_tests.exe' }
     }
     if (Test-Path -LiteralPath $refExe) {
         $testDefs.Add([PSCustomObject]@{
@@ -136,6 +145,19 @@ if ($Suite -eq 'reference-integration' -or $Suite -eq 'full-qa-gate') {
             ExpectedExitCode = 0
         })
     }
+    # AG04/AG05 Character Forge behavior: the QML->JSON bridge and the published worker over its real named pipe (only when built).
+    foreach ($ag in @(@('Catch2_Forge_Behavior_Bridge_Tests', 'sns_forge_behavior_tests.exe'), @('Catch2_Worker_Pipe_Protocol_Tests', 'sns_worker_pipe_tests.exe'))) {
+        $agExe = Join-Path $binDir $ag[1]
+        if (Test-Path -LiteralPath $agExe) {
+            $testDefs.Add([PSCustomObject]@{
+                Name             = $ag[0]
+                Type             = 'Executable'
+                Target           = $agExe
+                Arguments        = @()
+                ExpectedExitCode = 0
+            })
+        }
+    }
 }
 
 # 8. Antigravity Concurrency & Busy-Lock Safety Auditor (AG-F14-LOCK: 6/6 contracts)
@@ -145,6 +167,7 @@ if ($Suite -eq 'concurrency' -or $Suite -eq 'full-qa-gate') {
         Name             = 'Antigravity_Concurrency_Lock_Auditor'
         Type             = 'PowerShellScript'
         Target           = $concurrencyScript
+        Arguments        = @('-Preset', $buildName)
         ExpectedExitCode = 0
     })
 }
@@ -156,6 +179,7 @@ if ($Suite -eq 'hostile-corpus' -or $Suite -eq 'full-qa-gate') {
         Name             = 'Hostile_Nif_Corpus_Safety_Sandbox'
         Type             = 'PowerShellScript'
         Target           = $corpusScript
+        Arguments        = @('-ProbeExe', ('"' + (Join-Path $binDir 'sns_nif_load_probe.exe') + '"'), '-OutRoot', ('"' + $effectiveOutRoot + '"'))
         ExpectedExitCode = 0
     })
 }
@@ -167,6 +191,7 @@ if ($Suite -eq 'mock-destinations' -or $Suite -eq 'full-qa-gate') {
         Name             = 'Mock_Game_Destination_Safety_Auditor'
         Type             = 'PowerShellScript'
         Target           = $mockDestScript
+        Arguments        = @('-OutRoot', ('"' + $effectiveOutRoot + '"'))
         ExpectedExitCode = 0
     })
 }
@@ -178,6 +203,7 @@ if ($Suite -eq 'acceptance-kits' -or $Suite -eq 'full-qa-gate') {
         Name             = 'Acceptance_Kits_Human_Gate_Auditor'
         Type             = 'PowerShellScript'
         Target           = $kitsScript
+        Arguments        = @('-OutRoot', ('"' + $effectiveOutRoot + '"'))
         ExpectedExitCode = 0
     })
 }
@@ -240,5 +266,5 @@ if ($Suite -eq 'antigravity-self-tests' -or $Suite -eq 'full-qa-gate') {
     })
 }
 
-$manifest = & $baselineRunner -Suite $Suite -TestDefinitions $testDefs.ToArray() -RunId $RunId
+$manifest = & $baselineRunner -Suite $Suite -TestDefinitions $testDefs.ToArray() -RunId $RunId -OutRoot $effectiveOutRoot -BinDir $binDir
 return $manifest

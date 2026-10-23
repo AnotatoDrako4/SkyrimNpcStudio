@@ -233,7 +233,8 @@ TEST_CASE("Built-in layouts apply to one workspace only", "[workbench][layouts]"
   ensure_app();
   sns::test::TempDir dir;
   WorkbenchState state(ini_in(dir));
-  CHECK(state.builtin_layouts().size() == 8);
+  CHECK(state.builtin_layouts().size() == 10);
+  CHECK(state.builtin_layouts().first().toMap().contains("workspace"));
   CHECK(state.applyBuiltinLayout("face", "creator"));
   auto* creator = state.layout("creator");
   CHECK_FALSE(creator->left_visible());
@@ -259,6 +260,78 @@ TEST_CASE("Built-in layouts apply to one workspace only", "[workbench][layouts]"
   CHECK(state.applyBuiltinLayout("compact", "forge"));
   CHECK(state.layout("forge")->left_width() == 240);
   CHECK(state.layout("forge")->right_width() == 300);
+
+  // UX06: task presets for the comparison dialog and Character Forge.
+  CHECK(state.applyBuiltinLayout("compare", "creator"));
+  CHECK_FALSE(creator->left_visible());
+  CHECK(creator->right_width() == 360);
+  CHECK_FALSE(creator->bottom_visible());
+  CHECK(state.applyBuiltinLayout("forge", "forge"));
+  CHECK(state.layout("forge")->right_width() == 440);
+}
+
+TEST_CASE("A divider double click puts one side back to its default size", "[workbench][layouts]") {
+  ensure_app();
+  sns::test::TempDir dir;
+  WorkbenchState state(ini_in(dir));
+  auto* creator = state.layout("creator");
+  CHECK(creator->default_left_width() == 340);
+  CHECK(creator->default_right_width() == 420);
+  creator->set_left_width(500);
+  creator->set_right_width(500);
+  creator->set_right_visible(false);
+  creator->resetSizes();
+  CHECK(creator->left_width() == 340);
+  CHECK(creator->right_width() == 420);
+  CHECK_FALSE(creator->right_visible());  // visibility is the user's choice, not a size
+}
+
+TEST_CASE("Text never falls below the legible minimum of its role", "[workbench][legibility]") {
+  // 100 %: the base size itself.
+  CHECK(WorkbenchState::legibleFontPixels(13, 100, 100) == 13);
+  CHECK(WorkbenchState::legibleFontPixels(11, 100, 100) == 11);
+  // 85 % x 80 % = 0.68: body text would be 9 px, captions 7 px; the floors hold at 11 / 10 / 9 / 12.
+  CHECK(WorkbenchState::legibleFontPixels(13, 85, 80) == 11);
+  CHECK(WorkbenchState::legibleFontPixels(11, 85, 80) == 10);
+  CHECK(WorkbenchState::legibleFontPixels(10, 85, 80) == 9);
+  CHECK(WorkbenchState::legibleFontPixels(17, 85, 80) == 12);
+  // Larger scales are never limited.
+  CHECK(WorkbenchState::legibleFontPixels(13, 150, 160) == 31);
+  CHECK(WorkbenchState::legibleFontPixels(13, 110, 100) == 14);
+
+  ensure_app();
+  sns::test::TempDir dir;
+  WorkbenchState state(ini_in(dir));
+  CHECK_FALSE(state.legibility_floor_active());
+  state.set_ui_scale(85);
+  state.set_font_scale(80);
+  CHECK(state.legibility_floor_active());
+  CHECK(state.ui_scale() == 85);  // the preference itself is kept
+  CHECK(state.fontPixels(13, state.ui_scale(), state.font_scale()) == 11);
+  state.set_font_scale(100);
+  CHECK_FALSE(state.legibility_floor_active());  // 85 % x 100 % = 11 px body text
+}
+
+TEST_CASE("Readability presets set scale, text and density together", "[workbench][legibility]") {
+  ensure_app();
+  sns::test::TempDir dir;
+  WorkbenchState state(ini_in(dir));
+  CHECK(state.readability_presets().size() == 3);
+  CHECK(state.readability_preset() == "balanced");
+  CHECK(state.applyReadabilityPreset("comfortable"));
+  CHECK(state.ui_scale() == 110);
+  CHECK(state.font_scale() == 110);
+  CHECK(state.density() == WorkbenchState::Comfortable);
+  CHECK(state.readability_preset() == "comfortable");
+  CHECK(state.applyReadabilityPreset("compact"));
+  CHECK(state.ui_scale() == 90);
+  CHECK(state.font_scale() == 100);  // compact spends space, not text size
+  CHECK(state.density() == WorkbenchState::Compact);
+  CHECK_FALSE(state.legibility_floor_active());
+  state.set_font_scale(95);
+  CHECK(state.readability_preset() == "custom");
+  CHECK_FALSE(state.applyReadabilityPreset("nope"));
+  CHECK(state.font_scale() == 95);
 }
 
 TEST_CASE("User layouts are saved, applied, replaced and deleted", "[workbench][layouts]") {

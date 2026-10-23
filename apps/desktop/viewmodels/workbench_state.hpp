@@ -41,6 +41,14 @@ class WorkspaceLayout : public QObject {
   Q_PROPERTY(int leftWidth READ left_width WRITE set_left_width NOTIFY leftWidthChanged)
   Q_PROPERTY(int rightWidth READ right_width WRITE set_right_width NOTIFY rightWidthChanged)
   Q_PROPERTY(int bottomHeight READ bottom_height WRITE set_bottom_height NOTIFY bottomHeightChanged)
+  // The sizes this workspace starts with: a double click on a divider puts one side back to them.
+  Q_PROPERTY(int defaultLeftWidth READ default_left_width CONSTANT)
+  Q_PROPERTY(int defaultRightWidth READ default_right_width CONSTANT)
+  Q_PROPERTY(int defaultBottomHeight READ default_bottom_height CONSTANT)
+  // A side panel the user wants shown but that the window has no room for: the workspace hides it on screen
+  // only. Never stored and never part of a saved layout; the QML side sets it, the View menu and header read it.
+  Q_PROPERTY(bool leftAutoHidden READ left_auto_hidden WRITE set_left_auto_hidden NOTIFY autoHiddenChanged)
+  Q_PROPERTY(bool rightAutoHidden READ right_auto_hidden WRITE set_right_auto_hidden NOTIFY autoHiddenChanged)
 
  public:
   static constexpr int kMinLeftWidth = 160, kMaxLeftWidth = 900;
@@ -59,6 +67,21 @@ class WorkspaceLayout : public QObject {
   int left_width() const { return v_.left_width; }
   int right_width() const { return v_.right_width; }
   int bottom_height() const { return v_.bottom_height; }
+  int default_left_width() const { return defaults_.left_width; }
+  int default_right_width() const { return defaults_.right_width; }
+  int default_bottom_height() const { return defaults_.bottom_height; }
+  bool left_auto_hidden() const { return left_auto_hidden_; }
+  bool right_auto_hidden() const { return right_auto_hidden_; }
+  void set_left_auto_hidden(bool v) {
+    if (left_auto_hidden_ == v) return;
+    left_auto_hidden_ = v;
+    emit autoHiddenChanged();
+  }
+  void set_right_auto_hidden(bool v) {
+    if (right_auto_hidden_ == v) return;
+    right_auto_hidden_ = v;
+    emit autoHiddenChanged();
+  }
   void set_left_visible(bool v);
   void set_right_visible(bool v);
   void set_bottom_visible(bool v);
@@ -72,6 +95,12 @@ class WorkspaceLayout : public QObject {
   static LayoutValues sanitized(LayoutValues values);
 
   Q_INVOKABLE void reset() { set_values(defaults_); }
+  // Sizes back to the defaults; which panels show stays as the user chose ("Restablecer paneles").
+  Q_INVOKABLE void resetSizes() {
+    set_left_width(defaults_.left_width);
+    set_right_width(defaults_.right_width);
+    set_bottom_height(defaults_.bottom_height);
+  }
 
  signals:
   void leftVisibleChanged();
@@ -82,11 +111,14 @@ class WorkspaceLayout : public QObject {
   void rightWidthChanged();
   void bottomHeightChanged();
   void changed();  // any of the above: what the persistence listens to
+  void autoHiddenChanged();  // transient: not persisted, so it does not emit changed()
 
  private:
   QString id_;
   LayoutValues defaults_;
   LayoutValues v_;
+  bool left_auto_hidden_ = false;
+  bool right_auto_hidden_ = false;
 };
 
 // Window preferences of the workbench: interface scale, font scale and family, density, the font size of
@@ -105,10 +137,24 @@ class WorkbenchState : public QObject {
   Q_PROPERTY(QStringList savedLayouts READ saved_layouts NOTIFY savedLayoutsChanged)
   Q_PROPERTY(QVariantList builtinLayouts READ builtin_layouts CONSTANT)
   Q_PROPERTY(bool appearanceAtDefaults READ appearance_at_defaults NOTIFY appearanceChanged)
+  // True while the scale preferences would push body text below its legible minimum: the text is held at
+  // that minimum instead (the preference itself is kept), and the window says so.
+  Q_PROPERTY(bool legibilityFloorActive READ legibility_floor_active NOTIFY appearanceChanged)
+  // "comfortable", "balanced", "compact" when the preferences match one of the readability presets, else "custom".
+  Q_PROPERTY(QString readabilityPreset READ readability_preset NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantList readabilityPresets READ readability_presets CONSTANT)
 
  public:
   enum Density { Compact = 0, Normal = 1, Comfortable = 2 };
   Q_ENUM(Density)
+
+  // Pixel size of a text whose base size is `base` px at 100 %, under an interface and a text scale. It
+  // never goes below the legible minimum of the role (body text 11 px, secondary 10 px, captions 9 px,
+  // titles 12 px): 85 % x 80 % no longer turns the catalog into 8 px text. Theme.fs() and the
+  // workbench check both use this, so there is one formula.
+  static int legibleFontPixels(int base, int ui_scale, int font_scale);
+  static int legibleMinimum(int base);
+  Q_INVOKABLE int fontPixels(int base, int ui_scale, int font_scale) const { return legibleFontPixels(base, ui_scale, font_scale); }
 
   static constexpr int kMinUiScale = 85, kMaxUiScale = 150;
   static constexpr int kMinFontScale = 80, kMaxFontScale = 160;
@@ -131,6 +177,11 @@ class WorkbenchState : public QObject {
   QStringList saved_layouts() const;
   QVariantList builtin_layouts() const;
   bool appearance_at_defaults() const;
+  bool legibility_floor_active() const;
+  QString readability_preset() const;
+  QVariantList readability_presets() const;
+  // Scale, text and density of one readability preset, applied together (the user's own action only).
+  Q_INVOKABLE bool applyReadabilityPreset(const QString& key);
   void set_ui_scale(int percent);
   void set_font_scale(int percent);
   void set_density(int density);

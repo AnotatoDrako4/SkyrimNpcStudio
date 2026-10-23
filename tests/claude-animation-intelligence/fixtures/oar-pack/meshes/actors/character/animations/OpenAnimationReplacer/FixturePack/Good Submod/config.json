@@ -1,0 +1,30 @@
+{
+    "name": "Good Submod",
+    "description": "valid, conditional",
+    "priority": 1200,
+    "interruptible": true,
+    "conditions": [
+        {
+            "condition": "IsFemale",
+            "requiredVersion": "1.0.0.0"
+        },
+        {
+            "condition": "OR",
+            "requiredVersion": "1.0.0.0",
+            "Conditions": [
+                {
+                    "condition": "IsSneaking",
+                    "requiredVersion": "1.0.0.0"
+                },
+                {
+                    "condition": "HasSpell",
+                    "requiredVersion": "1.0.0.0",
+                    "Spell": {
+                        "pluginName": "GhostPlugin.esp",
+                        "formID": "1A2B"
+                    }
+                }
+            ]
+        }
+    ]
+}

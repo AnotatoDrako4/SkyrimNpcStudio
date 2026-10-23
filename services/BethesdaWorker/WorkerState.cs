@@ -12,8 +12,22 @@ internal sealed class Catalog(string profileKey, LoadOrderSession session, Catal
     public CatalogStore Store { get; } = store;
     public CatalogQueries Queries { get; } = new(store, session);
 
+    /// <summary>Plugins of the profile that are present but disabled (the session only holds the enabled ones).</summary>
+    public IReadOnlyList<string> DisabledPlugins { get; init; } = [];
+
+    private SkyrimNpcStudio.Antigravity.FollowerBehaviorLab.Engine.PluginContext? _behavior;
+
+    /// <summary>
+    /// The behavior engines' view of this catalog's session (see Behavior.BehaviorRpc). Built on first use and kept for the life of the
+    /// catalog: a re-index makes a new Catalog, so a context never outlives its profile or serves another one. It does not own the
+    /// overlays (the session does), and is used under the WorkerState gate like the rest of the catalog.
+    /// </summary>
+    public SkyrimNpcStudio.Antigravity.FollowerBehaviorLab.Engine.PluginContext BehaviorContext =>
+        _behavior ??= Behavior.BehaviorRpc.BuildContext(this);
+
     public void Dispose()
     {
+        _behavior = null;
         Store.Dispose();
         Session.Dispose();
     }
@@ -112,7 +126,10 @@ internal sealed class WorkerState : IDisposable
         {
             // The previous catalog stays in place (reads answer Busy meanwhile) until this one is complete.
             var result = CatalogIndexer.Run(request, progress, ct);
-            var fresh = new Catalog(request.ProfileKey, result.Session, result.Store);
+            var fresh = new Catalog(request.ProfileKey, result.Session, result.Store)
+            {
+                DisabledPlugins = request.Plugins.Where(p => !p.Enabled).Select(p => p.FileName).ToArray(),
+            };
             lock (_gate)
             {
                 if (_disposed)

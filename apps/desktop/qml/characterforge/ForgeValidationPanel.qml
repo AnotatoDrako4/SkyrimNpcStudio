@@ -10,7 +10,24 @@ ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
     readonly property var result: forge.validation
-    readonly property var voiceRes: (root.result && root.result.voiceAnalysis) ? root.result.voiceAnalysis : null
+    // The voice evidence follows the NPC's voice / sex / factions (forge.voiceAnalysis is refreshed on each change), so it is never the
+    // answer for another voice. A validation run also fills it, from the same draft.
+    // The worker names the evidence classes in a camel-cased enum ("statiC_EVIDENCE"); show them as what they are.
+    function evidenceLabel(value) {
+        switch (String(value).toUpperCase()) {
+        case "STATIC_EVIDENCE": return qsTr("Evidencia estática");
+        case "MOD_DEPENDENT": return qsTr("Depende de un mod");
+        case "UNKNOWN": return qsTr("Desconocido");
+        case "INCOMPATIBLE_BY_KNOWN_RULE": return qsTr("Incompatible (regla conocida)");
+        case "REQUIRES_IN_GAME_TEST": return qsTr("Requiere prueba en el juego");
+        default: return String(value);
+        }
+    }
+    readonly property var voiceState: forge.voiceAnalysis
+    readonly property var voiceRes: (voiceState.state === "ready" && voiceState.analysis && voiceState.analysis.voiceFormKey) ? voiceState.analysis : null
+    readonly property string voicePending: voiceState.state === "loading" ? qsTr("Analizando la voz en el perfil indexado…")
+        : voiceState.state === "error" ? qsTr("No se pudo analizar la voz: %1").arg(voiceState.reason || "")
+        : (voiceState.reason || qsTr("Pendiente de validación"))
 
     Text {
         text: qsTr("Validación de Personaje y Comportamiento")
@@ -51,14 +68,14 @@ ColumnLayout {
             {
                 label: qsTr("Voz y Diálogo de Seguidor"),
                 status: root.voiceRes
-                    ? qsTr("%1 · %2").arg(root.voiceRes.followerDialogueClassification).arg(root.voiceRes.voiceEditorId || root.voiceRes.voiceFormKey)
-                    : qsTr("Pendiente de validación")
+                    ? qsTr("%1 · %2").arg(root.evidenceLabel(root.voiceRes.followerDialogueClassification)).arg(root.voiceRes.voiceEditorId || root.voiceRes.voiceFormKey)
+                    : root.voicePending
             },
             {
                 label: qsTr("Evidencia de Matrimonio"),
                 status: root.voiceRes
-                    ? qsTr("%1 · %2").arg(root.voiceRes.marriageDialogueClassification).arg(root.voiceRes.hasStaticMarriageListEvidence ? qsTr("En lista VoicesMarriage") : qsTr("Sin evidencia en lista"))
-                    : qsTr("Pendiente de validación")
+                    ? qsTr("%1 · %2").arg(root.evidenceLabel(root.voiceRes.marriageDialogueClassification)).arg(root.voiceRes.hasStaticMarriageListEvidence ? qsTr("En lista VoicesMarriage") : qsTr("Sin evidencia en lista"))
+                    : root.voicePending
             },
             {
                 label: qsTr("Equipamiento"),
@@ -113,6 +130,25 @@ ColumnLayout {
         text: qsTr("Hay referencias ausentes o del tipo incorrecto. Revisa los selectores del NPC.")
         color: Theme.error
         wrapMode: Text.WordWrap
+    }
+
+    Text {
+        objectName: "validationBehaviorError"
+        Layout.fillWidth: true
+        visible: !!root.result.behaviorError
+        text: qsTr("La validación de comportamiento no se pudo completar: %1").arg(root.result.behaviorError || "")
+        color: Theme.warn
+        wrapMode: Text.WordWrap
+    }
+
+    Text {
+        objectName: "validationFingerprint"
+        Layout.fillWidth: true
+        visible: !!(root.voiceState.loadOrderFingerprint || root.result.behaviorFingerprint)
+        text: qsTr("Evidencia calculada sobre el perfil con huella %1").arg(String(root.voiceState.loadOrderFingerprint || root.result.behaviorFingerprint || "").substring(0, 16))
+        color: Theme.textMuted
+        font.pixelSize: 10
+        wrapMode: Text.WrapAnywhere
     }
 
     CheckBox {

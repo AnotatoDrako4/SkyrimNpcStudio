@@ -108,8 +108,14 @@ internal static partial class NativeNpcValidator
                 issues.Add(Issue.Error("FactionInvalid", "Faction rank must be -1–127 and memberships unique.", f.FormKey));
         }
         foreach (var key in d.PackageFormKeys) Resolve<IPackageGetter>(key, true);
-        foreach (var key in d.SpellFormKeys) Resolve<ISpellGetter>(key, true);
-        foreach (var key in d.PerkFormKeys) Resolve<IPerkGetter>(key, true);
+        seen.Clear();
+        foreach (var key in d.SpellFormKeys)
+            if (Resolve<ISpellGetter>(key, true) is { } spell && !seen.Add(spell.FormKey))
+                issues.Add(Issue.Error("SpellDuplicate", "Each spell can be added to the NPC only once.", key));
+        seen.Clear();
+        foreach (var key in d.PerkFormKeys)
+            if (Resolve<IPerkGetter>(key, true) is { } perk && !seen.Add(perk.FormKey))
+                issues.Add(Issue.Error("PerkDuplicate", "Each perk can be added to the NPC only once.", key));
         if (d.OutfitArmorFormKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != d.OutfitArmorFormKeys.Count)
             issues.Add(Issue.Error("OutfitDuplicate", "Outfit pieces must be unique."));
         if (d.PackageFormKeys.Count > 0) issues.Add(Issue.Warning("PackageBehaviorUnverified", "Package references resolve; quest-specific conditions and behavior require manual validation."));

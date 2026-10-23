@@ -23,10 +23,17 @@ Dialog {
     closePolicy: Popup.CloseOnEscape
 
     // Opens on a category, or on the setting a search result points to.
+    // The control that had the keyboard focus before Configuración opened gets it back when it closes (UX06 U11).
+    property Item focusBefore: null
+    onClosed: if (focusBefore && focusBefore.visible) focusBefore.forceActiveFocus()
     function openAt(categoryKey, settingId) {
         center.category = categoryKey || center.category
         center.highlightId = settingId || ""
-        if (!center.opened) center.open()
+        if (!center.opened) {
+            const w = center.parent ? center.parent.Window.window : null
+            center.focusBefore = w ? w.activeFocusItem : null
+            center.open()
+        }
         searchField.text = ""
         Qt.callLater(center.revealHighlight)
     }
@@ -167,6 +174,67 @@ Dialog {
                         color: Theme.warn
                         font.pixelSize: Theme.small
                         wrapMode: Text.WordWrap
+                    }
+                    // Apariencia: readability presets on top (scale, text and density together), previewed with the
+                    // same keep/revert banner as the theme, so a choice that does not suit reverts by itself.
+                    Rectangle {
+                        objectName: "settingsReadabilityCard"
+                        visible: center.category === "appearance"
+                        Layout.fillWidth: true
+                        implicitHeight: readabilityColumn.implicitHeight + Theme.spacingLg * 2
+                        radius: Theme.radiusLarge
+                        color: Theme.panelAlt
+                        border.color: Theme.border
+                        ColumnLayout {
+                            id: readabilityColumn
+                            anchors.fill: parent
+                            anchors.margins: Theme.spacingLg
+                            spacing: Theme.spacingSm
+                            Text {
+                                text: qsTr("Presentación")
+                                color: Theme.text
+                                font.bold: true
+                                font.pixelSize: Theme.large
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("Escala, texto y densidad de una vez. Se aplica como vista previa: elige «Mantener» en el aviso o se revierte sola. No toca proyectos, distribuciones ni MO2.")
+                                color: Theme.textDim
+                                font.pixelSize: Theme.small
+                                wrapMode: Text.WordWrap
+                            }
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: Theme.spacingSm
+                                Repeater {
+                                    model: Workbench.readabilityPresets
+                                    delegate: Button {
+                                        required property var modelData
+                                        objectName: "settingsReadability_" + modelData.key
+                                        text: modelData.name + "  ·  " + modelData.uiScale + " % / " + modelData.fontScale + " %"
+                                        checkable: true
+                                        checked: Workbench.readabilityPreset === modelData.key
+                                        ToolTip.visible: hovered
+                                        ToolTip.delay: 400
+                                        ToolTip.text: modelData.detail
+                                        onClicked: {
+                                            if (Workbench.readabilityPreset === modelData.key) return
+                                            AppSettings.beginPreview()
+                                            Workbench.applyReadabilityPreset(modelData.key)
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                visible: Theme.legibilityFloor
+                                text: qsTr("La combinación actual (interfaz %1 %, texto %2 %) haría el texto ilegible: se mantiene en %3 px sin cambiar tu preferencia.")
+                                      .arg(Workbench.uiScale).arg(Workbench.fontScale).arg(Theme.normal)
+                                color: Theme.warn
+                                font.pixelSize: Theme.small
+                                wrapMode: Text.WordWrap
+                            }
+                        }
                     }
                     Repeater {
                         id: pageRepeater

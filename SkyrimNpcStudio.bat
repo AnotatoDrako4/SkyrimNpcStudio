@@ -28,7 +28,13 @@ rem   SkyrimNpcStudio.bat --dev           : Ejecuta version Debug (desarrollo ra
 rem   SkyrimNpcStudio.bat --build-debug   : Recompila Debug y ejecuta
 rem   SkyrimNpcStudio.bat --local         : Ejecuta la Release local de build\package (con entorno Qt de desarrollo)
 rem   SkyrimNpcStudio.bat --build-release : Recompila la Release local y la ejecuta
+rem   SkyrimNpcStudio.bat --latest        : Ejecuta la ultima build integrada (build\refint-app: Character Forge + comportamiento de seguidores)
+rem   SkyrimNpcStudio.bat --build-latest  : Recompila esa build, publica su worker .NET y la ejecuta
+rem   SkyrimNpcStudio.bat --qa            : Pasa el full-qa-gate completo sobre build\refint-app (informe en out\qa-gate)
 rem ----------------------------------------------------------------------------
+
+rem El gate de calidad no abre la aplicacion: no necesita la comprobacion de instancia unica
+if /I "%~1"=="--qa" goto RUN_QA
 
 :RECHECK_INSTANCE
 rem Comprobacion de instancia unica: evita conflictos de base de datos y cache entre dos instancias
@@ -43,6 +49,8 @@ if /I "%~1"=="--package" goto DO_REBUILD
 if /I "%~1"=="--local" goto RUN_LOCAL_RELEASE
 if /I "%~1"=="--build-release" goto BUILD_LOCAL_RELEASE
 if /I "%~1"=="--dist" goto LAUNCH_RELEASE
+if /I "%~1"=="--latest" goto RUN_LATEST
+if /I "%~1"=="--build-latest" goto BUILD_LATEST
 
 rem ----------------------------------------------------------------------------
 rem Modo por defecto: Verificar si dist\SkyrimNpcStudio existe y esta actualizado
@@ -170,6 +178,60 @@ if not exist "%LOCAL_EXE%" (
 echo Iniciando Skyrim NPC Studio (Release local de build\package)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1' | Out-Null; Start-Process -FilePath '%LOCAL_EXE%' -WorkingDirectory '%LOCAL_DIR%' }"
 exit /b 0
+
+rem ----------------------------------------------------------------------------
+rem Ultima build integrada: build\refint-app (aplicacion + worker publicado en bin\worker).
+rem Es una carpeta propia: no toca build\debug, build\package ni dist\.
+rem ----------------------------------------------------------------------------
+:BUILD_LATEST
+if not exist "%ROOT%build\refint-app\CMakeCache.txt" (
+    echo [AVISO] build\refint-app no esta configurada en este equipo.
+    echo Configurala una vez con los pasos de docs\CHARACTER_FORGE_BEHAVIOR.md o usa --build-debug.
+    pause
+    exit /b 1
+)
+echo =======================================================================
+echo  Compilando la ultima build integrada (build\refint-app) y su worker...
+echo =======================================================================
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1'; cmake --build '%ROOT%build\refint-app' --target SkyrimNpcStudio; if ($LASTEXITCODE) { exit $LASTEXITCODE }; dotnet publish '%ROOT%services\BethesdaWorker\BethesdaWorker.csproj' -c Debug -o '%ROOT%build\refint-app\bin\worker' --nologo -v q; exit $LASTEXITCODE }"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Fallo la compilacion de build\refint-app.
+    pause
+    exit /b 1
+)
+goto RUN_LATEST
+
+:RUN_LATEST
+set "LATEST_DIR=%ROOT%build\refint-app\bin"
+set "LATEST_EXE=%LATEST_DIR%\SkyrimNpcStudio.exe"
+if not exist "%LATEST_EXE%" (
+    echo [AVISO] No existe %LATEST_EXE%: usa --build-latest para compilarla.
+    pause
+    exit /b 1
+)
+if not exist "%LATEST_DIR%\worker\SkyrimNpcStudio.BethesdaWorker.exe" (
+    echo [AVISO] Falta el worker publicado en %LATEST_DIR%\worker: usa --build-latest.
+    pause
+    exit /b 1
+)
+echo Iniciando Skyrim NPC Studio (ultima build integrada de build\refint-app)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1' | Out-Null; Start-Process -FilePath '%LATEST_EXE%' -WorkingDirectory '%LATEST_DIR%' }"
+exit /b 0
+
+rem ----------------------------------------------------------------------------
+rem Gate de calidad completo sobre la build integrada. No usa build\debug ni out\antigravity.
+rem ----------------------------------------------------------------------------
+:RUN_QA
+echo =======================================================================
+echo  full-qa-gate sobre build\refint-app (informe en out\qa-gate)...
+echo =======================================================================
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . '%ROOT%scripts\dev-env.ps1' | Out-Null; & '%ROOT%scripts\antigravity\Invoke-SnsRegression.ps1' -Suite full-qa-gate -BuildDir 'build\refint-app' -OutRoot '%ROOT%out\qa-gate'; exit $LASTEXITCODE }"
+set "QA_CODE=%errorlevel%"
+echo.
+echo full-qa-gate termino con codigo %QA_CODE% (0 = todo PASS). El manifiesto esta en out\qa-gate\.
+pause
+exit /b %QA_CODE%
 
 :BUILD_DEBUG
 echo =======================================================================

@@ -34,8 +34,8 @@ public static class LabSyntheticFixture
     public static readonly FormKey VoiceModCustomFollower = new(FollowerVoiceAddon, 0x000800); // V03: Added by mod
 
     // FormLists (FLST)
-    public static readonly FormKey VoicesFollowerList = new(Skyrim, 0x09B1F5);
-    public static readonly FormKey VoicesMarriageList = new(Skyrim, 0x0C790E);
+    public static readonly FormKey VoicesFollowerList = new(Skyrim, 0x0C78E7);   // FLST VoicesFollowerAll
+    public static readonly FormKey VoicesMarriageList = new(Skyrim, 0x047A00);   // FLST VoicesMarriageAll
 
     // Factions (FACT)
     public static readonly FormKey PotentialFollowerFaction = new(Skyrim, 0x05C84D);
@@ -52,12 +52,12 @@ public static class LabSyntheticFixture
     public static readonly FormKey ClassDisabledBerserker = new(DisabledCombatMod, 0x000801);
 
     // Combat Styles (CSTY)
-    public static readonly FormKey StyleDefensiveWarrior = new(Skyrim, 0x03BE1C);
+    public static readonly FormKey StyleDefensiveWarrior = new(Skyrim, 0x03CF5A);   // csHumanTankLvl1
     public static readonly FormKey StyleArcher = new(Skyrim, 0x03BE1D);
-    public static readonly FormKey StyleAssassin = new(Skyrim, 0x03BE1E);
-    public static readonly FormKey StyleDestructionMage = new(Skyrim, 0x03DECE);
-    public static readonly FormKey StyleHealer = new(Skyrim, 0x03DECF);
-    public static readonly FormKey StyleSpellsword = new(Skyrim, 0x03DED0);
+    public static readonly FormKey StyleAssassin = new(Skyrim, 0x1051F9);   // csWEAssassinMelee
+    public static readonly FormKey StyleDestructionMage = new(Skyrim, 0x03BE1C);   // csHumanMagic
+    public static readonly FormKey StyleHealer = new(Skyrim, 0x10611C);   // csWEMageShieldStaff
+    public static readonly FormKey StyleSpellsword = new(Skyrim, 0x107812);   // csSpellsword
     public static readonly FormKey StyleDisabledBerserker = new(DisabledCombatMod, 0x000802);
 
     // Armors (ARMO)
@@ -66,20 +66,20 @@ public static class LabSyntheticFixture
     public static readonly FormKey ArmorSteelGauntlets = new(Skyrim, 0x013953);
     public static readonly FormKey ArmorSteelShield = new(Skyrim, 0x013955);
     public static readonly FormKey ArmorScoutCuirass = new(Skyrim, 0x03619E);
-    public static readonly FormKey ArmorScoutBoots = new(Skyrim, 0x03619D);
+    public static readonly FormKey ArmorScoutBoots = new(Skyrim, 0x013920);   // ArmorLeatherBoots
     public static readonly FormKey ArmorShroudedArmor = new(Skyrim, 0x0D2844);
     public static readonly FormKey ArmorShroudedBoots = new(Skyrim, 0x0D2845);
     public static readonly FormKey ArmorMageRobes = new(Skyrim, 0x07C932);
-    public static readonly FormKey ArmorMageBoots = new(Skyrim, 0x0166FC);
-    public static readonly FormKey ArmorHealerRobes = new(Skyrim, 0x0A0201);
-    public static readonly FormKey ArmorSpellswordCuirass = new(Skyrim, 0x0A0202);
+    public static readonly FormKey ArmorMageBoots = new(Skyrim, 0x07C92E);   // ClothesMGBootsArchmage
+    public static readonly FormKey ArmorHealerRobes = new(Skyrim, 0x10F570);   // ClothesMGRobesArchmage1Hooded
+    public static readonly FormKey ArmorSpellswordCuirass = new(Skyrim, 0x0896A3);   // ArmorElvenCuirass
 
     // Weapons & Ammo (WEAP / AMMO)
     public static readonly FormKey WeaponSteelSword = new(Skyrim, 0x013989);
     public static readonly FormKey WeaponHuntingBow = new(Skyrim, 0x013985);
     public static readonly FormKey AmmoSteelArrow = new(Skyrim, 0x01397F);
-    public static readonly FormKey WeaponEbonyDagger = new(Skyrim, 0x013996);
-    public static readonly FormKey WeaponStaffFireball = new(Skyrim, 0x029B7B);
+    public static readonly FormKey WeaponEbonyDagger = new(Skyrim, 0x0139AE);   // EbonyDagger
+    public static readonly FormKey WeaponStaffFireball = new(Skyrim, 0x029B82);   // StaffFireball
 
     // Spells (SPEL)
     public static readonly FormKey SpellFirebolt = new(Skyrim, 0x012FD0);
@@ -87,23 +87,23 @@ public static class LabSyntheticFixture
     public static readonly FormKey SpellOakflesh = new(Skyrim, 0x05AD5C);
     public static readonly FormKey SpellFastHealing = new(Skyrim, 0x02F3B8);
     public static readonly FormKey SpellCloseWounds = new(Skyrim, 0x0B62EF);
-    public static readonly FormKey SpellSteadfastWard = new(Skyrim, 0x0211EE);
+    public static readonly FormKey SpellSteadfastWard = new(Skyrim, 0x0211F1);   // WardSteadfast
     public static readonly FormKey SpellInvisibility = new(Skyrim, 0x027EB6);
 
     // Perks (PERK)
-    public static readonly FormKey PerkShieldWall = new(Skyrim, 0x058F68);
+    public static readonly FormKey PerkShieldWall = new(Skyrim, 0x0BCCAE);   // ShieldWall00
     public static readonly FormKey PerkJuggernaut = new(Skyrim, 0x0BCD2A);
     public static readonly FormKey PerkOverdraw = new(Skyrim, 0x0BABED);
-    public static readonly FormKey PerkDeadlyAim = new(Skyrim, 0x0103ADA);
+    public static readonly FormKey PerkDeadlyAim = new(Skyrim, 0x1036F0);   // DeadlyAim
     public static readonly FormKey PerkBackstab = new(Skyrim, 0x058210);
-    public static readonly FormKey PerkAugmentedFlames = new(Skyrim, 0x0581EA);
-    public static readonly FormKey PerkRecovery = new(Skyrim, 0x0581F8);
-    public static readonly FormKey PerkRegeneration = new(Skyrim, 0x0581F4);
+    public static readonly FormKey PerkAugmentedFlames = new(Skyrim, 0x0581E7);   // AugmentedFlames
+    public static readonly FormKey PerkRecovery = new(Skyrim, 0x0581F4);   // Recovery30
+    public static readonly FormKey PerkRegeneration = new(Skyrim, 0x0581F8);   // Regeneration
     public static readonly FormKey PerkArmsMan = new(Skyrim, 0x0BABE4);
 
     // AI Packages (PACK)
-    public static readonly FormKey PackageDefaultFollower = new(Skyrim, 0x0A0301);
-    public static readonly FormKey PackageDefaultSandbox = new(Skyrim, 0x0A0302);
+    public static readonly FormKey PackageDefaultFollower = new(Skyrim, 0x04B037);   // DefaultFollowPlayer
+    public static readonly FormKey PackageDefaultSandbox = new(Skyrim, 0x0BFB6B);   // DefaultSandboxCurrentLocation1024
 
     /// <summary>
     /// Ensures the basic fixture directory contains all synthetic plugins, profiles, and sample JSON inputs.
@@ -201,7 +201,7 @@ public static class LabSyntheticFixture
         // FormLists for follower & marriage dialogue
         var followerList = new FormList(VoicesFollowerList, SkyrimRelease.SkyrimSE)
         {
-            EditorID = "VoicesFollower",
+            EditorID = "VoicesFollowerAll",
             Items = new ExtendedList<IFormLinkGetter<ISkyrimMajorRecordGetter>>
             {
                 new FormLink<ISkyrimMajorRecordGetter>(VoiceFemaleEvenToned),
@@ -215,7 +215,7 @@ public static class LabSyntheticFixture
         {
             var marriageList = new FormList(VoicesMarriageList, SkyrimRelease.SkyrimSE)
             {
-                EditorID = "VoicesMarriage",
+                EditorID = "VoicesMarriageAll",
                 Items = new ExtendedList<IFormLinkGetter<ISkyrimMajorRecordGetter>>
                 {
                     new FormLink<ISkyrimMajorRecordGetter>(VoiceFemaleEvenToned),
@@ -263,32 +263,32 @@ public static class LabSyntheticFixture
             health: 2, magicka: 2, stamina: 1);
 
         // Combat Styles (CSTY)
-        AddCombatStyle(master, StyleDefensiveWarrior, "csHumanMelee1H", off: 0.45f, def: 0.85f, grp: 0.5f, melee: 1.0f, magic: 0.0f, ranged: 0.2f, avoid: 0.2f);
+        AddCombatStyle(master, StyleDefensiveWarrior, "csHumanTankLvl1", off: 0.45f, def: 0.85f, grp: 0.5f, melee: 1.0f, magic: 0.0f, ranged: 0.2f, avoid: 0.2f);
         AddCombatStyle(master, StyleArcher, "csHumanMissile", off: 0.65f, def: 0.50f, grp: 0.4f, melee: 0.2f, magic: 0.0f, ranged: 1.0f, avoid: 0.8f);
-        AddCombatStyle(master, StyleAssassin, "csHumanAssassin", off: 0.90f, def: 0.40f, grp: 0.3f, melee: 1.0f, magic: 0.3f, ranged: 0.4f, avoid: 0.6f);
+        AddCombatStyle(master, StyleAssassin, "csWEAssassinMelee", off: 0.90f, def: 0.40f, grp: 0.3f, melee: 1.0f, magic: 0.3f, ranged: 0.4f, avoid: 0.6f);
         AddCombatStyle(master, StyleDestructionMage, "csHumanMagic", off: 0.80f, def: 0.50f, grp: 0.4f, melee: 0.1f, magic: 1.0f, ranged: 0.0f, avoid: 0.9f);
-        AddCombatStyle(master, StyleHealer, "csHumanHealer", off: 0.25f, def: 0.90f, grp: 0.2f, melee: 0.2f, magic: 1.0f, ranged: 0.0f, avoid: 0.85f);
-        AddCombatStyle(master, StyleSpellsword, "csHumanSpellsword", off: 0.70f, def: 0.60f, grp: 0.5f, melee: 0.8f, magic: 0.8f, ranged: 0.1f, avoid: 0.4f);
+        AddCombatStyle(master, StyleHealer, "csWEMageShieldStaff", off: 0.25f, def: 0.90f, grp: 0.2f, melee: 0.2f, magic: 1.0f, ranged: 0.0f, avoid: 0.85f);
+        AddCombatStyle(master, StyleSpellsword, "csSpellsword", off: 0.70f, def: 0.60f, grp: 0.5f, melee: 0.8f, magic: 0.8f, ranged: 0.1f, avoid: 0.4f);
 
         // Armors
         AddArmor(master, ArmorSteelCuirass, "ArmorSteelCuirass", "Steel Armor", BipedObjectFlag.Body, ArmorType.HeavyArmor);
         AddArmor(master, ArmorSteelBoots, "ArmorSteelBoots", "Steel Cuffed Boots", BipedObjectFlag.Feet, ArmorType.HeavyArmor);
         AddArmor(master, ArmorSteelGauntlets, "ArmorSteelGauntlets", "Steel Nordic Gauntlets", BipedObjectFlag.Hands, ArmorType.HeavyArmor);
         AddArmor(master, ArmorSteelShield, "ArmorSteelShield", "Steel Shield", BipedObjectFlag.Shield, ArmorType.HeavyArmor);
-        AddArmor(master, ArmorScoutCuirass, "ArmorScaledCuirass", "Scaled Armor", BipedObjectFlag.Body, ArmorType.LightArmor);
-        AddArmor(master, ArmorScoutBoots, "ArmorScaledBoots", "Scaled Boots", BipedObjectFlag.Feet, ArmorType.LightArmor);
+        AddArmor(master, ArmorScoutCuirass, "ArmorLeatherCuirass", "Leather Armor", BipedObjectFlag.Body, ArmorType.LightArmor);
+        AddArmor(master, ArmorScoutBoots, "ArmorLeatherBoots", "Leather Boots", BipedObjectFlag.Feet, ArmorType.LightArmor);
         AddArmor(master, ArmorShroudedArmor, "DBArmor", "Shrouded Armor", BipedObjectFlag.Body, ArmorType.LightArmor);
-        AddArmor(master, ArmorShroudedBoots, "DBBoots", "Shrouded Boots", BipedObjectFlag.Feet, ArmorType.LightArmor);
-        AddArmor(master, ArmorMageRobes, "ClothesCollegeRobesDestruction", "Master Robes of Destruction", BipedObjectFlag.Body, ArmorType.Clothing);
-        AddArmor(master, ArmorMageBoots, "ClothesBoots01", "College Boots", BipedObjectFlag.Feet, ArmorType.Clothing);
-        AddArmor(master, ArmorHealerRobes, "ClothesRobesRestoration", "Adept Robes of Restoration", BipedObjectFlag.Body, ArmorType.Clothing);
-        AddArmor(master, ArmorSpellswordCuirass, "ArmorSpellswordPlate", "Spellsword Battlemage Armor", BipedObjectFlag.Body, ArmorType.HeavyArmor);
+        AddArmor(master, ArmorShroudedBoots, "DBArmorBoots", "Shrouded Boots", BipedObjectFlag.Feet, ArmorType.LightArmor);
+        AddArmor(master, ArmorMageRobes, "ClothesMGRobesArchmage", "Archmage's Robes", BipedObjectFlag.Body, ArmorType.Clothing);
+        AddArmor(master, ArmorMageBoots, "ClothesMGBootsArchmage", "Archmage's Boots", BipedObjectFlag.Feet, ArmorType.Clothing);
+        AddArmor(master, ArmorHealerRobes, "ClothesMGRobesArchmage1Hooded", "Archmage's Robes (hooded)", BipedObjectFlag.Body, ArmorType.Clothing);
+        AddArmor(master, ArmorSpellswordCuirass, "ArmorElvenCuirass", "Elven Armor", BipedObjectFlag.Body, ArmorType.HeavyArmor);
 
         // Weapons & Ammo
         master.Weapons.Add(new Weapon(WeaponSteelSword, SkyrimRelease.SkyrimSE) { EditorID = "WeapSteelSword", Name = "Steel Sword" });
         master.Weapons.Add(new Weapon(WeaponHuntingBow, SkyrimRelease.SkyrimSE) { EditorID = "WeapHuntingBow", Name = "Hunting Bow" });
         master.Ammunitions.Add(new Ammunition(AmmoSteelArrow, SkyrimRelease.SkyrimSE) { EditorID = "SteelArrow", Name = "Steel Arrow" });
-        master.Weapons.Add(new Weapon(WeaponEbonyDagger, SkyrimRelease.SkyrimSE) { EditorID = "WeapEbonyDagger", Name = "Ebony Dagger" });
+        master.Weapons.Add(new Weapon(WeaponEbonyDagger, SkyrimRelease.SkyrimSE) { EditorID = "EbonyDagger", Name = "Ebony Dagger" });
         master.Weapons.Add(new Weapon(WeaponStaffFireball, SkyrimRelease.SkyrimSE) { EditorID = "StaffFireball", Name = "Staff of Fireballs" });
 
         // Spells
@@ -297,7 +297,7 @@ public static class LabSyntheticFixture
         AddSpell(master, SpellOakflesh, "Oakflesh", "Oakflesh");
         AddSpell(master, SpellFastHealing, "FastHealing", "Fast Healing");
         AddSpell(master, SpellCloseWounds, "CloseWounds", "Close Wounds");
-        AddSpell(master, SpellSteadfastWard, "SteadfastWard", "Steadfast Ward");
+        AddSpell(master, SpellSteadfastWard, "WardSteadfast", "Steadfast Ward");
         AddSpell(master, SpellInvisibility, "Invisibility", "Invisibility");
 
         // Perks
@@ -306,14 +306,14 @@ public static class LabSyntheticFixture
         AddPerk(master, PerkOverdraw, "Overdraw00", "Overdraw");
         AddPerk(master, PerkDeadlyAim, "DeadlyAim", "Deadly Aim");
         AddPerk(master, PerkBackstab, "Backstab", "Backstab");
-        AddPerk(master, PerkAugmentedFlames, "AugmentedFlames00", "Augmented Flames");
-        AddPerk(master, PerkRecovery, "Recovery00", "Recovery");
+        AddPerk(master, PerkAugmentedFlames, "AugmentedFlames", "Augmented Flames");
+        AddPerk(master, PerkRecovery, "Recovery30", "Recovery");
         AddPerk(master, PerkRegeneration, "Regeneration", "Regeneration");
         AddPerk(master, PerkArmsMan, "Armsman00", "Armsman");
 
         // AI Packages
-        master.Packages.Add(new Package(PackageDefaultFollower, SkyrimRelease.SkyrimSE) { EditorID = "DefaultFollowerPackage" });
-        master.Packages.Add(new Package(PackageDefaultSandbox, SkyrimRelease.SkyrimSE) { EditorID = "DefaultSandboxEditorLocation512" });
+        master.Packages.Add(new Package(PackageDefaultFollower, SkyrimRelease.SkyrimSE) { EditorID = "DefaultFollowPlayer" });
+        master.Packages.Add(new Package(PackageDefaultSandbox, SkyrimRelease.SkyrimSE) { EditorID = "DefaultSandboxCurrentLocation1024" });
 
         // Optional synthetic stress records (for the 1,000-record performance benchmark)
         for (int i = 0; i < extraSyntheticRecords; i++)

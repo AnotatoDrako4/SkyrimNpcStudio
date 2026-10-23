@@ -139,23 +139,23 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
 
     [JsonRpcMethod(Methods.CreationAnalyzeVoice)]
     public CreationAnalyzeVoiceResponse AnalyzeVoice(CreationAnalyzeVoiceRequest request) =>
-        Guard(() => FollowerBehaviorRpcDispatcher.HandleAnalyzeVoice(request));
+        Guard(() => state.Read(c => Behavior.BehaviorRpc.AnalyzeVoice(c, request)));
 
     [JsonRpcMethod(Methods.CreationGetBehaviorCatalog)]
     public CreationBehaviorCatalogResponse GetBehaviorCatalog(CreationBehaviorCatalogRequest request) =>
-        Guard(() => FollowerBehaviorRpcDispatcher.HandleGetCatalog(request));
+        Guard(() => state.Read(c => Behavior.BehaviorRpc.GetCatalog(c, request)));
 
     [JsonRpcMethod(Methods.CreationApplyArchetype)]
     public CreationApplyArchetypeResponse ApplyArchetype(CreationApplyArchetypeRequest request) =>
-        Guard(() => FollowerBehaviorRpcDispatcher.HandleApplyArchetype(request));
+        Guard(() => state.Read(c => Behavior.BehaviorRpc.ApplyArchetype(c, request)));
 
     [JsonRpcMethod(Methods.CreationUndoArchetype)]
     public CreationUndoArchetypeResponse UndoArchetype(CreationUndoArchetypeRequest request) =>
-        Guard(() => FollowerBehaviorRpcDispatcher.HandleUndoArchetype(request));
+        Guard(() => Behavior.BehaviorRpc.UndoArchetype(request));
 
     [JsonRpcMethod(Methods.CreationValidateBehavior)]
     public CreationValidateBehaviorResponse ValidateBehavior(CreationValidateBehaviorRequest request) =>
-        Guard(() => FollowerBehaviorRpcDispatcher.HandleValidateBehavior(request));
+        Guard(() => state.Read(c => Behavior.BehaviorRpc.ValidateBehavior(c, request)));
 
     internal static T Guard<T>(Func<T> body)
     {

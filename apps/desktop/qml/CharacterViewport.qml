@@ -14,6 +14,10 @@ Rectangle {
     readonly property var scene: sceneOverride ?? studio.scene
     color: Theme.surface
 
+    // The empty viewer asks its workspace to show the explorer (NPC search or the armor catalog).
+    signal npcSearchRequested()
+    signal catalogRequested()
+
     property bool skeletonVisible: false
     property bool uvMode: false
     property bool partsVisible: false
@@ -254,45 +258,22 @@ Rectangle {
             visible: running
         }
 
-        // ============================================================= ESTADO VACÍO ELEGANTE
-        Rectangle {
-            anchors.centerIn: parent
+        // ============================================================= ESTADO VACÍO
+        // Nothing to draw yet (a legitimate state, not a renderer fault): what the viewer is for and the real
+        // next step, which the workspace carries out (explorer shown, search focused).
+        EmptyState {
+            objectName: "viewportEmptyState"
+            anchors.fill: parent
             visible: !root.scene.loading && root.scene.parts.length === 0
-            width: Math.min(360, parent.width - 40)
-            height: 190
-            radius: Theme.radiusLarge
-            color: Qt.rgba(0.09, 0.10, 0.12, 0.88)
-            border.color: Theme.borderSubtle
-            border.width: 1
-
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 10
-                width: parent.width - 32
-
-                Text {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: root.previewMode ? "🥋" : "🎭"
-                    font.pixelSize: Theme.fs(36)
-                }
-
-                Text {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: root.previewMode ? qsTr("Visor de Prendas y Outfits") : qsTr("Estudio Visual de Personajes")
-                    color: Theme.text
-                    font.pixelSize: Theme.large
-                    font.bold: true
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.scene.status || (root.previewMode ? qsTr("Selecciona una prenda en el catálogo para ver su geometría 3D.") : qsTr("Selecciona un NPC del panel izquierdo para comenzar a personalizar."))
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.Wrap
-                }
-            }
+            glyph: root.previewMode ? "tag" : "person"
+            title: root.previewMode ? qsTr("Visor de prendas y outfits") : qsTr("Estudio visual de personajes")
+            message: root.scene.status || (root.previewMode ? qsTr("Elige una prenda del catálogo para ver su geometría 3D.")
+                                                            : qsTr("Elige un NPC del explorador para verlo y personalizarlo."))
+            actions: root.previewMode
+                ? [{ label: qsTr("Ver catálogo de prendas"), trigger: () => root.catalogRequested() },
+                   { label: qsTr("Buscar NPC"), trigger: () => root.npcSearchRequested() }]
+                : [{ label: qsTr("Buscar NPC"), trigger: () => root.npcSearchRequested() },
+                   { label: qsTr("Ver prendas"), trigger: () => root.catalogRequested() }]
         }
 
         // ============================================================= TOOLBAR FLOTANTE MINIMALISTA
@@ -302,13 +283,13 @@ Rectangle {
             anchors.top: parent.top
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.topMargin: 8
-            implicitHeight: 38
+            implicitHeight: Theme.controlHeight + Theme.sp(10)
             implicitWidth: toolRow.implicitWidth + 16
             // Never wider than the viewport: on a narrow viewport the selectors shrink instead of the bar
             // spilling over the neighbouring panels.
             width: Math.min(implicitWidth, parent.width - 12)
             radius: Theme.radiusLarge
-            color: Qt.rgba(0.09, 0.10, 0.12, 0.90)
+            color: Qt.rgba(Theme.panel.r, Theme.panel.g, Theme.panel.b, 0.92)
             border.color: Theme.borderSubtle
             border.width: 1
 
@@ -355,61 +336,63 @@ Rectangle {
                 }
 
                 // Reset Cámara y Enfoque
-                ToolButton {
-                    text: "↻"
-                    implicitHeight: 28
+                IconToolButton {
+                    glyph: "refresh"
+                    label: qsTr("Restablecer cámara orbital")
+                    showLabel: false
                     onClicked: root.reset()
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Restablecer cámara orbital")
                 }
 
-                ToolButton {
-                    text: "⌖"
-                    implicitHeight: 28
+                IconToolButton {
+                    glyph: "zoom-in"
+                    label: qsTr("Encuadrar la pieza seleccionada")
+                    showLabel: false
                     enabled: root.scene.selected.length > 0
+                    tip: root.scene.selected.length > 0 ? "" : qsTr("Selecciona una pieza con clic en el visor o en la lista de geometrías")
                     onClicked: { const p = root.scene.selectedBounds(); root.frame(p.center, p.radius, 0) }
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Encuadrar pieza seleccionada")
                 }
 
                 // Comparador Original / Modificado
-                ToolButton {
+                IconToolButton {
                     visible: !root.previewMode
-                    implicitHeight: 28
+                    glyph: "switch"
+                    label: checked ? qsTr("Original") : qsTr("Mod")
                     checkable: true
                     checked: root.scene.original
-                    text: checked ? "👁 " + qsTr("Original") : "✨ " + qsTr("Mod")
+                    tip: qsTr("Alternar entre la apariencia original de Skyrim y tus cambios actuales")
                     onToggled: root.scene.original = checked
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Alternar vista original de Skyrim y cambios actuales")
                 }
 
-                Rectangle { width: 1; height: 18; color: Theme.borderSubtle }
+                Rectangle { width: 1; height: Theme.px(18); color: Theme.borderSubtle }
 
                 // Botón Geometrías / Piezas
-                ToolButton {
-                    text: "☰"
-                    implicitHeight: 28
+                IconToolButton {
+                    glyph: "list"
+                    label: qsTr("Lista de geometrías")
+                    showLabel: false
                     checkable: true
                     checked: root.partsVisible
                     onToggled: root.partsVisible = checked
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Mostrar/ocultar lista de geometrías")
                 }
 
                 // Botón Inspector Técnico
-                ToolButton {
-                    text: "⚙"
-                    implicitHeight: 28
+                IconToolButton {
+                    glyph: "diagnostic"
+                    label: qsTr("Inspector técnico")
+                    showLabel: false
+                    tip: qsTr("Inspector técnico: shaders, UV, SMP y materiales")
                     checkable: true
                     checked: root.inspectorVisible || Theme.advancedMode
                     onToggled: root.inspectorVisible = checked
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Inspector técnico (shaders, UV, SMP, materiales)")
                 }
 
                 // Botón cancelar carga
-                ToolButton {
-                    text: "✕"
+                IconToolButton {
+                    glyph: "close"
+                    label: qsTr("Cancelar carga")
+                    showLabel: false
                     visible: root.scene.loading
-                    implicitHeight: 28
                     onClicked: root.scene.cancel()
-                    ToolTip.visible: hovered; ToolTip.text: qsTr("Cancelar carga")
                 }
             }
         }

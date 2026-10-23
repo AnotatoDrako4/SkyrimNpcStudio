@@ -102,7 +102,9 @@ bool CharacterForgeViewModel::newProject(const QString& name) {
     project_path_.clear();
     last_error_.clear();
     scene_->reset();
+    set_preview({});  // a preview belonged to the previous project's draft
     emit changed();
+    refreshVoiceAnalysis();
     return true;
   } catch (const std::exception& ex) {
     last_error_ = QString::fromUtf8(ex.what());
@@ -127,7 +129,9 @@ bool CharacterForgeViewModel::openProject(const QString& folder_or_url) {
     project_path_ = QString::fromStdWString(folder.wstring());
     last_error_.clear();
     preview_selected_model();
+    set_preview({});
     emit changed();
+    refreshVoiceAnalysis();
     return true;
   } catch (const std::exception& ex) {
     last_error_ = QString::fromUtf8(ex.what());
@@ -170,7 +174,10 @@ template <class F> void CharacterForgeViewModel::edit(F&& change, bool affects_v
   if (!has_project_ || busy_) return;
   try {
     change();
-    if (affects_validation) invalidate_validation();
+    if (affects_validation) {
+      invalidate_validation();
+      mark_preview_stale(tr("El borrador cambió después de calcular la vista previa: vuelve a pedirla."));
+    }
     last_error_.clear();
   } catch (const std::exception& ex) {
     last_error_ = QString::fromUtf8(ex.what());
@@ -191,10 +198,22 @@ void CharacterForgeViewModel::setDescription(const QString& value) {
   edit([&] { draft_.set_description(value.toStdString()); });
 }
 void CharacterForgeViewModel::undo() {
-  if (has_project_ && !busy_ && draft_.undo()) { invalidate_validation(); preview_selected_model(); emit changed(); }
+  if (has_project_ && !busy_ && draft_.undo()) {
+    invalidate_validation();
+    mark_preview_stale(tr("El borrador cambió después de calcular la vista previa: vuelve a pedirla."));
+    preview_selected_model();
+    emit changed();
+    refreshVoiceAnalysis();  // the undone draft may have another voice, sex or factions
+  }
 }
 void CharacterForgeViewModel::redo() {
-  if (has_project_ && !busy_ && draft_.redo()) { invalidate_validation(); preview_selected_model(); emit changed(); }
+  if (has_project_ && !busy_ && draft_.redo()) {
+    invalidate_validation();
+    mark_preview_stale(tr("El borrador cambió después de calcular la vista previa: vuelve a pedirla."));
+    preview_selected_model();
+    emit changed();
+    refreshVoiceAnalysis();
+  }
 }
 
 QVariantMap CharacterForgeViewModel::npc() const {
@@ -215,38 +234,128 @@ void CharacterForgeViewModel::set_catalog_ready(bool ready) {
   if (!ready) {
     ++search_serial_;
     record_choices_.clear();
+    record_search_.clear();
     invalidate_validation();
+    reset_behavior();  // evidence, previews and the catalog belong to the profile that was indexed: none of it survives a re-index
     emit recordsChanged();
   }
   emit changed();
+  if (ready && has_project_) refreshVoiceAnalysis();
+}
+void CharacterForgeViewModel::set_profile_key(const QString& key) {
+  if (profile_key_ == key) return;
+  profile_key_ = key;
+  reset_behavior();
 }
 void CharacterForgeViewModel::setNpcValue(const QString& field, const QVariant& value) {
+  const auto before = has_project_ ? creation::native_npc_to_json(draft_.current().npc) : Json();
   edit([&] {
     auto json = creation::native_npc_to_json(draft_.current().npc);
     if (!json.contains(ss(field))) throw std::invalid_argument("Unknown Native NPC field");
     json[ss(field)] = to_json(value);
     draft_.set_native_npc(creation::native_npc_from_json(json));
   });
+  // The voice evidence follows the voice, the sex and the factions (VoicesFollower / VoicesMarriage depend on them).
+  if (has_project_ && (field == QLatin1String("voiceFormKey") || field == QLatin1String("female") || field == QLatin1String("factions")) &&
+      creation::native_npc_to_json(draft_.current().npc) != before) {
+    refreshVoiceAnalysis();
+  }
 }
 void CharacterForgeViewModel::setExportOption(const QString& field, const QVariant& value) {
   edit([&] { auto json = draft_.current().export_options; json[ss(field)] = to_json(value); draft_.set_export_options(std::move(json)); });
 }
 void CharacterForgeViewModel::searchRecords(const QString& kind, const QString& text) {
-  if (!catalog_ready_) { last_error_ = tr("Carga e indexa el perfil actual antes de buscar registros."); emit changed(); return; }
+  if (!catalog_ready_) {
+    last_error_ = tr("Carga e indexa el perfil actual antes de buscar registros.");
+    record_search_ = {{"state", "error"}, {"kind", kind}, {"count", 0}, {"code", ipc::protocol::error::kNotIndexed},
+                      {"error", tr("El perfil aún no está indexado: espera a que termine la indexación.")}};
+    emit recordsChanged();
+    emit changed();
+    return;
+  }
   const auto serial = ++search_serial_;
+  record_search_ = {{"state", "loading"}, {"kind", kind}, {"count", 0}};
+  emit recordsChanged();
   worker_->call(ipc::protocol::method::kCreationSearchRecords, Json{{"kind", ss(kind)}, {"text", ss(text)}, {"limit", 100}}, std::chrono::seconds(30), this,
-    [this, serial](const Json& r) { if (serial != search_serial_) return; record_choices_ = to_list(r); emit recordsChanged(); },
-    [this, serial](int, const QString& error, const Json&) { if (serial != search_serial_) return; record_choices_.clear(); last_error_ = error; emit recordsChanged(); emit changed(); });
+    [this, serial, kind](const Json& r) {
+      if (serial != search_serial_) return;
+      record_choices_ = to_list(r);
+      record_search_ = {{"state", "ready"}, {"kind", kind}, {"count", static_cast<int>(record_choices_.size())}};
+      emit recordsChanged();
+    },
+    [this, serial, kind](int code, const QString& error, const Json&) {
+      if (serial != search_serial_) return;
+      record_choices_.clear();
+      last_error_ = error;
+      // 0 results is "ready" with count 0; these are failures, and the picker says which.
+      const auto why = code == ipc::protocol::error::kNotIndexed ? tr("El perfil aún no está indexado.")
+                     : code == ipc::protocol::error::kInvalidArgument ? tr("El tipo de registro «%1» no se puede buscar: %2").arg(kind, error)
+                     : code == ipc::protocol::error::kBusy ? tr("El perfil está ocupado (indexando o exportando); vuelve a intentarlo en unos segundos.")
+                     : error;
+      record_search_ = {{"state", "error"}, {"kind", kind}, {"count", 0}, {"code", code}, {"error", why}};
+      emit recordsChanged();
+      emit changed();
+    });
 }
 void CharacterForgeViewModel::validateNpc() {
   if (!has_project_ || busy_ || !catalog_ready_) return;
   busy_ = true; last_error_.clear();
   const auto serial = ++operation_serial_;
   emit changed();
-  operation_cancel_ = worker_->call(ipc::protocol::method::kCreationValidateNpc,
-    Json{{"npc", creation::native_npc_to_json(draft_.current().npc)}, {"pluginName", draft_.current().export_options.value("pluginName", "CharacterForge.esp")}}, std::chrono::seconds(60), this,
-    [this, serial](const Json& r) { if (serial != operation_serial_) return; validation_ = to_map(r); busy_ = false; emit changed(); },
+  const auto npc_json = creation::native_npc_to_json(draft_.current().npc);
+  const auto plugin_name = draft_.current().export_options.value("pluginName", "CharacterForge.esp");
+  // Structural validation first (creation.validateNpc: records, links, masters, outfit, FaceGen lock). Then, when the worker knows them,
+  // the behavior half (creation.validateBehavior: voice evidence, class / combat style resolution). The second never replaces the
+  // first: its issues are added, and the export gate stays the structural one.
+  operation_cancel_ = worker_->call(ipc::protocol::method::kCreationValidateNpc, Json{{"npc", npc_json}, {"pluginName", plugin_name}}, std::chrono::seconds(60), this,
+    [this, serial, npc_json, plugin_name](const Json& r) {
+      if (serial != operation_serial_) return;
+      validation_ = to_map(r);
+      if (!behavior_supported_) { busy_ = false; emit changed(); return; }
+      operation_cancel_ = worker_->call(ipc::protocol::method::kCreationValidateBehavior,
+        Json{{"npc", npc_json}, {"pluginName", plugin_name}, {"profileName", ss(profile_key_)}}, std::chrono::seconds(60), this,
+        [this, serial](const Json& b) {
+          if (serial != operation_serial_) return;
+          merge_behavior_validation(b);
+          busy_ = false;
+          emit changed();
+          emit behaviorChanged();
+        },
+        [this, serial](int code, const QString& error, const Json&) {
+          if (serial != operation_serial_) return;
+          if (code == ipc::protocol::error::kMethodNotFound) { behavior_supported_ = false; emit behaviorChanged(); }
+          validation_["behaviorError"] = error;  // the structural result stays, and says the behavior half could not run
+          busy_ = false;
+          emit changed();
+        });
+    },
     [this, serial](int, const QString& error, const Json&) { if (serial != operation_serial_) return; busy_ = false; last_error_ = error; emit changed(); });
+}
+void CharacterForgeViewModel::merge_behavior_validation(const Json& b) {
+  validation_["voiceAnalysis"] = to_map(b.value("voiceAnalysis", Json::object()));
+  validation_["behaviorIssues"] = to_list(b.value("behaviorIssues", Json::array()));
+  validation_["resolvedLinks"] = to_list(b.value("resolvedLinks", Json::array()));
+  validation_["limitations"] = to_list(b.value("limitations", Json::array()));
+  validation_["behaviorFingerprint"] = qs(b.value("loadOrderFingerprint", std::string()));
+  validation_["behaviorTechnicallyExportable"] = b.value("technicallyExportable", false);
+  if (b.contains("resolvedClass") && !b.at("resolvedClass").is_null()) validation_["resolvedClass"] = to_map(b.at("resolvedClass"));
+  if (b.contains("resolvedCombatStyle") && !b.at("resolvedCombatStyle").is_null()) validation_["resolvedCombatStyle"] = to_map(b.at("resolvedCombatStyle"));
+  // Merge the behavior issues into the list the panel shows, without duplicating one the structural half already reported
+  // (code + subject). The behavior half names the target "target"; the structural one "subject".
+  auto issues = validation_.value("issues").toList();
+  QSet<QString> seen;
+  for (const auto& i : issues) { const auto m = i.toMap(); seen.insert(m.value("code").toString() + "|" + m.value("subject").toString()); }
+  for (const auto& i : b.value("issues", Json::array())) {
+    const auto code = qs(i.value("code", std::string()));
+    const auto subject = qs(i.value("target", std::string()));
+    if (seen.contains(code + "|" + subject)) continue;
+    seen.insert(code + "|" + subject);
+    issues.push_back(QVariantMap{{"severity", qs(i.value("severity", std::string("info")))}, {"code", code},
+                                 {"message", qs(i.value("message", std::string()))}, {"subject", subject}, {"source", "behavior"}});
+  }
+  validation_["issues"] = issues;
+  // The voice evidence of this validation is also the voice panel's: it was computed for this very draft.
+  voice_analysis_ = {{"state", "ready"}, {"analysis", validation_.value("voiceAnalysis")}, {"loadOrderFingerprint", validation_.value("behaviorFingerprint")}};
 }
 void CharacterForgeViewModel::exportTechnical(const QString& folder_or_url) {
   if (!has_project_ || !can_export_technical()) return;
@@ -263,9 +372,233 @@ void CharacterForgeViewModel::exportTechnical(const QString& folder_or_url) {
 }
 void CharacterForgeViewModel::cancelOperation() {
   if (blender_bridge_->busy()) { blender_bridge_->cancel(); return; }
+  if (behavior_busy_) {  // a preview / apply in flight: its answer is dropped, nothing is applied
+    ++behavior_serial_;
+    if (behavior_cancel_) behavior_cancel_->store(true);
+    behavior_busy_ = false;
+    set_preview({{"state", "cancelled"}, {"kind", archetype_preview_.value("kind")}, {"archetypeId", archetype_preview_.value("archetypeId")},
+                 {"message", tr("Operación cancelada: no se cambió nada.")}});
+    return;
+  }
   if (operation_cancel_) operation_cancel_->store(true);
   // Remain busy until cancellation is acknowledged, preventing a racing duplicate export.
 }
+// ------------------------------------------------------------------ follower behavior (AG04)
+
+namespace {
+// What an archetype may never change (BulkArchetypeEngine.ProtectedCategories). The worker already leaves these alone; this is the
+// studio's own check of the answer before it touches the draft.
+const std::vector<const char*>& protected_npc_keys() {
+  static const std::vector<const char*> keys = {"name", "editorId", "description", "raceFormKey", "female", "voiceFormKey", "height", "weight",
+                                                "face", "headPartFormKeys", "hairColorFormKey", "headTextureFormKey", "level", "levelMultiplier",
+                                                "minLevel", "maxLevel", "placement"};
+  return keys;
+}
+}  // namespace
+
+void CharacterForgeViewModel::set_preview(QVariantMap preview) {
+  archetype_preview_ = std::move(preview);
+  emit behaviorChanged();
+}
+
+void CharacterForgeViewModel::mark_preview_stale(const QString& why) {
+  const auto state = archetype_preview_.value("state").toString();
+  if (state == QLatin1String("ready") || state == QLatin1String("conflict") || state == QLatin1String("notApplicable")) {
+    archetype_preview_["state"] = QStringLiteral("stale");
+    archetype_preview_["message"] = why;
+    emit behaviorChanged();
+  } else if (state == QLatin1String("applied")) {
+    archetype_preview_.clear();  // what was applied has been edited or undone since: the summary no longer describes the draft
+    emit behaviorChanged();
+  }
+}
+
+void CharacterForgeViewModel::reset_behavior() {
+  ++behavior_serial_;
+  ++catalog_serial_;
+  ++voice_serial_;
+  if (behavior_cancel_) behavior_cancel_->store(true);
+  behavior_busy_ = false;
+  behavior_catalog_.clear();
+  archetype_preview_.clear();
+  voice_analysis_.clear();
+  behavior_supported_ = true;
+  emit behaviorChanged();
+}
+
+void CharacterForgeViewModel::discardArchetypePreview() { set_preview({}); }
+
+void CharacterForgeViewModel::loadBehaviorCatalog() {
+  if (!catalog_ready_ || !behavior_supported_) {
+    behavior_catalog_ = {{"state", "none"}, {"reason", !behavior_supported_ ? tr("Este worker no incluye el catálogo de comportamiento: actualiza la aplicación.")
+                                                                           : tr("Carga e indexa el perfil actual antes de elegir un arquetipo.")}};
+    emit behaviorChanged();
+    return;
+  }
+  const auto state = behavior_catalog_.value("state").toString();
+  if (state == QLatin1String("loading") || state == QLatin1String("ready")) return;  // once per profile (reset_behavior clears it)
+  const int serial = ++catalog_serial_;
+  behavior_catalog_ = {{"state", "loading"}};
+  emit behaviorChanged();
+  worker_->call(ipc::protocol::method::kCreationGetBehaviorCatalog, Json{{"profileName", ss(profile_key_)}, {"limit", 200}}, behavior_timeout_, this,
+    [this, serial](const Json& r) {
+      if (serial != catalog_serial_) return;
+      behavior_catalog_ = to_map(r);
+      behavior_catalog_["state"] = QStringLiteral("ready");
+      emit behaviorChanged();
+    },
+    [this, serial](int code, const QString& error, const Json&) {
+      if (serial != catalog_serial_) return;
+      if (code == ipc::protocol::error::kMethodNotFound) behavior_supported_ = false;
+      behavior_catalog_ = {{"state", "error"}, {"code", code},
+                           {"reason", code == ipc::protocol::error::kNotIndexed ? tr("El perfil aún no está indexado.")
+                                    : code == ipc::protocol::error::kInvalidLoadOrder ? tr("El perfil activo cambió: vuelve a abrir el panel.")
+                                    : code == ipc::protocol::error::kClientTimeout ? tr("El worker no respondió a tiempo. Vuelve a intentarlo.")
+                                    : error}};
+      emit behaviorChanged();
+    });
+}
+
+void CharacterForgeViewModel::previewArchetype(const QString& archetype_id, const QStringList& categories) { run_archetype(archetype_id, categories, false); }
+void CharacterForgeViewModel::applyArchetype(const QString& archetype_id, const QStringList& categories) { run_archetype(archetype_id, categories, true); }
+
+void CharacterForgeViewModel::run_archetype(const QString& archetype_id, const QStringList& categories, bool commit) {
+  const auto kind = commit ? QStringLiteral("apply") : QStringLiteral("preview");
+  const auto refuse = [&](const QString& state, const QString& message) {
+    set_preview({{"state", state}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", message}});
+  };
+  if (!has_project_) return refuse(QStringLiteral("error"), tr("Abre o crea un proyecto de Character Forge primero."));
+  if (!catalog_ready_) return refuse(QStringLiteral("error"), worker_message().isEmpty() ? tr("Carga e indexa el perfil actual antes de usar un arquetipo.") : tr("El worker no está disponible: %1").arg(worker_message()));
+  if (!behavior_supported_) return refuse(QStringLiteral("error"), tr("Este worker no incluye los arquetipos: actualiza la aplicación."));
+  if (behavior_busy_) return;  // a second click while one is running does not start a second one
+  if (commit && busy_) return refuse(QStringLiteral("error"), tr("Hay otra operación en curso (validación o exportación): espera a que termine."));
+
+  behavior_busy_ = true;
+  const int serial = ++behavior_serial_;
+  const auto base = creation::native_npc_to_json(draft_.current().npc);
+  const auto base_dump = base.dump();
+  const auto profile_at_request = profile_key_;
+  set_preview({{"state", "loading"}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", commit ? tr("Calculando y aplicando el arquetipo…") : tr("Calculando la vista previa…")}});
+  Json params{{"npc", base}, {"archetypeId", ss(archetype_id)}, {"dryRun", true}, {"profileName", ss(profile_key_)}};
+  if (!categories.isEmpty()) {
+    Json list = Json::array();
+    for (const auto& c : categories) list.push_back(ss(c));
+    params["categories"] = list;
+  }
+  behavior_cancel_ = worker_->call(ipc::protocol::method::kCreationApplyArchetype, params, behavior_timeout_, this,
+    [this, serial, commit, kind, archetype_id, base, base_dump, profile_at_request](const Json& r) {
+      if (serial != behavior_serial_) return;  // superseded, cancelled or the profile was re-indexed meanwhile
+      behavior_busy_ = false;
+      const auto fail = [&](const QString& state, const QString& message) {
+        set_preview({{"state", state}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", message}});
+      };
+      if (!has_project_ || !catalog_ready_ || profile_key_ != profile_at_request)
+        return fail(QStringLiteral("stale"), tr("El perfil activo cambió mientras se calculaba: no se aplicó nada."));
+      if (creation::native_npc_to_json(draft_.current().npc).dump() != base_dump)
+        return fail(QStringLiteral("stale"), tr("El borrador cambió mientras se calculaba: no se aplicó nada. Vuelve a pedirlo."));
+
+      QVariantList changes;
+      for (const auto& c : r.value("changes", Json::array())) {
+        changes.push_back(QVariantMap{{"category", qs(c.value("category", std::string()))}, {"field", qs(c.value("fieldName", std::string()))},
+                                      {"before", qs(c.value("beforeValueJson", std::string()))}, {"after", qs(c.value("afterValueJson", std::string()))}});
+      }
+      const auto validation = r.value("archetypeValidation", Json::object());
+      const bool all_resolved = validation.value("allLinksResolved", false);
+      QVariantList unresolved;
+      for (const auto& l : validation.value("links", Json::array())) {
+        if (l.value("resolved", true)) continue;
+        unresolved.push_back(QVariantMap{{"formKey", qs(l.value("formKey", std::string()))}, {"category", qs(l.value("category", std::string()))},
+                                         {"type", qs(l.value("expectedRecordType", std::string()))}, {"note", qs(l.value("note", std::string()))}});
+      }
+      QVariantMap preview{{"kind", kind}, {"archetypeId", archetype_id}, {"changes", changes}, {"appliedCategories", to_list(r.value("appliedCategories", Json::array()))},
+                          {"allLinksResolved", all_resolved}, {"unresolved", unresolved}, {"issues", to_list(validation.value("issues", Json::array()))},
+                          {"requiredMasters", to_list(validation.value("requiredMasters", Json::array()))},
+                          {"loadOrderFingerprint", qs(r.value("loadOrderFingerprint", std::string()))},
+                          {"proposedSha256", qs(r.value("proposedSha256", std::string()))}};
+      // Defense in depth: an answer that touches identity, face, sex, voice or placement is refused whatever the worker meant.
+      const auto& proposed = r.at("proposedNpc");
+      for (const auto* key : protected_npc_keys()) {
+        if (proposed.value(key, Json(nullptr)) != base.value(key, Json(nullptr))) {
+          preview["state"] = QStringLiteral("error");
+          preview["message"] = tr("El arquetipo intentó cambiar un campo protegido (%1): no se aplicó nada.").arg(QString::fromLatin1(key));
+          return set_preview(std::move(preview));
+        }
+      }
+      if (!all_resolved) {
+        preview["state"] = QStringLiteral("conflict");
+        preview["message"] = tr("Faltan registros de este arquetipo en el perfil activo (%1): no se puede aplicar.").arg(unresolved.size());
+        return set_preview(std::move(preview));
+      }
+      if (changes.isEmpty()) {
+        preview["state"] = QStringLiteral("notApplicable");
+        preview["message"] = tr("El personaje ya cumple este arquetipo: no hay nada que cambiar.");
+        return set_preview(std::move(preview));
+      }
+      preview["state"] = QStringLiteral("ready");
+      preview["message"] = tr("%1 cambios propuestos. Nada se ha modificado todavía.").arg(changes.size());
+      if (!commit) return set_preview(std::move(preview));
+
+      // Apply: the answer becomes the draft in ONE undoable edit (the standard undo / redo of the project restores the exact previous draft).
+      if (busy_) return set_preview({{"state", "error"}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", tr("Hay otra operación en curso: no se aplicó nada.")}});
+      try {
+        auto next = creation::native_npc_from_json(proposed);
+        edit([&] { draft_.set_native_npc(std::move(next)); });
+        if (creation::native_npc_to_json(draft_.current().npc).dump() == base_dump)  // edit() swallowed an error: nothing changed
+          return set_preview({{"state", "error"}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", last_error_.isEmpty() ? tr("No se pudo aplicar.") : last_error_}});
+      } catch (const std::exception& ex) {
+        return set_preview({{"state", "error"}, {"kind", kind}, {"archetypeId", archetype_id}, {"message", tr("La respuesta del arquetipo no es válida: %1").arg(QString::fromUtf8(ex.what()))}});
+      }
+      preview["state"] = QStringLiteral("applied");
+      preview["message"] = tr("Arquetipo aplicado (%1 cambios). Deshacer lo revierte de una vez.").arg(changes.size());
+      set_preview(std::move(preview));
+      refreshVoiceAnalysis();  // factions or packages may have changed what the voice evidence depends on
+    },
+    [this, serial, kind, archetype_id](int code, const QString& error, const Json&) {
+      if (serial != behavior_serial_) return;
+      behavior_busy_ = false;
+      if (code == ipc::protocol::error::kMethodNotFound) behavior_supported_ = false;
+      const auto message = code == ipc::protocol::error::kNotIndexed ? tr("El perfil aún no está indexado.")
+                         : code == ipc::protocol::error::kInvalidLoadOrder ? tr("El perfil activo cambió: no se aplicó nada.")
+                         : code == ipc::protocol::error::kRecordNotFound ? tr("El arquetipo «%1» no existe.").arg(archetype_id)
+                         : code == ipc::protocol::error::kRequestCancelled ? tr("Operación cancelada: no se cambió nada.")
+                         : code == ipc::protocol::error::kClientTimeout ? tr("El worker no respondió a tiempo: no se cambió nada. Vuelve a intentarlo.")
+                         : error;
+      set_preview({{"state", code == ipc::protocol::error::kInvalidLoadOrder ? "stale" : code == ipc::protocol::error::kRequestCancelled ? "cancelled" : "error"},
+                   {"kind", kind}, {"archetypeId", archetype_id}, {"message", message}, {"code", code}});
+    });
+}
+
+void CharacterForgeViewModel::refreshVoiceAnalysis() {
+  const int serial = ++voice_serial_;
+  const auto none = [&](const QString& reason) {
+    voice_analysis_ = {{"state", "none"}, {"reason", reason}};
+    emit behaviorChanged();
+  };
+  if (!has_project_) return none(tr("Sin proyecto abierto."));
+  if (!catalog_ready_) return none(tr("Carga e indexa el perfil actual para ver la evidencia de la voz."));
+  if (!behavior_supported_) return none(tr("Este worker no incluye el análisis de voz: actualiza la aplicación."));
+  const auto& npc = draft_.current().npc;
+  if (npc.voice_form_key.empty()) return none(tr("El personaje aún no tiene voz elegida."));
+  voice_analysis_ = {{"state", "loading"}, {"voiceFormKey", qs(npc.voice_form_key)}};
+  emit behaviorChanged();
+  const auto json = creation::native_npc_to_json(npc);
+  const auto voice = npc.voice_form_key;
+  worker_->call(ipc::protocol::method::kCreationAnalyzeVoice,
+                Json{{"voiceFormKey", voice}, {"female", npc.female}, {"factions", json.at("factions")}, {"profileName", ss(profile_key_)}}, std::min<std::chrono::milliseconds>(behavior_timeout_, std::chrono::seconds(30)), this,
+    [this, serial, voice](const Json& r) {
+      if (serial != voice_serial_) return;  // the voice, the sex or the profile changed since: this answer is for something else
+      voice_analysis_ = {{"state", "ready"}, {"voiceFormKey", qs(voice)}, {"analysis", to_map(r.value("voiceAnalysis", Json::object()))},
+                         {"loadOrderFingerprint", qs(r.value("loadOrderFingerprint", std::string()))}, {"issues", to_list(r.value("workerIssues", Json::array()))}};
+      emit behaviorChanged();
+    },
+    [this, serial](int code, const QString& error, const Json&) {
+      if (serial != voice_serial_) return;
+      if (code == ipc::protocol::error::kMethodNotFound) behavior_supported_ = false;
+      voice_analysis_ = {{"state", "error"}, {"code", code}, {"reason", code == ipc::protocol::error::kNotIndexed ? tr("El perfil aún no está indexado.") : error}};
+      emit behaviorChanged();
+    });
+}
+
 QVariantMap CharacterForgeViewModel::workspace() const {
   if (!has_project_) return {};
   auto result = to_map(draft_.current().workspace);

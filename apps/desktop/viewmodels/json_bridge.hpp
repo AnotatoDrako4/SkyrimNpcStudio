@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJSValue>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -33,7 +34,10 @@ inline QVariantMap to_map(const Json& j) { return j.is_object() ? to_variant(j).
 inline QVariantList to_list(const Json& j) { return j.is_array() ? to_variant(j).toList() : QVariantList{}; }
 
 inline Json to_json(const QVariant& v) {
-  const QJsonArray wrapper{QJsonValue::fromVariant(v)};
+  // A JS array or object handed from QML to a `const QVariant&` parameter can arrive wrapped in a QJSValue, which QJsonValue::fromVariant
+  // turns into null (a spell, perk, package or faction list chosen in the UI used to become `null` and the edit was refused).
+  const QVariant plain = v.metaType() == QMetaType::fromType<QJSValue>() ? v.value<QJSValue>().toVariant() : v;
+  const QJsonArray wrapper{QJsonValue::fromVariant(plain)};
   const auto bytes = QJsonDocument(wrapper).toJson(QJsonDocument::Compact);
   return Json::parse(bytes.toStdString())[0];
 }

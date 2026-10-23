@@ -76,19 +76,51 @@ Rectangle {
             font.pixelSize: Theme.micro
         }
     }
-    Text {
+    // No portrait: a short diagnostic code and one line on the card; the renderer's own reason, unedited, in the
+    // tooltip. The code only sorts the reason the renderer gave (it never decides anything by itself).
+    readonly property string reason: thumb.portrait.reason || ""
+    readonly property var diagnosis: reason.indexOf("Sin cabeza") === 0 ? ["NO_HEAD", qsTr("Sin cabeza visible")]
+        : (reason.indexOf("Template") >= 0 || reason.indexOf("plantilla") >= 0) ? ["TEMPLATE", qsTr("Hereda de una plantilla")]
+        : reason.indexOf("fuera de pantalla") >= 0 ? ["OFFSCREEN", qsTr("Render no disponible")]
+        : ["ERROR", qsTr("No se pudo dibujar")]
+    Column {
+        objectName: "npcCardPortraitPlaceholder"
         anchors.centerIn: parent
-        width: parent.width - 8
+        width: parent.width - 12
+        spacing: Theme.sp(4)
         visible: !thumb.ready && !thumb.provisional
-        horizontalAlignment: Text.AlignHCenter
-        text: thumb.portrait.state === "queued" ? qsTr("Retrato en cola")
-            : thumb.portrait.state === "rendering" ? qsTr("Generando retrato…")
-            : thumb.portrait.state === "error" ? qsTr("Sin retrato: %1").arg(thumb.portrait.reason || "?")
-            : qsTr("Sin retrato")
-        color: thumb.portrait.state === "error" ? Theme.warn : Theme.textMuted
-        font.pixelSize: Theme.micro
-        wrapMode: Text.WordWrap
-        maximumLineCount: 5
-        elide: Text.ElideRight
+        Icon {
+            anchors.horizontalCenter: parent.horizontalCenter
+            name: thumb.portrait.state === "error" ? "warning" : thumb.portrait.state === "rendering" ? "refresh" : "person"
+            size: Theme.title
+            color: thumb.portrait.state === "error" ? Theme.warn : Theme.textMuted
+        }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            visible: thumb.portrait.state === "error"
+            text: thumb.diagnosis[0]
+            color: Theme.warn
+            font.family: Theme.mono
+            font.pixelSize: Theme.small
+            font.bold: true
+        }
+        Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: thumb.portrait.state === "queued" ? qsTr("Retrato en cola")
+                : thumb.portrait.state === "rendering" ? qsTr("Generando retrato…")
+                : thumb.portrait.state === "error" ? thumb.diagnosis[1]
+                : qsTr("Sin retrato")
+            color: Theme.textDim
+            font.pixelSize: Theme.small
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
+            elide: Text.ElideRight
+        }
     }
+    ToolTip.visible: placeholderHover.hovered && thumb.portrait.state === "error"
+    ToolTip.delay: 500
+    ToolTip.text: qsTr("Sin retrato: %1").arg(thumb.reason || "?")
+    HoverHandler { id: placeholderHover }
 }

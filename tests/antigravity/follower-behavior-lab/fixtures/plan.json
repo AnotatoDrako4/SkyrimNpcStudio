@@ -11,7 +11,7 @@
     "female": true,
     "voiceFormKey": "0A0100:Skyrim.esm",
     "classFormKey": "013176:Skyrim.esm",
-    "combatStyleFormKey": "03BE1C:Skyrim.esm",
+    "combatStyleFormKey": "03CF5A:Skyrim.esm",
     "height": 1.0,
     "weight": 50.0,
     "level": 15,
@@ -50,12 +50,12 @@
       }
     ],
     "packageFormKeys": [
-      "0A0301:Skyrim.esm",
-      "0A0302:Skyrim.esm"
+      "04B037:Skyrim.esm",
+      "0BFB6B:Skyrim.esm"
     ],
     "spellFormKeys": [],
     "perkFormKeys": [
-      "058F68:Skyrim.esm",
+      "0BCCAE:Skyrim.esm",
       "0BCD2A:Skyrim.esm"
     ]
   }

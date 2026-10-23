@@ -24,19 +24,24 @@ LayoutValues defaults_for(const QString& workspace) {
   return v;
 }
 
+// Built-in layouts: key (stable, stored nowhere), name shown, and the workspace it is meant for ("" = any).
+// Older keys stay so that nothing a user got used to disappears; the names follow the task they serve.
 struct BuiltinLayout {
   const char* key;
   const char* name;
+  const char* workspace;
 };
-constexpr std::array<BuiltinLayout, 8> kBuiltin = {{
-    {"creator", "Character Creator"},
-    {"face", "Edición facial"},
-    {"wardrobe", "Vestuario"},
-    {"outfit", "Estudio de atuendos"},
-    {"review", "Revisión de mod"},
-    {"explore", "Exploración de NPC"},
-    {"viewer", "Visor maximizado"},
-    {"compact", "Diseño compacto"},
+constexpr std::array<BuiltinLayout, 10> kBuiltin = {{
+    {"explore", "Exploración de NPC", "creator"},
+    {"face", "Edición de rostro", "creator"},
+    {"compare", "Comparación A/B", "creator"},
+    {"wardrobe", "Vestuario", "creator"},
+    {"outfit", "Outfit / Armadura", "outfit"},
+    {"forge", "Character Forge", "forge"},
+    {"review", "Revisión de mod", ""},
+    {"viewer", "Enfoque visor", ""},
+    {"compact", "Diseño compacto", ""},
+    {"creator", "Predeterminado del workspace", ""},
 }};
 
 // What a built-in layout does to a workspace, starting from that workspace's own defaults.
@@ -45,12 +50,32 @@ std::optional<LayoutValues> builtin_values(const QString& key, const LayoutValue
   if (key == "creator") return v;
   if (key == "face") { v.left_visible = false; v.right_visible = true; v.right_width = 480; return v; }
   if (key == "wardrobe" || key == "outfit") { v.left_visible = true; v.left_width = 420; v.right_visible = true; v.right_width = 380; return v; }
+  if (key == "compare") { v.left_visible = false; v.right_visible = true; v.right_width = 360; v.bottom_visible = false; return v; }
+  if (key == "forge") { v.left_visible = true; v.left_width = 240; v.right_visible = true; v.right_width = 440; v.bottom_visible = false; return v; }
   if (key == "review") { v.left_visible = true; v.left_width = 380; v.right_visible = true; v.right_width = 400; v.bottom_visible = true; v.bottom_height = 240; return v; }
   if (key == "explore") { v.left_visible = true; v.left_width = 480; v.right_visible = false; return v; }
   if (key == "viewer") { v.maximized = true; return v; }
   if (key == "compact") { v.left_width = 240; v.right_width = 300; v.bottom_visible = false; return v; }
   return std::nullopt;
 }
+
+// Readability presets: one click sets scale, text and density together. Applied only by the user.
+struct ReadabilityPreset {
+  const char* key;
+  const char* name;
+  const char* detail;
+  int ui_scale;
+  int font_scale;
+  int density;
+};
+constexpr std::array<ReadabilityPreset, 3> kReadability = {{
+    {"comfortable", "Cómodo", "Interfaz 110 %, texto 110 %, densidad cómoda", 110, 110, WorkbenchState::Comfortable},
+    {"balanced", "Equilibrado", "Interfaz 100 %, texto 100 %, densidad normal", 100, 100, WorkbenchState::Normal},
+    {"compact", "Compacto", "Interfaz 90 %, texto 100 %, densidad compacta: menos espacio, sin microtipografía", 90, 100, WorkbenchState::Compact},
+}};
+
+// Body text (base 13) is the reference: below 0.81 x it would fall under 11 px.
+constexpr int kBodyBase = 13;
 
 QJsonObject to_json(const LayoutValues& v) {
   return {{"left", v.left_visible},       {"right", v.right_visible},      {"bottom", v.bottom_visible},
@@ -212,6 +237,51 @@ bool WorkbenchState::appearance_at_defaults() const {
          std::all_of(zone_fonts_.cbegin(), zone_fonts_.cend(), [](int v) { return v == 100; });
 }
 
+int WorkbenchState::legibleMinimum(int base) {
+  if (base >= 16) return 12;  // titles and headings
+  if (base >= 12) return 11;  // body text (names, fields, buttons)
+  if (base >= 11) return 10;  // secondary text (FormKey, plugin, counts)
+  return 9;                   // captions and badges
+}
+
+int WorkbenchState::legibleFontPixels(int base, int ui_scale, int font_scale) {
+  const int scaled = qRound(base * (ui_scale / 100.0) * (font_scale / 100.0));
+  return std::max(legibleMinimum(base), scaled);
+}
+
+bool WorkbenchState::legibility_floor_active() const {
+  return qRound(kBodyBase * (ui_scale_ / 100.0) * (font_scale_ / 100.0)) < legibleMinimum(kBodyBase);
+}
+
+QString WorkbenchState::readability_preset() const {
+  for (const auto& p : kReadability)
+    if (p.ui_scale == ui_scale_ && p.font_scale == font_scale_ && p.density == density_) return QString::fromLatin1(p.key);
+  return QStringLiteral("custom");
+}
+
+QVariantList WorkbenchState::readability_presets() const {
+  QVariantList list;
+  for (const auto& p : kReadability)
+    list.push_back(QVariantMap{{"key", QString::fromLatin1(p.key)},
+                               {"name", QString::fromUtf8(p.name)},
+                               {"detail", QString::fromUtf8(p.detail)},
+                               {"uiScale", p.ui_scale},
+                               {"fontScale", p.font_scale},
+                               {"density", p.density}});
+  return list;
+}
+
+bool WorkbenchState::applyReadabilityPreset(const QString& key) {
+  for (const auto& p : kReadability) {
+    if (key != QLatin1String(p.key)) continue;
+    set_ui_scale(p.ui_scale);
+    set_font_scale(p.font_scale);
+    set_density(p.density);
+    return true;
+  }
+  return false;
+}
+
 void WorkbenchState::set_ui_scale(int percent) {
   percent = std::clamp(percent, kMinUiScale, kMaxUiScale);
   if (percent == ui_scale_) return;
@@ -301,7 +371,10 @@ void WorkbenchState::resetAll() {
 
 QVariantList WorkbenchState::builtin_layouts() const {
   QVariantList list;
-  for (const auto& b : kBuiltin) list.push_back(QVariantMap{{"key", QString::fromLatin1(b.key)}, {"name", QString::fromUtf8(b.name)}});
+  for (const auto& b : kBuiltin)
+    list.push_back(QVariantMap{{"key", QString::fromLatin1(b.key)},
+                               {"name", QString::fromUtf8(b.name)},
+                               {"workspace", QString::fromLatin1(b.workspace)}});
   return list;
 }
 

@@ -55,13 +55,19 @@ public sealed class PluginContext : IDisposable
     public ILinkCache<ISkyrimMod, ISkyrimModGetter> VanillaLinkCache { get; }
     public string LoadOrderFingerprint { get; }
 
+    // False when the plugins were opened by a host (the worker's LoadOrderSession) that keeps ownership of the overlays.
+    private readonly bool _ownsPlugins;
+
     private PluginContext(
         string fixtureDirectory,
         string profileName,
-        List<LoadedPluginInfo> enabledPlugins,
-        List<string> disabledPluginNames,
+        IReadOnlyList<LoadedPluginInfo> enabledPlugins,
+        IReadOnlyList<string> disabledPluginNames,
         HashSet<ModKey> disabledKeys,
-        List<BehaviorIssue> loadIssues)
+        IReadOnlyList<BehaviorIssue> loadIssues,
+        ILinkCache<ISkyrimMod, ISkyrimModGetter>? hostLinkCache = null,
+        ILinkCache<ISkyrimMod, ISkyrimModGetter>? hostVanillaLinkCache = null,
+        string? hostFingerprint = null)
     {
         FixtureDirectory = fixtureDirectory;
         ProfileName = profileName;
@@ -69,16 +75,23 @@ public sealed class PluginContext : IDisposable
         DisabledPluginNames = disabledPluginNames;
         _disabledKeys = disabledKeys;
         LoadIssues = loadIssues;
+        _ownsPlugins = hostLinkCache is null;
         _enabledByKey = enabledPlugins.ToDictionary(p => p.ModKey);
 
-        LinkCache = enabledPlugins
+        LinkCache = hostLinkCache ?? enabledPlugins
             .Select(p => (ISkyrimModGetter)p.Mod)
             .ToImmutableLinkCache();
 
-        VanillaLinkCache = enabledPlugins
+        VanillaLinkCache = hostVanillaLinkCache ?? enabledPlugins
             .Where(p => IsVanillaBaseMaster(p.ModKey))
             .Select(p => (ISkyrimModGetter)p.Mod)
             .ToImmutableLinkCache();
+
+        if (hostFingerprint is not null)
+        {
+            LoadOrderFingerprint = hostFingerprint;
+            return;
+        }
 
         var fpBuilder = new StringBuilder();
         fpBuilder.Append("profile=").Append(profileName).Append(';');
@@ -310,6 +323,39 @@ public sealed class PluginContext : IDisposable
     }
 
     /// <summary>
+    /// Wraps plugins that a HOST has already opened (the BethesdaWorker's indexed LoadOrderSession): the very same overlays and link
+    /// cache the catalog uses, so behavior answers come from the effective load order of the active profile (winners, overrides,
+    /// masters) and nothing is parsed twice. The host keeps ownership: <see cref="Dispose"/> does not close the overlays.
+    /// <paramref name="loadOrderFingerprint"/> identifies this exact load order (the host derives it from the profile and its plugins).
+    /// </summary>
+    public static PluginContext FromLoaded(
+        string profileName,
+        IReadOnlyList<LoadedPluginInfo> enabledPlugins,
+        IReadOnlyList<string> disabledPluginNames,
+        IReadOnlyList<BehaviorIssue> loadIssues,
+        ILinkCache<ISkyrimMod, ISkyrimModGetter> linkCache,
+        ILinkCache<ISkyrimMod, ISkyrimModGetter> vanillaLinkCache,
+        string loadOrderFingerprint)
+    {
+        ArgumentNullException.ThrowIfNull(enabledPlugins);
+        ArgumentNullException.ThrowIfNull(linkCache);
+        ArgumentNullException.ThrowIfNull(vanillaLinkCache);
+        ArgumentException.ThrowIfNullOrWhiteSpace(loadOrderFingerprint);
+        var disabledKeys = new HashSet<ModKey>();
+        foreach (var name in disabledPluginNames)
+        {
+            if (ModKey.TryFromFileName(name, out var key))
+            {
+                disabledKeys.Add(key);
+            }
+        }
+
+        // FixtureDirectory is empty: there is no fixture, the records come from the host's session.
+        return new PluginContext(string.Empty, profileName, enabledPlugins, disabledPluginNames, disabledKeys, loadIssues,
+            linkCache, vanillaLinkCache, loadOrderFingerprint);
+    }
+
+    /// <summary>
     /// Strict FormKey parser. Supports Mutagen format ("013AD2:Skyrim.esm" or "00013AD2:Skyrim.esm").
     /// Never guesses by EditorID.
     /// </summary>
@@ -350,6 +396,11 @@ public sealed class PluginContext : IDisposable
 
     public void Dispose()
     {
+        if (!_ownsPlugins)
+        {
+            return; // opened by a host that disposes them (see FromLoaded)
+        }
+
         foreach (var plugin in EnabledPlugins)
         {
             plugin.Mod.Dispose();

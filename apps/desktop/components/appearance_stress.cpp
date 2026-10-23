@@ -36,6 +36,7 @@
 #endif
 #include <windows.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 
 #include "viewmodels/resource_context.hpp"
 #include "viewmodels/studio_controller.hpp"
@@ -57,6 +58,27 @@ qint64 process_memory_mb() {
   PROCESS_MEMORY_COUNTERS_EX counters{};
   if (!K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) return -1;
   return static_cast<qint64>(counters.PrivateUsage / (1024 * 1024));
+}
+
+// AG05: kills the worker process that THIS studio started (a child of this process), never another one: the way a crash looks from outside.
+bool kill_child_worker() {
+  const DWORD me = GetCurrentProcessId();
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return false;
+  PROCESSENTRY32W entry{};
+  entry.dwSize = sizeof(entry);
+  bool killed = false;
+  if (Process32FirstW(snapshot, &entry)) {
+    do {
+      if (entry.th32ParentProcessID != me || !QString::fromWCharArray(entry.szExeFile).contains(QLatin1String("BethesdaWorker"), Qt::CaseInsensitive)) continue;
+      if (HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID)) {
+        killed |= TerminateProcess(process, 1) != 0;
+        CloseHandle(process);
+      }
+    } while (Process32NextW(snapshot, &entry));
+  }
+  CloseHandle(snapshot);
+  return killed;
 }
 
 struct Stress : std::enable_shared_from_this<Stress> {
@@ -4554,6 +4576,933 @@ struct Stress : std::enable_shared_from_this<Stress> {
             });
           });
         });
+      });
+    } else if (name == "forge-behavior") {
+      // AG04: the Character Forge behavior controls on the REAL window against the REAL indexed MO2 profile (no fixture anywhere on this
+      // path): archetype catalog, Vista previa (touches nothing), Aplicar (one undoable step), Deshacer / Rehacer, the spell and perk
+      // pickers through their dialogs, the voice evidence following the voice, and a validation that keeps the playable export blocked.
+      // Every click is a platform mouse click on the control found by objectName. Not in "all": it needs an indexed profile.
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(50, *tick);
+        };
+        (*tick)();
+      };
+      auto named = std::make_shared<std::function<QQuickItem*(QQuickItem*, const QString&)>>();
+      *named = [named](QQuickItem* root, const QString& object_name) -> QQuickItem* {
+        if (!root || !root->isVisible()) return nullptr;
+        if (root->objectName() == object_name) return root;
+        for (auto* child : root->childItems())
+          if (auto* hit = (*named)(child, object_name)) return hit;
+        return nullptr;
+      };
+      auto item_named = [self, named](const char* object_name) { return (*named)(self->window->contentItem(), QString::fromLatin1(object_name)); };
+      auto click_item = [self](QQuickItem* item) {
+        QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+      };
+      auto shot = [self](const char* file) { self->window->grabWindow().save(QDir(self->work_dir).filePath(QString::fromLatin1(file))); };
+      auto forge = [self] { return self->studio->forge(); };
+      auto search = [self, wait_for](const QString& kind, const QString& text, std::function<void(bool, QVariantList)> next) {
+        self->studio->forge()->searchRecords(kind, text);
+        wait_for([self, kind] {
+          const auto s = self->studio->forge()->record_search();
+          const auto st = s.value("state").toString();
+          return s.value("kind").toString() == kind && (st == QLatin1String("ready") || st == QLatin1String("error"));
+        }, 60000, [self, next](bool ok) { next(ok, self->studio->forge()->record_choices()); });
+      };
+      auto preview_settled = [forge] {
+        const auto st = forge()->archetype_preview().value("state").toString();
+        return st != QLatin1String("loading") && st != QLatin1String("idle");
+      };
+      static const QStringList protected_keys = {"name", "editorId", "description", "raceFormKey", "female", "voiceFormKey", "height", "weight", "face",
+                                                 "headPartFormKeys", "hairColorFormKey", "headTextureFormKey", "level", "levelMultiplier", "minLevel", "maxLevel", "placement"};
+      auto state = std::make_shared<QVariantMap>();  // base draft, applied draft and the chosen archetype, shared between the steps
+      steps.push_back([self, wait_for, forge] {
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        self->check(tabs != nullptr, "the workspace tabs exist");
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        wait_for([forge] { return forge()->catalog_ready(); }, 300000, [self](bool ok) {
+          if (!ok) {
+            self->skip("forge-behavior: the studio did not index a profile (open it with an MO2 instance and profile)");
+            self->next_scenario();
+            return;
+          }
+          self->step();
+        });
+      });
+      steps.push_back([self, forge, search] {
+        self->check(forge()->newProject(QStringLiteral("AG04Behavior")), "a Character Forge project was created");
+        forge()->setCharacterName(QStringLiteral("AG04 Prueba"));
+        forge()->setEditorId(QStringLiteral("AG04_Prueba"));
+        search(QStringLiteral("race"), QStringLiteral("NordRace"), [self, forge, search](bool ok, QVariantList races) {
+          self->check(ok && !races.isEmpty(), "the race picker finds NordRace in the real profile");
+          if (!races.isEmpty()) forge()->setNpcValue(QStringLiteral("raceFormKey"), races.first().toMap().value("formKey"));
+          search(QStringLiteral("voice"), QStringLiteral("FemaleEvenToned"), [self, forge](bool ok2, QVariantList voices) {
+            self->check(ok2 && !voices.isEmpty(), "the voice picker finds FemaleEvenToned");
+            if (!voices.isEmpty()) forge()->setNpcValue(QStringLiteral("voiceFormKey"), voices.first().toMap().value("formKey"));
+            forge()->setNpcValue(QStringLiteral("female"), true);
+            self->check(!forge()->npc().value("voiceFormKey").toString().isEmpty(), "the draft has a voice");
+            self->step();
+          });
+        });
+      });
+      // The Datos tab, reached with a click; the catalog is requested when the controls appear.
+      steps.push_back([self, wait_for, forge, item_named, click_item, shot] {
+        // The left navigation of the Character Forge ("Crear NPC", not the button of the project page on the right), then the 'Datos' tab.
+        QQuickItem* nav = nullptr;
+        std::function<void(QQuickItem*)> scan = [&](QQuickItem* root) {
+          for (auto* candidate : root->childItems()) {
+            const auto text = candidate->property("text").toString();
+            if (text.contains(QLatin1String("Crear NPC"))) self->log(QStringLiteral("  candidate '%1' %2 visible=%3 x=%4").arg(text, QString::fromLatin1(candidate->metaObject()->className())).arg(candidate->isVisible()).arg(candidate->mapToScene(QPointF(0, 0)).x()));
+            if (candidate->isVisible() && text == QLatin1String("Crear NPC") && candidate->mapToScene(QPointF(0, 0)).x() < 300) nav = candidate;
+            scan(candidate);
+          }
+        };
+        scan(self->window->contentItem());
+        self->check(nav != nullptr, "the Character Forge navigation offers 'Crear NPC'");
+        if (nav) click_item(nav);
+        self->after(500, [self, wait_for, forge, item_named, click_item, shot] {
+        auto* tab = self->find_item(self->window->contentItem(), QStringLiteral("Datos"));
+        self->check(tab != nullptr, "the 'Datos' tab is visible in the Character Forge");
+        if (tab) click_item(tab);
+        wait_for([forge, item_named] { return item_named("archetypeCombo") != nullptr && forge()->behavior_catalog().value("state").toString() == QLatin1String("ready"); }, 60000,
+                 [self, forge, item_named, shot](bool ok) {
+          self->check(ok, "the archetype catalog of the indexed profile loaded: " + forge()->behavior_catalog().value("reason").toString());
+          if (!ok) { self->next_scenario(); return; }
+          const auto catalog = forge()->behavior_catalog();
+          const auto list = catalog.value("archetypes").toList();
+          self->check(!list.isEmpty(), QStringLiteral("the profile offers %1 archetype(s)").arg(list.size()));
+          for (const auto& a : list) {
+            const auto m = a.toMap();
+            self->log(QStringLiteral("archetype %1 allLinksResolved=%2 masters=%3 issues=%4").arg(m.value("id").toString(), m.value("allLinksResolved").toString(),
+                                                                                                     m.value("requiredMasters").toStringList().join(","), QString::number(m.value("issues").toList().size())));
+          }
+          self->check(!catalog.value("loadOrderFingerprint").toString().isEmpty(), "the catalog carries the profile fingerprint " + catalog.value("loadOrderFingerprint").toString().left(16));
+          auto* combo = item_named("archetypeCombo");
+          self->check(combo && combo->property("count").toInt() == list.size(), "the archetype combo lists exactly the profile's archetypes");
+          shot("forge-behavior-catalog.png");
+          self->step();
+        });
+        });
+      });
+      steps.push_back([self, forge, item_named, click_item, state, shot, preview_settled, wait_for] {
+        const auto list = forge()->behavior_catalog().value("archetypes").toList();
+        int target = -1;
+        for (int i = 0; i < list.size(); ++i)
+          if (list[i].toMap().value("allLinksResolved").toBool()) { target = i; break; }
+        auto* combo = item_named("archetypeCombo");
+        auto* apply = item_named("archetypeApplyButton");
+        auto* preview_button = item_named("archetypePreviewButton");
+        self->check(combo && apply && preview_button, "the combo, Vista previa and Aplicar are on screen");
+        if (!combo || !apply || !preview_button) { self->next_scenario(); return; }
+        if (target < 0) {
+          // No archetype resolves in this profile: the honest result is a disabled Aplicar that says why. Nothing is faked.
+          self->check(!apply->isEnabled(), "no archetype resolves in this profile: Aplicar is disabled");
+          auto* reason = item_named("archetypeBlockedReason");
+          self->check(reason && !reason->property("text").toString().isEmpty(), "and the screen says why: " + (reason ? reason->property("text").toString() : QString()));
+          self->skip("forge-behavior: apply / undo / redo not measured, no archetype of this profile has all its records");
+          shot("forge-behavior-no-resolved-archetype.png");
+          self->next_scenario();
+          return;
+        }
+        combo->setProperty("currentIndex", target);
+        (*state)["archetype"] = list[target].toMap().value("id").toString();
+        (*state)["base"] = forge()->npc();
+        (*state)["canUndo"] = forge()->can_undo();
+        self->log("target archetype: " + state->value("archetype").toString());
+        self->check(preview_button->isEnabled(), "Vista previa is enabled with a project, a ready profile and a chosen archetype");
+        click_item(preview_button);
+        wait_for(preview_settled, 60000, [self, forge, state, shot, item_named](bool ok) {
+          const auto p = forge()->archetype_preview();
+          self->log("preview: state=" + p.value("state").toString() + " " + p.value("message").toString());
+          // The panel as drawn at this window size: nothing spills out sideways and no button is narrower than its label.
+          if (auto* combo = item_named("archetypeCombo"); combo && combo->parentItem() && combo->parentItem()->parentItem()) {
+            int inspected = 0;
+            self->window->grabWindow();  // a window lays out (polishes) when it renders: measure after a frame, not before
+            self->window->grabWindow();
+            const auto problems = Stress::layout_problems(combo->parentItem()->parentItem(), false, &inspected);
+            if (!problems.isEmpty()) {
+              QString chain;
+              int level = 0;
+              for (QQuickItem* up = combo->parentItem(); up && level < 9; up = up->parentItem(), ++level)
+                chain += QStringLiteral(" [%1 w=%2 implicitW=%3]").arg(QString::fromLatin1(up->metaObject()->className()).left(28)).arg(up->width()).arg(up->implicitWidth());
+              self->log("ancestors of the combo:" + chain);
+            }
+            self->check(problems.isEmpty(), QStringLiteral("the behavior panel fits %1x%2 (%3 items): %4").arg(self->window->width()).arg(self->window->height()).arg(inspected).arg(problems.isEmpty() ? QStringLiteral("ok") : problems.join("; ")));
+          }
+          self->check(ok && p.value("state").toString() == QLatin1String("ready"), "Vista previa produced a ready preview");
+          self->check(!p.value("changes").toList().isEmpty(), QStringLiteral("it lists %1 concrete change(s)").arg(p.value("changes").toList().size()));
+          self->check(forge()->npc() == state->value("base").toMap(), "Vista previa did not touch the draft");
+          self->check(forge()->can_undo() == state->value("canUndo").toBool(), "Vista previa added no undo step");
+          shot("forge-behavior-preview.png");
+          self->step();
+        });
+      });
+      steps.push_back([self, forge, item_named, click_item, state, shot, preview_settled, wait_for] {
+        auto* apply = item_named("archetypeApplyButton");
+        self->check(apply && apply->isEnabled(), "Aplicar is enabled for a resolved archetype");
+        if (!apply) { self->next_scenario(); return; }
+        click_item(apply);
+        wait_for([forge] { return forge()->archetype_preview().value("state").toString() == QLatin1String("applied") || forge()->archetype_preview().value("state").toString() == QLatin1String("error") ||
+                                  forge()->archetype_preview().value("state").toString() == QLatin1String("stale") || forge()->archetype_preview().value("state").toString() == QLatin1String("conflict"); }, 60000,
+                 [self, forge, state, shot](bool ok) {
+          const auto p = forge()->archetype_preview();
+          self->log("apply: state=" + p.value("state").toString() + " " + p.value("message").toString());
+          self->check(ok && p.value("state").toString() == QLatin1String("applied"), "Aplicar applied the archetype");
+          const auto base = state->value("base").toMap();
+          const auto now = forge()->npc();
+          self->check(now != base, "the draft changed");
+          int differing = 0;
+          bool protected_ok = true;
+          for (auto it = now.begin(); it != now.end(); ++it) {
+            if (it.value() != base.value(it.key())) {
+              ++differing;
+              self->log("  changed: " + it.key());
+              if (protected_keys.contains(it.key())) protected_ok = false;
+            }
+          }
+          self->check(protected_ok, QStringLiteral("only authorized fields changed (%1), identity, face, voice, sex and placement are untouched").arg(differing));
+          self->check(forge()->can_undo(), "the application is one undoable step");
+          self->check(forge()->dirty(), "the project is marked as modified");
+          (*state)["applied"] = now;
+          shot("forge-behavior-applied.png");
+          self->step();
+        });
+      });
+      steps.push_back([self, forge, item_named, click_item, state, wait_for, shot] {
+        auto* undo = item_named("archetypeUndoButton");
+        auto* redo = item_named("archetypeRedoButton");
+        self->check(undo && undo->isEnabled(), "Deshacer is enabled after applying");
+        self->check(redo && !redo->isEnabled(), "Rehacer is disabled until something was undone");
+        if (!undo || !redo) { self->next_scenario(); return; }
+        click_item(undo);
+        wait_for([forge, state] { return forge()->npc() == state->value("base").toMap(); }, 5000, [self, forge, state, redo, click_item, wait_for, shot](bool ok) {
+          self->check(ok, "Deshacer restored the exact previous draft in one click");
+          self->check(redo->isEnabled(), "Rehacer is enabled after Deshacer");
+          click_item(redo);
+          wait_for([forge, state] { return forge()->npc() == state->value("applied").toMap(); }, 5000, [self, shot](bool ok2) {
+            self->check(ok2, "Rehacer restored the exact applied draft");
+            shot("forge-behavior-redo.png");
+            self->step();
+          });
+        });
+      });
+      // A double click on Aplicar is one application: after it, a single Deshacer returns to the original draft.
+      steps.push_back([self, forge, item_named, click_item, state, wait_for] {
+        forge()->undo();
+        self->check(forge()->npc() == state->value("base").toMap(), "back on the original draft before the double click");
+        auto* apply = item_named("archetypeApplyButton");
+        if (!apply) { self->next_scenario(); return; }
+        click_item(apply);
+        click_item(apply);
+        wait_for([forge] { return forge()->archetype_preview().value("state").toString() == QLatin1String("applied"); }, 60000, [self, forge, state](bool ok) {
+          self->check(ok, "the double click ended applied");
+          forge()->undo();
+          self->check(forge()->npc() == state->value("base").toMap(), "one Deshacer undoes a double-clicked Aplicar completely (no second application happened)");
+          self->step();
+        });
+      });
+      // Spells and perks through the real pickers: button -> dialog -> list item -> draft.
+      auto pick = std::make_shared<std::function<void(const QString&, const QString&, std::function<void()>)>>();
+      *pick = [self, forge, wait_for, item_named, click_item, shot](const QString& kind, const QString& field, std::function<void()> done) {
+        QQuickItem* selector = nullptr;
+        for (auto* item : self->window->findChildren<QQuickItem*>())
+          if (item->isVisible() && item->property("kind").toString() == kind && item->property("title").isValid()) selector = item;
+        self->check(selector != nullptr, "the " + kind + " selector is on screen");
+        QQuickItem* button = nullptr;
+        if (selector) {
+          std::function<void(QQuickItem*)> visit = [&](QQuickItem* i) {
+            for (auto* c : i->childItems()) {
+              if (c->isVisible() && c->property("text").toString() == QString::fromUtf8("Seleccionar…") && c->metaObject()->indexOfProperty("checkable") >= 0) button = c;
+              visit(c);
+            }
+          };
+          visit(selector);
+        }
+        self->check(button && button->isEnabled(), "the " + kind + " selector button is enabled");
+        if (!button) { self->next_scenario(); return; }
+        const auto before = forge()->npc().value(field).toList();
+        // The selector may be below the fold of the editor's scroll area: scroll it into view like a person would, then click it.
+        for (QQuickItem* p = button->parentItem(); p; p = p->parentItem()) {
+          if (!p->property("contentY").isValid() || !p->property("contentHeight").isValid()) continue;
+          if (p->property("contentHeight").toReal() <= p->height() + 1) continue;  // a nested view that does not scroll
+          auto* content = qvariant_cast<QQuickItem*>(p->property("contentItem"));
+          if (!content) continue;
+          const qreal y = button->mapToItem(content, QPointF(0, 0)).y();
+          p->setProperty("contentY", std::max<qreal>(0, y - 200));
+          break;
+        }
+        self->after(400, [self, forge, kind, field, before, item_named, shot, done, button, wait_for] {
+        if (!button->isVisible() || button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).y() > self->window->height()) {
+          QString chain;
+          for (QQuickItem* p = button->parentItem(); p; p = p->parentItem())
+            if (p->property("contentY").isValid()) chain += QStringLiteral(" %1(contentY=%2 contentHeight=%3 height=%4)").arg(QString::fromLatin1(p->metaObject()->className())).arg(p->property("contentY").toReal()).arg(p->property("contentHeight").toReal()).arg(p->height());
+          self->log(QStringLiteral("selector at scene y=%1, window height %2, flickables:%3").arg(button->mapToScene(QPointF(0, 0)).y()).arg(self->window->height()).arg(chain));
+          self->check(false, "the " + kind + " selector button is on screen after scrolling");
+          self->next_scenario();
+          return;
+        }
+        QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint());
+        wait_for([forge, kind, item_named] {
+          const auto s = forge()->record_search();
+          return s.value("kind").toString() == kind && s.value("state").toString() == QLatin1String("ready") && item_named("recordChoicesList") != nullptr;
+        }, 60000, [self, forge, kind, field, before, item_named, shot, done](bool ok) {
+          const auto count = forge()->record_search().value("count").toInt();
+          self->check(ok && count > 0, QStringLiteral("the %1 picker lists %2 real record(s) of the profile").arg(kind).arg(count));
+          if (!ok || count == 0) { self->next_scenario(); return; }
+          const auto first = forge()->record_choices().first().toMap();
+          // Let the dialog finish its opening transition before looking at it and clicking a row.
+          self->after(800, [self, forge, kind, field, before, item_named, shot, done, first] {
+          auto* list = item_named("recordChoicesList");
+          QQuickItem* delegate = nullptr;
+          if (list) QMetaObject::invokeMethod(list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, delegate), Q_ARG(int, 0));
+          self->check(delegate != nullptr, "the first result is drawn as a clickable row: " + first.value("editorId").toString());
+          shot(kind == QLatin1String("spell") ? "forge-behavior-spell-picker.png" : "forge-behavior-perk-picker.png");
+          if (!delegate) { self->next_scenario(); return; }
+          const auto at = delegate->mapToScene(QPointF(delegate->width() / 2, delegate->height() / 2)).toPoint();
+          self->log(QStringLiteral("clicking the row '%1' at %2,%3 (row %4x%5, enabled=%6)").arg(first.value("editorId").toString()).arg(at.x()).arg(at.y()).arg(delegate->width()).arg(delegate->height()).arg(delegate->isEnabled()));
+          QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, at);
+          self->after(600, [self, forge, field, before, first, kind, done] {
+            const auto after_list = forge()->npc().value(field).toList();
+            const bool added = after_list.size() == before.size() + 1 && after_list.contains(first.value("formKey"));
+            self->check(added, QStringLiteral("choosing %1 added it to the draft's %2 (error: '%3')").arg(first.value("editorId").toString(), field, forge()->last_error()));
+            if (!added) {
+              // Is the defect in the QML path or in the draft? The same edit straight from C++:
+              forge()->setNpcValue(field, QVariantList{first.value("formKey")});
+              self->log(QStringLiteral("  same edit from C++: size=%1 error='%2'").arg(forge()->npc().value(field).toList().size()).arg(forge()->last_error()));
+              self->log(QStringLiteral("  workspace before: %1").arg(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(forge()->workspace())).toJson(QJsonDocument::Compact)).left(600)));
+              forge()->setWorkspaceValue(QStringLiteral("recordLabels"), QVariantMap{{first.value("formKey").toString(), first.value("editorId")}});
+              self->log(QStringLiteral("  setWorkspaceValue(recordLabels) from C++: error='%1'").arg(forge()->last_error()));
+              self->log(QStringLiteral("  npc keys: %1").arg(QStringList(forge()->npc().keys()).join(",")));
+              self->log(QStringLiteral("  %1 as stored: %2").arg(field, QString::fromUtf8(QJsonDocument(QJsonArray::fromVariantList(forge()->npc().value(field).toList())).toJson(QJsonDocument::Compact))));
+            }
+            done();
+          });
+          });
+        });
+        });
+      };
+      steps.push_back([self, pick] { (*pick)(QStringLiteral("spell"), QStringLiteral("spellFormKeys"), [self] { self->step(); }); });
+      steps.push_back([self, pick] { (*pick)(QStringLiteral("perk"), QStringLiteral("perkFormKeys"), [self] { self->step(); }); });
+      steps.push_back([self, forge, search] {
+        search(QStringLiteral("spell"), QStringLiteral("zzz-no-such-spell-ag04"), [self, forge](bool ok, QVariantList found) {
+          self->check(ok && found.isEmpty() && forge()->record_search().value("count").toInt() == 0, "a search without matches is an empty 'ready' result, not an error");
+          self->step();
+        });
+      });
+      // The voice evidence follows the voice: a different voice never shows the previous voice's analysis.
+      steps.push_back([self, forge, search, wait_for, shot] {
+        wait_for([forge] { return forge()->voice_analysis().value("state").toString() == QLatin1String("ready"); }, 60000, [self, forge, search, wait_for, shot](bool ok) {
+          const auto v = forge()->voice_analysis();
+          const auto a = v.value("analysis").toMap();
+          self->check(ok, "the voice analysis of the current voice is ready: " + v.value("reason").toString());
+          self->log(QStringLiteral("voice %1 follower=%2 marriage=%3 listMarriage=%4 runtime=%5").arg(a.value("voiceEditorId").toString(), a.value("followerDialogueClassification").toString(),
+                                                                                                           a.value("marriageDialogueClassification").toString(), a.value("hasStaticMarriageListEvidence").toString(), a.value("runtimeVerificationState").toString()));
+          self->check(a.value("voiceFormKey").toString().compare(forge()->npc().value("voiceFormKey").toString(), Qt::CaseInsensitive) == 0, "the analysis is about the voice of the draft");
+          self->check(a.value("runtimeVerificationState").toString().contains(QLatin1String("REQUIRES_IN_GAME_TEST")), "the evidence says it still needs an in-game test");
+          self->check(!v.value("loadOrderFingerprint").toString().isEmpty(), "the evidence carries the profile fingerprint");
+          search(QStringLiteral("voice"), QStringLiteral("Male"), [self, forge, wait_for, shot](bool ok2, QVariantList voices) {
+            self->check(ok2 && !voices.isEmpty(), "another voice can be searched");
+            const auto old_voice = forge()->npc().value("voiceFormKey").toString();
+            QString other;
+            for (const auto& r : voices) if (r.toMap().value("formKey").toString() != old_voice) { other = r.toMap().value("formKey").toString(); break; }
+            if (other.isEmpty()) { self->skip("forge-behavior: no second voice found"); self->step(); return; }
+            forge()->setNpcValue(QStringLiteral("voiceFormKey"), other);
+            const auto during = forge()->voice_analysis();
+            self->check(during.value("state").toString() != QLatin1String("ready") || during.value("analysis").toMap().value("voiceFormKey").toString().compare(other, Qt::CaseInsensitive) == 0,
+                        "right after changing the voice, the panel does not show the old voice's analysis");
+            wait_for([forge] { return forge()->voice_analysis().value("state").toString() == QLatin1String("ready"); }, 60000, [self, forge, other, shot](bool ok3) {
+              const auto a2 = forge()->voice_analysis().value("analysis").toMap();
+              self->check(ok3 && a2.value("voiceFormKey").toString().compare(other, Qt::CaseInsensitive) == 0, "the analysis followed the new voice (" + a2.value("voiceEditorId").toString() + ")");
+              shot("forge-behavior-voice.png");
+              self->step();
+            });
+          });
+        });
+      });
+      // Validation keeps the playable export blocked and carries the behavior half.
+      steps.push_back([self, forge, wait_for, item_named, shot] {
+        forge()->validateNpc();
+        wait_for([forge] { return !forge()->busy() && !forge()->validation().isEmpty(); }, 120000, [self, forge, item_named, shot](bool ok) {
+          const auto v = forge()->validation();
+          self->check(ok, "the draft was validated: " + forge()->last_error());
+          self->check(!v.value("voiceAnalysis").toMap().isEmpty(), "the validation carries the voice analysis (voiceAnalysis propagated)");
+          self->check(!v.value("exportable").toBool(), "the playable export stays blocked (exportable=false)");
+          bool faceGenLock = false;
+          int errors = 0;
+          for (const auto& i : v.value("issues").toList()) {
+            const auto m = i.toMap();
+            faceGenLock |= m.value("code").toString() == QLatin1String("NativeFaceGenUnavailable");
+            if (m.value("severity").toString() == QLatin1String("error")) {
+              ++errors;
+              self->log(QStringLiteral("  error issue %1: %2 [%3]").arg(m.value("code").toString(), m.value("message").toString().left(140), m.value("subject").toString()));
+            }
+            if (m.value("code").toString() == QLatin1String("SpellDuplicate") || m.value("code").toString() == QLatin1String("PerkDuplicate")) self->check(false, "unexpected duplicate: " + m.value("subject").toString());
+          }
+          self->check(faceGenLock, "NativeFaceGenUnavailable is still reported");
+          self->log(QStringLiteral("validation: technicallyExportable=%1, %2 error issue(s), behaviorError='%3'").arg(v.value("technicallyExportable").toString()).arg(errors).arg(v.value("behaviorError").toString()));
+          self->check(v.value("behaviorError").toString().isEmpty(), "the behavior half of the validation ran");
+          shot("forge-behavior-validation.png");
+          (void)item_named;
+          self->step();
+        });
+      });
+    } else if (name == "profile-switch") {
+      // AG05: profile A -> B -> A inside one session, with a project open. Everything that belongs to the profile (catalog, voice analysis,
+      // preview, record search, fingerprint) is dropped when the switch starts and rebuilt for the new one; a request in flight across the
+      // switch never reaches the draft; going back to A gives A's fingerprint again. Needs an instance with two profiles (SNS_AG05_PROFILE_B).
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(25, *tick);
+        };
+        (*tick)();
+      };
+      auto forge = [self] { return self->studio->forge(); };
+      const QString profile_b = qEnvironmentVariable("SNS_AG05_PROFILE_B");
+      struct Mem {
+        QString key_a, fingerprint_a, fingerprint_b, masters_a, masters_b, voice_fp_a;
+        QVariantMap base;
+        bool base_can_undo = false;
+        qint64 a_to_b_ms = 0, b_to_a_ms = 0;
+      };
+      auto m = std::make_shared<Mem>();
+      auto ready = [self] { return self->studio->phase() == StudioController::Phase::Ready; };
+      auto masters_of = [](const QVariantMap& catalog) {
+        for (const auto& a : catalog.value("archetypes").toList())
+          if (a.toMap().value("id").toString() == QLatin1String("defensive-warrior")) return a.toMap().value("requiredMasters").toStringList().join(",");
+        return QString();
+      };
+      auto search = [self, wait_for](const QString& kind, const QString& text, std::function<void(QVariantList)> next) {
+        self->studio->forge()->searchRecords(kind, text);
+        wait_for([self, kind] {
+          const auto s = self->studio->forge()->record_search();
+          return s.value("kind").toString() == kind && s.value("state").toString() != QLatin1String("loading");
+        }, 60000, [self, next](bool) { next(self->studio->forge()->record_choices()); });
+      };
+      steps.push_back([self, wait_for, forge, search, m, ready, masters_of, profile_b] {
+        if (profile_b.isEmpty() || self->studio->profiles().size() < 2) {
+          self->skip("profile-switch: the instance has no second profile (set SNS_AG05_PROFILE_B)");
+          self->next_scenario();
+          return;
+        }
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        wait_for([forge] { return forge()->catalog_ready(); }, 300000, [self, forge, search, m, masters_of](bool ok) {
+          self->check(ok, "profile A is indexed and the Character Forge is ready");
+          if (!ok) { self->next_scenario(); return; }
+          self->check(forge()->newProject(QStringLiteral("AG05Switch")), "a project is open");
+          m->key_a = forge()->profile_key();
+          search(QStringLiteral("voice"), QStringLiteral("FemaleEvenToned"), [self, forge, m, masters_of](QVariantList voices) {
+            if (!voices.isEmpty()) forge()->setNpcValue(QStringLiteral("voiceFormKey"), voices.first().toMap().value("formKey"));
+            forge()->setNpcValue(QStringLiteral("female"), true);
+            forge()->loadBehaviorCatalog();
+            auto* wf = new std::function<void()>;  // leaked on purpose: lives as long as the scenario
+            *wf = [self, forge, m, masters_of, wf] {
+              if (forge()->behavior_catalog().value("state").toString() != QLatin1String("ready") || forge()->voice_analysis().value("state").toString() != QLatin1String("ready")) { self->after(50, *wf); return; }
+              m->fingerprint_a = forge()->behavior_catalog().value("loadOrderFingerprint").toString();
+              m->masters_a = masters_of(forge()->behavior_catalog());
+              m->voice_fp_a = forge()->voice_analysis().value("loadOrderFingerprint").toString();
+              m->base = forge()->npc();
+              m->base_can_undo = forge()->can_undo();
+              self->log(QStringLiteral("A: key=%1 fingerprint=%2 voiceFingerprint=%3 masters(defensive-warrior)=%4").arg(m->key_a, m->fingerprint_a.left(16), m->voice_fp_a.left(16), m->masters_a));
+              self->check(!m->fingerprint_a.isEmpty() && m->fingerprint_a == m->voice_fp_a, "profile A: catalog and voice evidence carry the same fingerprint");
+              forge()->previewArchetype(QStringLiteral("defensive-warrior"));
+              self->step();
+            };
+            (*wf)();
+          });
+        });
+      });
+      // A -> B: what belonged to A is gone the moment the switch starts.
+      steps.push_back([self, wait_for, forge, m, ready, profile_b] {
+        wait_for([forge] { const auto s = forge()->archetype_preview().value("state").toString(); return s == QLatin1String("ready") || s == QLatin1String("error"); }, 60000, [self, forge, m, ready, profile_b, wait_for](bool) {
+          self->check(forge()->archetype_preview().value("state").toString() == QLatin1String("ready"), "a preview for profile A is on screen before the switch");
+          QElapsedTimer clock;
+          clock.start();
+          self->studio->loadProfile(profile_b);
+          self->check(!forge()->catalog_ready(), "switching: the forge is not 'ready' while the new profile is scanned");
+          self->check(forge()->behavior_catalog().value("state").toString() == QLatin1String("none"), "switching: the behavior catalog of A is dropped");
+          self->check(forge()->archetype_preview().value("state").toString() == QLatin1String("idle"), "switching: A's preview is dropped");
+          self->check(forge()->voice_analysis().value("state").toString() == QLatin1String("none"), "switching: A's voice analysis is dropped");
+          self->check(forge()->record_search().value("state").toString() == QLatin1String("idle"), "switching: A's record search is dropped");
+          self->check(forge()->npc() == m->base, "switching: the draft is untouched");
+          wait_for(ready, 600000, [self, forge, m, clock, wait_for](bool ok) {
+            m->a_to_b_ms = clock.elapsed();
+            self->check(ok, QStringLiteral("profile B is indexed (%1 ms)").arg(m->a_to_b_ms));
+            if (!ok) { self->next_scenario(); return; }
+            self->check(forge()->catalog_ready() && forge()->profile_key() != m->key_a, "B has its own profile key: " + forge()->profile_key());
+            forge()->loadBehaviorCatalog();
+            wait_for([forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready") && forge()->voice_analysis().value("state").toString() == QLatin1String("ready"); }, 120000, [self, forge, m](bool ok2) {
+              self->check(ok2, "B: catalog and voice evidence loaded");
+              m->fingerprint_b = forge()->behavior_catalog().value("loadOrderFingerprint").toString();
+              self->log(QStringLiteral("B: fingerprint=%1 voiceFingerprint=%2").arg(m->fingerprint_b.left(16), forge()->voice_analysis().value("loadOrderFingerprint").toString().left(16)));
+              self->check(!m->fingerprint_b.isEmpty() && m->fingerprint_b != m->fingerprint_a, "B's fingerprint differs from A's");
+              self->check(forge()->voice_analysis().value("loadOrderFingerprint").toString() == m->fingerprint_b, "B's voice evidence is B's, not A's");
+              self->check(forge()->npc() == m->base && forge()->can_undo() == m->base_can_undo, "the draft survived the switch to B");
+              self->step();
+            });
+          });
+        });
+      });
+      // A request in flight across a switch: dropped, nothing reaches the draft.
+      steps.push_back([self, wait_for, forge, m, ready] {
+        forge()->applyArchetype(QStringLiteral("defensive-warrior"));
+        self->studio->loadProfile(qEnvironmentVariable("SNS_AG05_PROFILE_A"));
+        self->check(forge()->archetype_preview().value("state").toString() == QLatin1String("idle"), "a request in flight is dropped by the switch back to A");
+        QElapsedTimer clock;
+        clock.start();
+        wait_for(ready, 600000, [self, forge, m, clock, wait_for](bool ok) {
+          m->b_to_a_ms = clock.elapsed();
+          self->check(ok, QStringLiteral("profile A is indexed again (%1 ms)").arg(m->b_to_a_ms));
+          self->check(forge()->npc() == m->base && forge()->can_undo() == m->base_can_undo, "nothing of the request in flight reached the draft");
+          self->check(forge()->profile_key() == m->key_a, "back on A's profile key");
+          forge()->loadBehaviorCatalog();
+          wait_for([forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready") && forge()->voice_analysis().value("state").toString() == QLatin1String("ready"); }, 120000, [self, forge, m](bool ok2) {
+            self->check(ok2, "A again: catalog and voice evidence loaded");
+            self->check(forge()->behavior_catalog().value("loadOrderFingerprint").toString() == m->fingerprint_a, "A's fingerprint is the same as the first time (deterministic)");
+            self->check(forge()->voice_analysis().value("loadOrderFingerprint").toString() == m->fingerprint_a, "A's voice evidence is A's again");
+            self->log(QStringLiteral("switch times: A->B %1 ms, B->A %2 ms").arg(m->a_to_b_ms).arg(m->b_to_a_ms));
+            QJsonObject out{{"aToBMs", static_cast<double>(m->a_to_b_ms)}, {"bToAMs", static_cast<double>(m->b_to_a_ms)}, {"fingerprintA", m->fingerprint_a.left(16)}, {"fingerprintB", m->fingerprint_b.left(16)}};
+            QFile f(QDir(self->work_dir).filePath("profile-switch.json"));
+            if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(out).toJson());
+            self->step();
+          });
+        });
+      });
+    } else if (name == "worker-recovery") {
+      // AG05: the worker dies in the middle of a request (killed from outside, like a crash) and is started again: the request ends as a
+      // visible error, the draft does not change, the studio comes back by itself after a reindex and the controls work again.
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(25, *tick);
+        };
+        (*tick)();
+      };
+      auto forge = [self] { return self->studio->forge(); };
+      auto base = std::make_shared<QVariantMap>();
+      auto base_can_undo = std::make_shared<bool>(false);
+      auto search = [self, wait_for](const QString& kind, const QString& text, std::function<void(QVariantList)> next) {
+        self->studio->forge()->searchRecords(kind, text);
+        wait_for([self, kind] {
+          const auto s = self->studio->forge()->record_search();
+          return s.value("kind").toString() == kind && s.value("state").toString() != QLatin1String("loading");
+        }, 60000, [self, next](bool) { next(self->studio->forge()->record_choices()); });
+      };
+      steps.push_back([self, wait_for, forge, search, base, base_can_undo] {
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        wait_for([forge] { return forge()->catalog_ready(); }, 300000, [self, forge, search, base, base_can_undo](bool ok) {
+          if (!ok) { self->skip("worker-recovery: no indexed profile"); self->next_scenario(); return; }
+          self->check(forge()->newProject(QStringLiteral("AG05Recovery")), "a project is open");
+          search(QStringLiteral("voice"), QStringLiteral("FemaleEvenToned"), [self, forge, base, base_can_undo](QVariantList voices) {
+            if (!voices.isEmpty()) forge()->setNpcValue(QStringLiteral("voiceFormKey"), voices.first().toMap().value("formKey"));
+            forge()->setNpcValue(QStringLiteral("female"), true);
+            *base = forge()->npc();
+            *base_can_undo = forge()->can_undo();
+            self->step();
+          });
+        });
+      });
+      // The kill, in the middle of a request.
+      steps.push_back([self, wait_for, forge, base, base_can_undo] {
+        forge()->loadBehaviorCatalog();  // the slow request: it is in flight when the worker dies
+        self->after(150, [self, wait_for, forge, base, base_can_undo] {
+          self->check(forge()->behavior_catalog().value("state").toString() == QLatin1String("loading"), "a catalog request is in flight");
+          self->check(kill_child_worker(), "the studio's own worker process was killed");
+          wait_for([forge] { const auto s = forge()->behavior_catalog().value("state").toString(); return s == QLatin1String("error") || s == QLatin1String("none"); }, 60000, [self, forge, base, base_can_undo](bool ok) {
+            self->log("after the kill: catalog state=" + forge()->behavior_catalog().value("state").toString() + " reason=" + forge()->behavior_catalog().value("reason").toString() + ", worker: " + self->studio->worker()->statusText());
+            self->check(ok, "the request that was in flight ended (it did not hang)");
+            self->check(forge()->npc() == *base && forge()->can_undo() == *base_can_undo && !forge()->behavior_busy(), "the draft is untouched and the viewmodel is not stuck");
+            self->check(!forge()->catalog_ready(), "the forge says the profile is not ready while the worker is gone");
+            self->check(self->studio->worker()->state() != WorkerClient::State::Ready, "the studio knows the worker is gone: " + self->studio->worker()->statusText());
+            self->step();
+          });
+        });
+      });
+      // The controls say why they cannot act, and do not crash, while the worker is gone.
+      steps.push_back([self, forge, base] {
+        forge()->previewArchetype(QStringLiteral("defensive-warrior"));
+        const auto p = forge()->archetype_preview();
+        self->check(p.value("state").toString() == QLatin1String("error") && !p.value("message").toString().isEmpty(), "Vista previa without a worker is a visible error: " + p.value("message").toString());
+        self->check(p.value("message").toString().contains(QLatin1String("worker"), Qt::CaseInsensitive) && !forge()->worker_message().isEmpty(),
+                    "and the error names the worker, not a generic 'index the profile': " + forge()->worker_message());
+        self->check(forge()->npc() == *base, "and changes nothing");
+        self->step();
+      });
+      // Restart: reindex brings the worker back and the profile with it.
+      steps.push_back([self, wait_for, forge, base, base_can_undo] {
+        QElapsedTimer clock;
+        clock.start();
+        self->studio->reindex();
+        wait_for([self] { return self->studio->phase() == StudioController::Phase::Ready; }, 600000, [self, wait_for, forge, base, base_can_undo, clock](bool ok) {
+          self->check(ok, QStringLiteral("the studio started a new worker and indexed the profile again (%1 ms)").arg(clock.elapsed()));
+          self->check(self->studio->worker()->state() == WorkerClient::State::Ready, "the worker is Ready again");
+          self->check(forge()->catalog_ready(), "the forge is ready again");
+          self->check(forge()->npc() == *base, "the draft survived the crash and the restart");
+          forge()->loadBehaviorCatalog();
+          wait_for([forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready"); }, 120000, [self, forge, base, base_can_undo, wait_for](bool ok2) {
+            self->check(ok2, "the catalog loads again");
+            forge()->previewArchetype(QStringLiteral("defensive-warrior"));
+            wait_for([forge] { const auto s = forge()->archetype_preview().value("state").toString(); return s == QLatin1String("ready") || s == QLatin1String("error"); }, 60000, [self, forge, base, base_can_undo, wait_for](bool ok3) {
+              self->check(ok3 && forge()->archetype_preview().value("state").toString() == QLatin1String("ready"), "Vista previa works again");
+              forge()->applyArchetype(QStringLiteral("defensive-warrior"));
+              wait_for([forge] { return forge()->archetype_preview().value("state").toString() == QLatin1String("applied"); }, 60000, [self, forge, base](bool ok4) {
+                self->check(ok4, "Aplicar works again");
+                forge()->undo();
+                self->check(forge()->npc() == *base, "and Deshacer restores the exact draft");
+                self->step();
+              });
+            });
+          });
+        });
+      });
+      // A clean stop and start of the worker (what a reinicio of the worker does) and the application restart: the project survives on disk.
+      steps.push_back([self, wait_for, forge, base] {
+        const auto folder = QDir(self->work_dir).filePath(QStringLiteral("restart-project"));
+        QDir(folder).removeRecursively();
+        const bool saved = forge()->saveProject(folder);
+        self->check(saved, "the project was saved before the clean restart: " + forge()->last_error());
+        const auto path = forge()->project_path();
+        QFile out(QDir(self->work_dir).filePath("restart-project.path"));
+        if (out.open(QIODevice::WriteOnly)) out.write(path.toUtf8());
+        QFile json(QDir(self->work_dir).filePath("restart-project.npc.json"));
+        if (json.open(QIODevice::WriteOnly)) json.write(QJsonDocument(QJsonObject::fromVariantMap(*base)).toJson(QJsonDocument::Compact));
+        self->studio->worker()->stop();
+        self->check(self->studio->worker()->state() == WorkerClient::State::Stopped, "the worker was stopped cleanly");
+        QElapsedTimer clock;
+        clock.start();
+        self->studio->reindex();
+        wait_for([self] { return self->studio->phase() == StudioController::Phase::Ready; }, 600000, [self, forge, base, clock](bool ok) {
+          self->check(ok && self->studio->worker()->state() == WorkerClient::State::Ready, QStringLiteral("a clean restart of the worker brings the studio back (%1 ms)").arg(clock.elapsed()));
+          self->check(forge()->npc() == *base && !forge()->dirty(), "the saved project is as it was");
+          self->step();
+        });
+      });
+    } else if (name == "forge-reopen") {
+      // AG05: after the application was closed and started again: the project saved by worker-recovery opens with the same draft.
+      auto forge = [self] { return self->studio->forge(); };
+      const auto from = qEnvironmentVariable("SNS_AG05_REOPEN_DIR");
+      steps.push_back([self, forge, from] {
+        QFile path(QDir(from).filePath("restart-project.path")), json(QDir(from).filePath("restart-project.npc.json"));
+        if (!path.open(QIODevice::ReadOnly) || !json.open(QIODevice::ReadOnly)) { self->skip("forge-reopen: SNS_AG05_REOPEN_DIR has no project saved by worker-recovery"); self->next_scenario(); return; }
+        const auto expected = QJsonDocument::fromJson(json.readAll()).object().toVariantMap();
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        const bool opened = forge()->openProject(QString::fromUtf8(path.readAll()));
+        self->check(opened, "the project saved in the previous session opens: " + forge()->last_error());
+        self->check(forge()->npc() == expected, "and its draft is exactly the one that was saved");
+        self->step();
+      });
+    } else if (name == "forge-behavior-edge") {
+      // AG04 T04 / T09 / T10 / T13 / T22 on the real window and profile: an unknown archetype, a profile that changes while a request is in
+      // flight, a cancelled request, an oversized list, and the .sncf round trip of spells and perks. Nothing may mutate the draft by accident.
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(20, *tick);
+        };
+        (*tick)();
+      };
+      auto forge = [self] { return self->studio->forge(); };
+      auto search = [self, wait_for](const QString& kind, const QString& text, std::function<void(QVariantList)> next) {
+        self->studio->forge()->searchRecords(kind, text);
+        wait_for([self, kind] {
+          const auto s = self->studio->forge()->record_search();
+          return s.value("kind").toString() == kind && s.value("state").toString() != QLatin1String("loading");
+        }, 60000, [self, next](bool) { next(self->studio->forge()->record_choices()); });
+      };
+      auto settled = [forge] {
+        const auto s = forge()->archetype_preview().value("state").toString();
+        return s != QLatin1String("loading") && s != QLatin1String("idle");
+      };
+      auto base = std::make_shared<QVariantMap>();
+      static bool edge_base_can_undo = false;
+      steps.push_back([self, wait_for, forge, search, base] {
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        wait_for([forge] { return forge()->catalog_ready(); }, 300000, [self, forge, search, base](bool ok) {
+          if (!ok) { self->skip("forge-behavior-edge: no indexed profile"); self->next_scenario(); return; }
+          self->check(forge()->newProject(QStringLiteral("AG04Edge")), "a Character Forge project was created");
+          search(QStringLiteral("race"), QStringLiteral("NordRace"), [self, forge, search, base](QVariantList races) {
+            if (!races.isEmpty()) forge()->setNpcValue(QStringLiteral("raceFormKey"), races.first().toMap().value("formKey"));
+            search(QStringLiteral("voice"), QStringLiteral("FemaleEvenToned"), [self, forge, base](QVariantList voices) {
+              if (!voices.isEmpty()) forge()->setNpcValue(QStringLiteral("voiceFormKey"), voices.first().toMap().value("formKey"));
+              forge()->setNpcValue(QStringLiteral("female"), true);
+              *base = forge()->npc();
+              edge_base_can_undo = forge()->can_undo();  // the setup edits above are undo steps already: later checks compare against this
+              self->step();
+            });
+          });
+        });
+      });
+      // T10: an archetype that does not exist is a visible error and changes nothing.
+      steps.push_back([self, forge, wait_for, settled, base] {
+        forge()->applyArchetype(QStringLiteral("no-such-archetype"));
+        wait_for(settled, 30000, [self, forge, base](bool ok) {
+          const auto p = forge()->archetype_preview();
+          self->log("unknown archetype: state=" + p.value("state").toString() + " " + p.value("message").toString());
+          self->check(ok && p.value("state").toString() == QLatin1String("error") && !p.value("message").toString().isEmpty(), "an unknown archetype is a visible error");
+          self->check(forge()->npc() == *base && forge()->can_undo() == edge_base_can_undo, "and the draft was not touched");
+          self->step();
+        });
+      });
+      // T04: the profile changes while the answer is on its way: the answer is dropped, nothing is applied.
+      steps.push_back([self, forge, wait_for, base] {
+        const auto key = forge()->profile_key();
+        self->check(!key.isEmpty(), "the studio knows the indexed profile's key: " + key);
+        forge()->applyArchetype(QStringLiteral("defensive-warrior"));
+        forge()->set_profile_key(QStringLiteral("another-profile"));  // what a re-index of a different profile does to the viewmodel
+        self->check(forge()->archetype_preview().value("state").toString() == QLatin1String("idle"), "the preview was discarded together with the profile");
+        self->after(4000, [self, forge, base, key] {
+          self->check(forge()->npc() == *base && forge()->can_undo() == edge_base_can_undo, "the late answer was not applied to the draft");
+          self->check(!forge()->behavior_busy(), "the viewmodel is not stuck waiting");
+          forge()->set_profile_key(key);
+          self->step();
+        });
+      });
+      // T22: cancelling a request in flight leaves the draft alone and the controls usable.
+      steps.push_back([self, forge, wait_for, settled, base] {
+        forge()->loadBehaviorCatalog();
+        wait_for([forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready"); }, 60000, [self, forge, wait_for, settled, base](bool ok) {
+          self->check(ok, "the catalog loads again after the profile key came back");
+          forge()->applyArchetype(QStringLiteral("defensive-warrior"));
+          forge()->cancelOperation();
+          self->after(3000, [self, forge, wait_for, settled, base] {
+            const auto p = forge()->archetype_preview();
+            self->log("after cancel: state=" + p.value("state").toString());
+            self->check(p.value("state").toString() == QLatin1String("cancelled"), "a cancelled request says so");
+            self->check(forge()->npc() == *base && forge()->can_undo() == edge_base_can_undo && !forge()->behavior_busy(), "and changed nothing");
+            forge()->previewArchetype(QStringLiteral("defensive-warrior"));
+            wait_for(settled, 60000, [self, forge](bool ok2) {
+              self->check(ok2 && forge()->archetype_preview().value("state").toString() == QLatin1String("ready"), "a new request works right after a cancelled one");
+              self->step();
+            });
+          });
+        });
+      });
+      // T22: a request that does not answer in time ends as a visible error; the draft is untouched and the next request works.
+      steps.push_back([self, forge, wait_for, settled, base] {
+        (void)settled;
+        // The catalog is the one request slow enough to time out: the client polls its deadline every 50 ms, so a faster answer always wins.
+        forge()->set_behavior_timeout(std::chrono::milliseconds(1));
+        forge()->set_catalog_ready(false);  // forgets the catalog loaded earlier
+        forge()->set_catalog_ready(true);
+        forge()->loadBehaviorCatalog();
+        wait_for([forge] { return forge()->behavior_catalog().value("state").toString() != QLatin1String("loading"); }, 30000, [self, forge, wait_for, settled, base](bool ok) {
+          const auto c = forge()->behavior_catalog();
+          self->log("timeout: catalog state=" + c.value("state").toString() + " code=" + c.value("code").toString() + " " + c.value("reason").toString());
+          self->check(ok && c.value("state").toString() == QLatin1String("error") && !c.value("reason").toString().isEmpty(), "a request that times out is a visible error");
+          self->check(forge()->npc() == *base && forge()->can_undo() == edge_base_can_undo && !forge()->behavior_busy(), "the draft is untouched and the viewmodel is not stuck");
+          forge()->set_behavior_timeout(std::chrono::seconds(60));
+          forge()->loadBehaviorCatalog();  // an error state may be retried
+          wait_for([forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready"); }, 60000, [self, forge](bool ok2) {
+            self->check(ok2, "the catalog loads once the timeout is back to normal");
+            self->step();
+          });
+        });
+      });
+      // Oversized list: refused by the draft, not stored, and said.
+      steps.push_back([self, forge, base] {
+        QVariantList many;
+        for (int i = 0; i < 65; ++i) many << QStringLiteral("%1:Skyrim.esm").arg(0x100 + i, 6, 16, QLatin1Char('0')).toUpper();
+        forge()->setNpcValue(QStringLiteral("spellFormKeys"), many);
+        self->check(forge()->npc().value("spellFormKeys").toList().size() <= 64 && !forge()->last_error().isEmpty(), "a list over the 64 entry limit is refused with a reason: " + forge()->last_error());
+        self->check(forge()->npc() == *base, "and the draft is as it was");
+        self->step();
+      });
+      // T13: spells and perks survive a save and a reload of the .sncf project.
+      steps.push_back([self, forge, search] {
+        search(QStringLiteral("spell"), QStringLiteral("Firebolt"), [self, forge, search](QVariantList spells) {
+          self->check(!spells.isEmpty(), "the real Firebolt is found");
+          search(QStringLiteral("perk"), QStringLiteral("Overdraw"), [self, forge, spells](QVariantList perks) {
+            self->check(!perks.isEmpty(), "the real Overdraw perk is found");
+            if (spells.isEmpty() || perks.isEmpty()) { self->next_scenario(); return; }
+            QVariantList spell_keys{spells.first().toMap().value("formKey")}, perk_keys{perks.first().toMap().value("formKey")};
+            forge()->setNpcValue(QStringLiteral("spellFormKeys"), spell_keys);
+            forge()->setNpcValue(QStringLiteral("perkFormKeys"), perk_keys);
+            self->check(forge()->npc().value("spellFormKeys").toList() == spell_keys && forge()->npc().value("perkFormKeys").toList() == perk_keys, "the draft holds the chosen spell and perk");
+            const auto saved = forge()->npc();
+            const auto folder = QDir(self->work_dir).filePath(QStringLiteral("edge-project"));
+            QDir(folder).removeRecursively();
+            const bool saved_ok = forge()->saveProject(folder);
+            self->check(saved_ok, "the project was saved: " + forge()->last_error());
+            self->check(!forge()->dirty(), "the saved project is not dirty");
+            const auto saved_path = forge()->project_path();  // the studio gives the folder its .sncf name
+            self->log("saved as " + saved_path);
+            self->check(forge()->newProject(QStringLiteral("AG04EdgeOther")), "another project replaces it");
+            // A new project is unsaved work: the studio refuses to open another over it, so it is saved too (to its own folder).
+            const auto other_folder = QDir(self->work_dir).filePath(QStringLiteral("edge-project-other"));
+            QDir(other_folder).removeRecursively();
+            const bool other_saved = forge()->saveProject(other_folder);
+            self->check(other_saved, "the other project is saved too: " + forge()->last_error());
+            self->check(forge()->npc().value("spellFormKeys").toList().isEmpty(), "the other project has no spells");
+            const bool opened = forge()->openProject(saved_path);
+            self->check(opened, "the saved project reopens: " + forge()->last_error());
+            self->check(forge()->npc() == saved, "the reloaded draft is identical, spells and perks included");
+            self->check(forge()->npc().value("spellFormKeys").toList() == spell_keys && forge()->npc().value("perkFormKeys").toList() == perk_keys, "the spell and the perk survived the .sncf round trip");
+            // T22: a damaged project file is refused with a reason; the studio keeps the draft it had and stays usable.
+            const auto damaged = QDir(self->work_dir).filePath(QStringLiteral("edge-project-damaged.sncf"));
+            QDir(damaged).removeRecursively();
+            QDir().mkpath(QFileInfo(damaged).absolutePath());
+            bool copied = true;
+            std::function<void(const QString&, const QString&)> copy_tree = [&](const QString& from, const QString& to) {
+              QDir().mkpath(to);
+              for (const auto& e : QDir(from).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {
+                if (e.isDir()) copy_tree(e.absoluteFilePath(), QDir(to).filePath(e.fileName()));
+                else copied &= QFile::copy(e.absoluteFilePath(), QDir(to).filePath(e.fileName()));
+              }
+            };
+            copy_tree(saved_path, damaged);
+            int broken = 0;
+            for (const auto& e : QDir(damaged).entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
+              QFile f(e.absoluteFilePath());
+              if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { f.write("{ this is not json"); ++broken; }
+            }
+            self->check(copied && broken > 0, QStringLiteral("a damaged copy of the project was prepared (%1 file(s) broken)").arg(broken));
+            const auto before_open = forge()->npc();
+            const bool refused = !forge()->openProject(damaged);
+            const auto why = forge()->last_error();
+            self->check(refused && !why.isEmpty(), "a damaged project is refused with a reason: " + why);
+            self->check(forge()->npc() == before_open, "and the studio keeps the draft it had");
+            forge()->previewArchetype(QStringLiteral("defensive-warrior"));
+            self->after(1500, [self, forge] {
+              const auto st = forge()->archetype_preview().value("state").toString();
+              self->check(st == QLatin1String("ready") || st == QLatin1String("loading"), "the controls still answer after the refusal (" + st + ")");
+              self->step();
+            });
+          });
+        });
+      });
+    } else if (name == "forge-behavior-perf") {
+      // AG04 F5: timings of the behavior endpoints on the REAL indexed profile, measured from the call to the settled state the UI shows.
+      // One warm-up round per metric (reported apart), then 10 measured rounds; median and p95 of the 10, plus the process memory. Not in "all".
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(10, *tick);
+        };
+        (*tick)();
+      };
+      auto forge = [self] { return self->studio->forge(); };
+      struct Perf {
+        QMap<QString, QList<double>> samples;
+        QMap<QString, double> warmup;
+        qint64 memory_before = 0;
+      };
+      auto perf = std::make_shared<Perf>();
+      // One metric: `begin` starts the operation, `settled` says it is over, `reset` brings the app back (not timed).
+      auto metric = std::make_shared<std::function<void(const QString&, std::function<void()>, std::function<bool()>, std::function<void()>, std::function<void()>)>>();
+      *metric = [self, wait_for, perf](const QString& label, std::function<void()> begin, std::function<bool()> settled, std::function<void()> reset, std::function<void()> next) {
+        auto round = std::make_shared<int>(0);
+        auto loop = std::make_shared<std::function<void()>>();
+        *loop = [self, wait_for, perf, label, begin, settled, reset, next, round, loop] {
+          auto clock = std::make_shared<QElapsedTimer>();
+          clock->start();
+          begin();
+          wait_for(settled, 60000, [self, perf, label, reset, next, round, loop, clock](bool ok) {
+            const double ms = static_cast<double>(clock->nsecsElapsed()) / 1e6;
+            self->check(ok, QStringLiteral("%1 round %2 settled").arg(label).arg(*round));
+            if (*round == 0) perf->warmup[label] = ms; else perf->samples[label].append(ms);
+            reset();
+            if (++*round > 10) { next(); return; }
+            self->after(30, *loop);
+          });
+        };
+        (*loop)();
+      };
+      steps.push_back([self, wait_for, forge, perf] {
+        auto* tabs = self->window->findChild<QObject*>(QStringLiteral("workspaceTabs"));
+        if (tabs) tabs->setProperty("currentIndex", 2);
+        wait_for([forge] { return forge()->catalog_ready(); }, 300000, [self, forge, perf](bool ok) {
+          if (!ok) { self->skip("forge-behavior-perf: no indexed profile"); self->next_scenario(); return; }
+          self->check(forge()->newProject(QStringLiteral("AG04Perf")), "a Character Forge project was created");
+          perf->memory_before = process_memory_mb();
+          self->step();
+        });
+      });
+      steps.push_back([self, forge] {
+        // A voice from the real profile, found the way the UI finds it.
+        forge()->searchRecords(QStringLiteral("voice"), QStringLiteral("FemaleEvenToned"));
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, forge, tick] {
+          if (forge()->record_search().value("state").toString() == QLatin1String("loading")) { self->after(20, *tick); return; }
+          const auto voices = forge()->record_choices();
+          self->check(!voices.isEmpty(), "the voice picker finds FemaleEvenToned");
+          if (!voices.isEmpty()) forge()->setNpcValue(QStringLiteral("voiceFormKey"), voices.first().toMap().value("formKey"));
+          forge()->setNpcValue(QStringLiteral("female"), true);
+          self->step();
+        };
+        (*tick)();
+      });
+      steps.push_back([self, forge, metric] {
+        (*metric)(QStringLiteral("catalog"),
+                  [forge] { forge()->set_catalog_ready(false); forge()->set_catalog_ready(true); forge()->loadBehaviorCatalog(); },
+                  [forge] { return forge()->behavior_catalog().value("state").toString() == QLatin1String("ready"); },
+                  [] {}, [self] { self->step(); });
+      });
+      steps.push_back([self, forge, metric] {
+        (*metric)(QStringLiteral("analyzeVoice"),
+                  [forge] { forge()->refreshVoiceAnalysis(); },
+                  [forge] { return forge()->voice_analysis().value("state").toString() == QLatin1String("ready"); },
+                  [] {}, [self] { self->step(); });
+      });
+      steps.push_back([self, forge, metric] {
+        (*metric)(QStringLiteral("preview"),
+                  [forge] { forge()->previewArchetype(QStringLiteral("defensive-warrior")); },
+                  [forge] { const auto s = forge()->archetype_preview().value("state").toString(); return s != QLatin1String("loading") && s != QLatin1String("idle"); },
+                  [forge] { forge()->discardArchetypePreview(); }, [self] { self->step(); });
+      });
+      steps.push_back([self, forge, metric] {
+        (*metric)(QStringLiteral("apply"),
+                  [forge] { forge()->applyArchetype(QStringLiteral("defensive-warrior")); },
+                  [forge] { const auto s = forge()->archetype_preview().value("state").toString(); return s == QLatin1String("applied") || s == QLatin1String("error") || s == QLatin1String("conflict"); },
+                  [forge] { forge()->undo(); }, [self] { self->step(); });
+      });
+      steps.push_back([self, forge, perf] {
+        QJsonObject report;
+        const auto percentile = [](QList<double> v, double p) {
+          if (v.isEmpty()) return 0.0;
+          std::sort(v.begin(), v.end());
+          return v[std::min<qsizetype>(v.size() - 1, static_cast<qsizetype>(std::ceil(p * static_cast<double>(v.size()))) - 1)];
+        };
+        for (auto it = perf->samples.begin(); it != perf->samples.end(); ++it) {
+          QJsonArray raw;
+          for (double ms : it.value()) raw.append(ms);
+          const double median = percentile(it.value(), 0.5), p95 = percentile(it.value(), 0.95);
+          report[it.key()] = QJsonObject{{"samplesMs", raw}, {"warmupMs", perf->warmup.value(it.key())}, {"medianMs", median}, {"p95Ms", p95}, {"n", it.value().size()}};
+          self->log(QStringLiteral("PERF %1: warm-up %2 ms, median %3 ms, p95 %4 ms (n=%5)").arg(it.key()).arg(perf->warmup.value(it.key()), 0, 'f', 1).arg(median, 0, 'f', 1).arg(p95, 0, 'f', 1).arg(it.value().size()));
+        }
+        report["memoryBeforeMb"] = static_cast<double>(perf->memory_before);
+        report["memoryAfterMb"] = static_cast<double>(process_memory_mb());
+        self->log(QStringLiteral("PERF memory: %1 MB before, %2 MB after").arg(perf->memory_before).arg(process_memory_mb()));
+        QFile out(QDir(self->work_dir).filePath("forge-behavior-perf.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(report).toJson());
+        self->check(perf->samples.size() == 4, "the four metrics were measured");
+        (void)forge;
+        self->step();
       });
     } else if (name == "quit-during-build") {
       steps.push_back([self, hair] {

@@ -16,7 +16,7 @@ ColumnLayout {
     }
     // Double click or Enter on an NPC: the host opens the editor.
     signal editRequested(string formKey)
-    spacing: 6
+    spacing: 0
 
     function search() {
         studio.searchNpcs(searchField.text, sexBox.currentValue, kindBox.currentValue, pluginField.text)
@@ -29,6 +29,8 @@ ColumnLayout {
         // (a view just shown reports atYEnd before its first layout), so it waits for its layout.
         if (view.count === 0 || (view.contentHeight > 0 && view.atYEnd)) root.studio.loadMoreNpcs()
     }
+    // Used by the empty viewer ("Buscar NPC") and the command palette.
+    function focusSearch() { searchField.forceActiveFocus(); searchField.selectAll() }
     function isSelected(formKey) {
         return root.studio.npc.summary !== undefined && root.studio.npc.summary.formKey === formKey
     }
@@ -62,24 +64,112 @@ ColumnLayout {
         function onNpcResultsChanged() { Qt.callLater(root.loadMoreIfAtEnd) }
     }
 
+    // Search header: always on screen. The filters fold away; how many are active and a way to clear them stay.
+    property bool filtersOpen: false
+    readonly property int activeFilters: (sexBox.currentIndex > 0 ? 1 : 0) + (kindBox.currentIndex > 0 ? 1 : 0)
+                                         + (pluginField.text.length > 0 ? 1 : 0) + (appearanceBox.currentIndex > 0 ? 1 : 0)
+    function clearFilters() {
+        sexBox.currentIndex = 0
+        kindBox.currentIndex = 0
+        pluginField.text = ""
+        if (appearanceBox.currentIndex !== 0) {
+            appearanceBox.currentIndex = 0
+            root.studio.setAppearanceFilter("")
+        }
+        root.search()
+    }
+    // Ctrl+C on a list row or a card: the FormKey goes to the clipboard (the stable identity of the NPC), through
+    // the same StudioController.copyToClipboard the catalog context menus use.
+    function copyFormKey(formKey) {
+        if (!formKey) return
+        root.studio.copyToClipboard(formKey)
+        copiedNote.text = qsTr("FormKey copiado: %1").arg(formKey)
+        copiedTimer.restart()
+    }
+    Timer { id: copiedTimer; interval: 2500; onTriggered: copiedNote.text = "" }
+
     ColumnLayout {
         Layout.fillWidth: true
-        Layout.margins: 6
-        spacing: 4
+        Layout.margins: Theme.spacingMd
+        spacing: Theme.spacingSm
         TextField {
             id: searchField
+            objectName: "npcSearchField"
             Layout.fillWidth: true
-            placeholderText: qsTr("Nombre, EditorID, FormKey (0A2C8E:Skyrim.esm) o FormID (000A2C8E)")
+            leftPadding: Theme.sp(30)
+            rightPadding: clearSearch.visible ? clearSearch.width + Theme.sp(4) : Theme.sp(8)
+            placeholderText: qsTr("Buscar NPC: nombre, EditorID, FormKey o FormID")
+            Accessible.name: qsTr("Buscar NPC")
+            ToolTip.visible: hovered && text.length === 0
+            ToolTip.delay: 800
+            ToolTip.text: qsTr("Nombre, EditorID, FormKey (0A2C8E:Skyrim.esm) o FormID (000A2C8E). Flecha abajo: ir a los resultados.")
             enabled: root.studio.phase === StudioController.Ready
             onTextChanged: debounce.restart()
+            Keys.onDownPressed: (root.viewMode === "gallery" ? grid : list).forceActiveFocus()
+            Icon {
+                name: "search"
+                size: Theme.small + 1
+                color: Theme.textMuted
+                anchors.left: parent.left
+                anchors.leftMargin: Theme.sp(10)
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            IconToolButton {
+                id: clearSearch
+                visible: searchField.text.length > 0
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                implicitHeight: searchField.height - 4
+                glyph: "close"
+                label: qsTr("Borrar la búsqueda")
+                showLabel: false
+                onClicked: searchField.clear()
+            }
         }
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.spacingSm
+            SegmentedControl {
+                objectName: "npcViewSwitch"
+                model: [{ label: qsTr("Lista"), glyph: "list" }, { label: qsTr("Galería"), glyph: "grid" }]
+                currentIndex: root.viewMode === "gallery" ? 1 : 0
+                compact: root.width < Theme.px(260)
+                onActivated: index => root.setViewMode(index === 1 ? "gallery" : "list")
+            }
+            Item { Layout.fillWidth: true }
+            IconToolButton {
+                objectName: "npcFiltersButton"
+                glyph: "filter"
+                label: root.activeFilters > 0 ? qsTr("Filtros (%1)").arg(root.activeFilters) : qsTr("Filtros")
+                showLabel: root.width >= Theme.px(240)
+                checkable: true
+                checked: root.filtersOpen
+                tone: root.activeFilters > 0 ? Theme.accent : Theme.text
+                tip: root.filtersOpen ? qsTr("Ocultar los filtros") : qsTr("Sexo, tipo, plugin y apariencia")
+                onClicked: root.filtersOpen = !root.filtersOpen
+            }
+            IconToolButton {
+                objectName: "npcClearFiltersButton"
+                visible: root.activeFilters > 0
+                glyph: "clear"
+                label: qsTr("Limpiar filtros")
+                showLabel: false
+                onClicked: root.clearFilters()
+            }
+        }
+        GridLayout {
+            objectName: "npcFilters"
+            visible: root.filtersOpen
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: Theme.spacingSm
+            rowSpacing: Theme.spacingSm
             ComboBox {
                 id: sexBox
                 Layout.fillWidth: true
                 textRole: "text"
                 valueRole: "value"
+                Accessible.name: qsTr("Filtro de sexo")
                 model: [{ text: qsTr("Sexo: todos"), value: "" }, { text: qsTr("Mujeres"), value: "female" }, { text: qsTr("Hombres"), value: "male" }]
                 onActivated: root.search()
             }
@@ -88,55 +178,46 @@ ColumnLayout {
                 Layout.fillWidth: true
                 textRole: "text"
                 valueRole: "value"
+                Accessible.name: qsTr("Filtro de tipo de NPC")
                 model: [{ text: qsTr("Tipo: todos"), value: "" }, { text: qsTr("Únicos"), value: "unique" },
                         { text: qsTr("Genéricos"), value: "generic" }, { text: qsTr("Con plantilla"), value: "templated" },
                         { text: qsTr("Presets de creación"), value: "preset" }]
                 onActivated: root.search()
             }
-        }
-        TextField {
-            id: pluginField
-            Layout.fillWidth: true
-            placeholderText: qsTr("Plugin que define o modifica (p. ej. Helen_Lydia_replacer.esp)")
-            onTextChanged: debounce.restart()
-        }
-        ComboBox {
-            id: appearanceBox
-            objectName: "npcAppearanceFilter"
-            Layout.fillWidth: true
-            textRole: "text"
-            valueRole: "value"
-            model: [{ text: qsTr("Apariencia: todos"), value: "" }, { text: qsTr("Con avisos faciales"), value: "warning" },
-                    { text: qsTr("Casos ambiguos (revisión)"), value: "review" }, { text: qsTr("Sin analizar"), value: "unanalysed" }]
-            onActivated: root.studio.setAppearanceFilter(currentValue)
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            Button {
-                objectName: "npcListModeButton"
+            TextField {
+                id: pluginField
                 Layout.fillWidth: true
-                text: qsTr("Lista")
-                checkable: true
-                checked: root.viewMode === "list"
-                onClicked: root.setViewMode("list")
+                Layout.columnSpan: 2
+                placeholderText: qsTr("Plugin que define o modifica (p. ej. Helen_Lydia_replacer.esp)")
+                Accessible.name: qsTr("Filtro de plugin")
+                onTextChanged: debounce.restart()
             }
-            Button {
-                objectName: "npcGalleryModeButton"
+            ComboBox {
+                id: appearanceBox
+                objectName: "npcAppearanceFilter"
                 Layout.fillWidth: true
-                text: qsTr("Galería")
-                checkable: true
-                checked: root.viewMode === "gallery"
-                onClicked: root.setViewMode("gallery")
+                Layout.columnSpan: 2
+                textRole: "text"
+                valueRole: "value"
+                Accessible.name: qsTr("Filtro de apariencia")
+                model: [{ text: qsTr("Apariencia: todos"), value: "" }, { text: qsTr("Con avisos faciales"), value: "warning" },
+                        { text: qsTr("Casos ambiguos (revisión)"), value: "review" }, { text: qsTr("Sin analizar"), value: "unanalysed" }]
+                onActivated: root.studio.setAppearanceFilter(currentValue)
             }
         }
         Text {
+            objectName: "npcResultCount"
             Layout.fillWidth: true
             text: {
                 const shown = root.viewMode === "gallery" ? grid.count : list.count
+                if (root.studio.phase !== StudioController.Ready)
+                    return qsTr("El catálogo aparece cuando termina de indexarse el perfil.")
                 if (root.studio.appearanceFilter !== "")
-                    return qsTr("%1 de %2 cargados con este filtro (%3 resultados en total)").arg(shown).arg(root.studio.npcLoaded).arg(root.studio.npcTotal)
-                return (root.studio.npcTotal > shown ? qsTr("%1 resultados (mostrando %2)").arg(root.studio.npcTotal).arg(shown)
-                                                     : qsTr("%1 resultados").arg(root.studio.npcTotal))
+                    return qsTr("Mostrando %1 de %2 cargados con este filtro (%3 resultados en total)").arg(shown).arg(root.studio.npcLoaded).arg(root.studio.npcTotal)
+                if (root.studio.npcTotal === 0)
+                    return root.activeFilters > 0 || searchField.text.length > 0
+                           ? qsTr("Ningún NPC coincide con la búsqueda o los filtros.") : qsTr("Sin resultados.")
+                return qsTr("Mostrando %1 de %2").arg(shown).arg(root.studio.npcTotal)
                        + (root.studio.npcLoadingMore ? qsTr(" · cargando más…") : "")
             }
             color: Theme.textDim
@@ -144,11 +225,19 @@ ColumnLayout {
             wrapMode: Text.WordWrap
         }
         Text {
+            id: copiedNote
+            Layout.fillWidth: true
+            visible: text.length > 0
+            color: Theme.ok
+            font.pixelSize: Theme.small
+            elide: Text.ElideMiddle
+        }
+        Text {
             Layout.fillWidth: true
             visible: root.studio.appearanceFilter !== "" && root.studio.appearanceScan.stage !== "done"
             text: qsTr("El filtro de apariencia usa el análisis del perfil: ejecútalo en la pestaña Origen.")
             color: Theme.warn
-            font.pixelSize: Theme.micro
+            font.pixelSize: Theme.small
             wrapMode: Text.WordWrap
         }
     }
@@ -163,6 +252,19 @@ ColumnLayout {
         ScrollBar.vertical: ScrollBar {}
         onAtYEndChanged: root.loadMoreIfAtEnd()
         onContentHeightChanged: Qt.callLater(root.loadMoreIfAtEnd)
+        // Keyboard: arrows move, Space selects, Enter opens the editor, Ctrl+C copies the FormKey.
+        currentIndex: -1
+        keyNavigationEnabled: true
+        activeFocusOnTab: true
+        Keys.onSpacePressed: if (currentItem) root.studio.selectNpc(currentItem.formKey)
+        Keys.onReturnPressed: if (currentItem) { root.studio.selectNpc(currentItem.formKey); root.editRequested(currentItem.formKey) }
+        Keys.onEnterPressed: if (currentItem) { root.studio.selectNpc(currentItem.formKey); root.editRequested(currentItem.formKey) }
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier) && currentItem) {
+                root.copyFormKey(currentItem.formKey)
+                event.accepted = true
+            }
+        }
         delegate: ItemDelegate {
             id: item
             required property int index
@@ -176,11 +278,21 @@ ColumnLayout {
             required property string winningMod
             required property int overrideCount
             width: ListView.view.width
+            leftPadding: Theme.sp(10)
+            rightPadding: Theme.sp(10)
             highlighted: root.isSelected(formKey)
-            onClicked: root.studio.selectNpc(formKey)
+            Accessible.name: (name.trim().length > 0 ? name : editorId) + ", " + formKey
+            ToolTip.visible: hovered
+            ToolTip.delay: 900
+            ToolTip.text: (name.trim().length > 0 ? name : qsTr("(sin nombre)")) + "\n" + editorId + " · " + formKey
+                          + "\n" + qsTr("Gana: %1").arg(winningPlugin) + (winningMod ? " [" + winningMod + "]" : "")
+                          + "\n" + qsTr("Doble clic o Enter: editar · Ctrl+C: copiar FormKey")
+            onClicked: { ListView.view.currentIndex = index; ListView.view.forceActiveFocus(); root.studio.selectNpc(formKey) }
             onDoubleClicked: root.editRequested(formKey)
             background: Rectangle {
                 color: parent.highlighted ? Theme.accentDim : parent.hovered ? Theme.panelAlt : "transparent"
+                border.width: item.ListView.isCurrentItem && item.ListView.view.activeFocus ? Theme.focusWidth : 0
+                border.color: Theme.borderFocus
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.border; opacity: 0.5 }
             }
             contentItem: ColumnLayout {
@@ -209,8 +321,8 @@ ColumnLayout {
                 }
                 Text {
                     text: qsTr("gana: ") + item.winningPlugin + (item.winningMod ? "  [" + item.winningMod + "]" : "")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small - 1
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.small
                     elide: Text.ElideMiddle
                     Layout.fillWidth: true
                 }
@@ -230,7 +342,8 @@ ColumnLayout {
         model: visible ? root.studio.npcResults : null
         readonly property int columns: Math.max(1, Math.floor(width / AppSettings.galleryCardWidth))
         cellWidth: Math.floor(width / columns)
-        cellHeight: cellWidth - 10 + 66
+        // Portrait (square) + name + three short lines, at the real text sizes (scale and legibility floor).
+        cellHeight: cellWidth - 10 + Theme.normal + 3 * (Theme.small + 3) + 18
         cacheBuffer: cellHeight  // one row beyond the visible ones
         currentIndex: -1
         keyNavigationEnabled: true
@@ -270,6 +383,12 @@ ColumnLayout {
         Keys.onSpacePressed: selectCurrent()
         Keys.onReturnPressed: openCurrent()
         Keys.onEnterPressed: openCurrent()
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier) && currentItem) {
+                root.copyFormKey(currentItem.formKey)
+                event.accepted = true
+            }
+        }
 
         delegate: Item {
             id: card
@@ -308,9 +427,10 @@ ColumnLayout {
                     }
                     Text {
                         Layout.fillWidth: true
+                        Layout.topMargin: 2
                         text: card.name.trim().length > 0 ? card.name : card.editorId
                         color: Theme.text
-                        font.pixelSize: Theme.small
+                        font.pixelSize: Theme.normal
                         font.bold: true
                         elide: Text.ElideRight
                     }
@@ -318,25 +438,30 @@ ColumnLayout {
                         Layout.fillWidth: true
                         text: (card.race || "?") + " · " + (card.sex === "female" ? "♀" : "♂")
                         color: Theme.textDim
-                        font.pixelSize: Theme.micro
+                        font.pixelSize: Theme.small
                         elide: Text.ElideRight
                     }
                     Text {
                         Layout.fillWidth: true
                         text: card.winningPlugin
-                        color: Theme.textDim
-                        font.pixelSize: Theme.micro
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.small
                         elide: Text.ElideMiddle
                     }
                     Text {
                         Layout.fillWidth: true
                         text: root.stateText(card.appearanceState)
                         color: root.stateColor(card.appearanceState)
-                        font.pixelSize: Theme.micro
+                        font.pixelSize: Theme.small
                         elide: Text.ElideRight
                     }
                 }
             }
+            ToolTip.visible: cardArea.containsMouse
+            ToolTip.delay: 900
+            ToolTip.text: (card.name.trim().length > 0 ? card.name : qsTr("(sin nombre)")) + "\n" + card.editorId + " · " + card.formKey
+                          + "\n" + qsTr("Gana: %1").arg(card.winningPlugin) + (card.winningMod ? " [" + card.winningMod + "]" : "")
+                          + "\n" + root.stateText(card.appearanceState)
             MouseArea {
                 id: cardArea
                 anchors.fill: parent
@@ -377,7 +502,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: qsTr("Datos faciales: %1 (mod «%2»)").arg(inspectorColumn.control.facePlugin || "?").arg(inspectorColumn.control.faceMod || "?")
                 color: Theme.text
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 elide: Text.ElideMiddle
             }
             Text {
@@ -385,7 +510,7 @@ ColumnLayout {
                 text: inspectorColumn.facegen ? qsTr("FaceGen: «%1», %2").arg(inspectorColumn.facegen.mod || "?").arg(root.kindText(inspectorColumn.facegen.kind))
                                               : qsTr("FaceGen: sin datos")
                 color: inspectorColumn.facegen && inspectorColumn.facegen.kind === "missing" ? Theme.warn : Theme.textDim
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 elide: Text.ElideMiddle
             }
             Text {
@@ -393,7 +518,7 @@ ColumnLayout {
                 text: inspectorColumn.facetint ? qsTr("FaceTint: «%1», %2").arg(inspectorColumn.facetint.mod || "?").arg(root.kindText(inspectorColumn.facetint.kind))
                                                : qsTr("FaceTint: sin datos")
                 color: inspectorColumn.facetint && inspectorColumn.facetint.kind === "missing" ? Theme.warn : Theme.textDim
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 elide: Text.ElideMiddle
             }
             Text {
@@ -401,7 +526,7 @@ ColumnLayout {
                 visible: inspectorColumn.warnings.length > 0
                 text: qsTr("%1 aviso(s): %2").arg(inspectorColumn.warnings.length).arg(inspectorColumn.warnings.length > 0 ? inspectorColumn.warnings[0].message : "")
                 color: Theme.warn
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
@@ -412,7 +537,7 @@ ColumnLayout {
                 text: qsTr("Caso ambiguo: revisión %1. Se decide en la pestaña Origen; nunca se aprueba solo.")
                           .arg(root.reviewText(inspectorColumn.control.resolution ? inspectorColumn.control.resolution.reviewState : ""))
                 color: Theme.warn
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
             Text {
@@ -424,7 +549,7 @@ ColumnLayout {
                       : portrait.state === "error" ? qsTr("Retrato: no disponible (%1)").arg(portrait.reason)
                       : qsTr("Retrato: sin generar")
                 color: Theme.textMuted
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
 
@@ -435,7 +560,7 @@ ColumnLayout {
                 visible: missing.length > 0
                 text: qsTr("El retrato se dibujó sin %1 archivo(s) que el perfil no tiene: %2").arg(missing.length).arg(missing.join(", "))
                 color: Theme.warn
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 4
                 elide: Text.ElideRight
@@ -481,14 +606,14 @@ ColumnLayout {
                             Layout.preferredWidth: 72
                             text: versionBox.modelData.label
                             color: versionBox.modelData.key === "skyrimCapture" ? Theme.warn : Theme.textDim
-                            font.pixelSize: Theme.micro
+                            font.pixelSize: Theme.small
                             elide: Text.ElideRight
                         }
                         Text {
                             Layout.preferredWidth: 72
                             text: (versionBox.version.createdAt || "").slice(0, 16).replace("T", " ")
                             color: Theme.textMuted
-                            font.pixelSize: Theme.micro
+                            font.pixelSize: Theme.small
                             elide: Text.ElideRight
                         }
                     }
@@ -508,7 +633,7 @@ ColumnLayout {
                           ? qsTr("Mismos recursos faciales; cambió el perfil o el orden de carga.")
                           : qsTr("Mismos recursos registrados en ambos renders.")
                 color: Theme.textDim
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
                 maximumLineCount: 4
                 elide: Text.ElideRight
@@ -519,7 +644,7 @@ ColumnLayout {
                 text: qsTr("La captura de Skyrim la aportaste tú (%1); el estudio no la verifica ni la usa como retrato.")
                           .arg(inspectorColumn.versions.skyrimCapture ? inspectorColumn.versions.skyrimCapture.file : "")
                 color: Theme.warn
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
                 maximumLineCount: 3
                 elide: Text.ElideMiddle
@@ -529,7 +654,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 visible: text.length > 0
                 color: Theme.warn
-                font.pixelSize: Theme.micro
+                font.pixelSize: Theme.small
                 wrapMode: Text.WordWrap
             }
             RowLayout {
@@ -538,20 +663,20 @@ ColumnLayout {
                 Button {
                     objectName: "npcPortraitRefresh"
                     text: qsTr("Revalidar")
-                    font.pixelSize: Theme.micro
+                    font.pixelSize: Theme.small
                     enabled: inspectorColumn.control.formKey !== undefined
                     onClicked: root.studio.portraits.refresh(inspectorColumn.control.formKey)
                 }
                 Button {
                     objectName: "npcAttachSkyrimCapture"
                     text: qsTr("Adjuntar captura de Skyrim…")
-                    font.pixelSize: Theme.micro
+                    font.pixelSize: Theme.small
                     enabled: inspectorColumn.control.formKey !== undefined
                     onClicked: captureDialog.open()
                 }
                 Button {
                     text: qsTr("Quitar captura")
-                    font.pixelSize: Theme.micro
+                    font.pixelSize: Theme.small
                     visible: inspectorColumn.versions.skyrimCapture !== undefined
                     onClicked: root.studio.portraits.removeGameCapture(inspectorColumn.control.formKey)
                 }

@@ -27,7 +27,9 @@ param(
     [string]$Suite = 'antigravity-qa-baseline',
     [array]$TestDefinitions = @(),
     [string]$RunId,
-    [string]$OutRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'out\antigravity\runs')
+    [string]$OutRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'out\antigravity\runs'),
+    # AG05: folder with the test executables and the Qt/worker DLLs they need (default: build\debug\bin)
+    [string]$BinDir
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,7 +138,7 @@ foreach ($def in $TestDefinitions) {
                 $pinfo.WorkingDirectory = if ($def.WorkingDirectory) { $def.WorkingDirectory } else { $repoRoot }
 
                 $qtBin = 'D:\DevTools\Qt\6.11.2\msvc2022_64\bin'
-                $debugBin = Join-Path $repoRoot 'build\debug\bin'
+                $debugBin = if ($BinDir) { $BinDir } else { Join-Path $repoRoot 'build\debug\bin' }
                 $curPath = [System.Environment]::GetEnvironmentVariable('PATH')
                 if ($pinfo.EnvironmentVariables.ContainsKey('PATH')) {
                     $pinfo.EnvironmentVariables['PATH'] = "$qtBin;$debugBin;" + $pinfo.EnvironmentVariables['PATH']

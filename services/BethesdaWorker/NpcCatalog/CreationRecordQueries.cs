@@ -16,6 +16,8 @@ internal static class CreationRecordQueries
             "combatStyle" => typeof(ICombatStyleGetter), "headPart" => typeof(IHeadPartGetter), "armor" => typeof(IArmorGetter),
             "item" => typeof(IItemGetter), "faction" => typeof(IFactionGetter), "package" => typeof(IPackageGetter),
             "cell" => typeof(ICellGetter), "hairColor" => typeof(IColorRecordGetter), "headTexture" => typeof(ITextureSetGetter),
+            // The same types NativeNpcValidator resolves for an NPC's spells (SPEL) and perks (PERK): what the picker offers is what validates.
+            "spell" => typeof(ISpellGetter), "perk" => typeof(IPerkGetter),
             _ => throw new WorkerException(ErrorCodes.InvalidArgument, "Unsupported creation record kind."),
         };
         if (request.Text.Length > 160) throw new WorkerException(ErrorCodes.InvalidArgument, "Search text too long.");

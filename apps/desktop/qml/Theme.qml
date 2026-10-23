@@ -35,6 +35,10 @@ QtObject {
     readonly property color textMuted: pal.textMuted
     readonly property string fontFamily: Workbench.fontFamily.length > 0 ? Workbench.fontFamily : "Segoe UI"
     readonly property string mono: "Consolas, monospace"
+    // Vector glyphs from the icon font Windows ships (never distributed with the studio); Icon.qml falls
+    // back to a text label when neither family is installed.
+    readonly property string iconFamily: Qt.fontFamilies().indexOf("Segoe Fluent Icons") >= 0 ? "Segoe Fluent Icons"
+                                       : Qt.fontFamilies().indexOf("Segoe MDL2 Assets") >= 0 ? "Segoe MDL2 Assets" : ""
 
     // ---------------------------------------------------------------- Scale (View menu, Ctrl + / - / 0)
     // User preferences only: Qt already applies the Windows display scale, so it is never applied here.
@@ -45,24 +49,32 @@ QtObject {
                                           : Workbench.density === Workbench.Comfortable ? 1.2 : 1.0
     readonly property real fontFactor: uiFactor * Workbench.fontScale / 100
 
-    function fs(base) { return Math.max(8, Math.round(base * fontFactor)) }        // text, base px at 100 %
+    // Text: base px at 100 %, scaled by the preferences but never below the legible minimum of its role
+    // (WorkbenchState::legibleFontPixels: body 11 px, secondary 10, captions 9, titles 12). The preference
+    // is kept as chosen; `legibilityFloor` tells the window to say that text is being held up.
+    function fs(base) { return Workbench.fontPixels(base, Workbench.uiScale, Workbench.fontScale) }
     function px(base) { return Math.round(base * uiFactor) }                       // controls and panels
     function sp(base) { return Math.round(base * uiFactor * densityFactor) }       // spacing and padding
+    readonly property bool legibilityFloor: Workbench.legibilityFloorActive
 
     // ---------------------------------------------------------------- Font Sizes
+    // Body text 13 px at 100 % (names, fields, buttons); secondary 11; captions 10; titles 15–20.
     readonly property int micro: fs(10)
     readonly property int small: fs(11)
-    readonly property int normal: fs(12)
-    readonly property int large: fs(14)
-    readonly property int title: fs(16)
-    readonly property int heading: fs(18)
+    readonly property int normal: fs(13)
+    readonly property int large: fs(15)
+    readonly property int title: fs(17)
+    readonly property int heading: fs(20)
+    readonly property int iconSize: fs(14)                                          // glyphs follow the text
 
     // ---------------------------------------------------------------- Control metrics
-    readonly property int controlHeight: Math.max(px(28), normal + sp(14))   // buttons, fields, tool buttons
+    // Frequent actions get 32 px targets on a desktop (28 px in the compact density), whatever the scale says.
+    readonly property int controlHeight: Math.max(px(Workbench.density === Workbench.Compact ? 28 : 32), normal + sp(14))
     readonly property int toolbarHeight: Math.max(px(44), controlHeight + sp(12))
     readonly property int statusHeight: Math.max(px(28), small + sp(14))
-    readonly property int splitHandle: 6                                     // grab strip of a panel divider
+    readonly property int splitHandle: 8                                     // grab strip of a panel divider (workbench_check.cpp kHandle)
     readonly property int rowHeight: Math.max(px(32), normal + sp(18))       // list rows
+    readonly property int focusWidth: 2                                      // focus ring of keyboard-focused controls
 
     // ---------------------------------------------------------------- Spacings & Radii
     readonly property int gap: sp(8)

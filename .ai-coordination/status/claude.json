@@ -1,17 +1,16 @@
 {
   "agent": "Claude Code",
-  "timestamp": "2026-10-21T16:43:39-03:00",
-  "status": "REFERENCE_INTEGRATION_ROUND2_COMPLETE_PENDING_SKYRIM",
-  "mission": "reference-integration: GenerateFollower / NPC Plugin Chooser 2 / Effigy",
-  "increment": "Round 2: persistent head choice, redo stale portraits, NPC names, 3-4 source grid, A4 skin match estimate",
+  "timestamp": "2026-10-22T23:43:47-03:00",
+  "status": "UX06_CLOSED_PENDING_SKYRIM",
+  "mission": "UX06: Workbench UI/UX redesign (legibility, panels, header, catalogs, Forge onboarding, command palette)",
+  "increment": "UX06 delivered: workbench-check 1366/1100/DPI125/DPI150 PASS, settings-check PASS, 8 real-profile scenarios PASS, ctest 289/289, full-qa-gate 19/19",
   "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
-  "evidence": "out/reference-integration/20261021-refint-a1/CHECKPOINT_R2.md",
+  "evidence": "out/uiux-ux06/ux06-20261022-1630/FINAL_REPORT.md",
   "activeLock": null,
   "buildDirectories": [
-    "build/refint",
-    "build/refint-app"
+    "build/ux06"
   ],
-  "usesBuildSlot": false,
+  "usesBuildSlot": true,
   "exclusiveOwnedPathsTouched": [
     "apps/desktop/viewmodels/studio_controller.hpp",
     "apps/desktop/viewmodels/studio_controller.cpp",
@@ -19,9 +18,7 @@
     "apps/desktop/viewmodels/scene_viewmodel.cpp",
     "engines/mo2/"
   ],
-  "reservedPathsTouched": [
-    "apps/desktop/CMakeLists.txt (additive only: A1 +6, A3 +2, A2 +1, round 2 +1 lines)"
-  ],
+  "reservedPathsTouched": [],
   "reservedPathsNotTouched": [
     "apps/desktop/qml/Main.qml",
     "apps/desktop/qml/Theme.qml",
@@ -29,13 +26,45 @@
     "tests/CMakeLists.txt",
     "scripts/*.ps1"
   ],
-  "antigravityPathsTouched": [],
+  "antigravityPathsTouched": [
+    "tools/antigravity/follower-behavior-lab/Engine/PluginContext.cs (additive FromLoaded)",
+    "tools/antigravity/follower-behavior-lab/Engine/VoiceDialogueAnalyzer.cs (voice FLST family lookup)",
+    "tools/antigravity/follower-behavior-lab/Integration/FollowerBehaviorRpcDispatcher.cs (additive production overloads)",
+    "tools/antigravity/follower-behavior-lab/Fixtures/LabSyntheticFixture.cs (real Skyrim.esm FormKeys)",
+    "tests/antigravity/follower-behavior-lab/fixtures/draft.json, plan.json (remapped ids)",
+    "scripts/antigravity/Invoke-SnsRegression.ps1 (optional -BuildDir/-OutRoot)",
+    "scripts/antigravity/Invoke-SnsQaBaseline.ps1 (optional -BinDir)"
+  ],
   "gitUsage": "DISABLED_PER_OWNER_POLICY",
   "exportsEnabled": false,
   "skyrimValidationStatus": "PENDING_HUMAN_INSPECTION",
-  "workerContractChange": "catalog.searchHeadParts: optional formKeys (backward compatible)",
+  "workerContractChange": "creation.searchRecords: kinds spell, perk; behavior endpoints answer from the indexed profile (profileName must match, fixtureDirectory refused); NativeNpcValidator: SpellDuplicate, PerkDuplicate",
   "blocked": [
     "B follower wizard",
     "C multi-follower (need F0/D1/D3 and verified native FaceGen)"
+  ],
+  "reservedPathsPlanned": [
+    "apps/desktop/qml/Main.qml",
+    "apps/desktop/qml/Theme.qml",
+    "apps/desktop/CMakeLists.txt (additive only)"
+  ],
+  "plannedQmlPaths": [
+    "apps/desktop/qml/components/**",
+    "apps/desktop/qml/characterforge/{CharacterForge,ForgeNavigation,ForgeToolbar}.qml",
+    "apps/desktop/qml/{NpcBrowser,ArmorCatalog,BottomPanel}.qml",
+    "apps/desktop/qml/settings/SettingsCenter.qml",
+    "apps/desktop/viewmodels/workbench_state.*"
+  ],
+  "touchedPaths": [
+    "apps/desktop/qml/Main.qml (reserved; shell header/status bar/palette, backup+hash)",
+    "apps/desktop/qml/Theme.qml (reserved; legibility floor, icon font, tokens)",
+    "apps/desktop/qml/CharacterViewport.qml (reserved; control shell + empty state only, 3D untouched)",
+    "apps/desktop/CMakeLists.txt (reserved; additive: 6 QML components)",
+    "apps/desktop/qml/components/{WorkbenchSplit,SplitHandleBar,ScalePreferencesDialog,PortraitThumb}.qml",
+    "apps/desktop/qml/components/{Icon,IconToolButton,PanelHeader,SegmentedControl,EmptyState,CommandPalette}.qml (new)",
+    "apps/desktop/qml/{NpcBrowser,ArmorCatalog}.qml, apps/desktop/qml/charactercreator/CharacterCreator.qml",
+    "apps/desktop/qml/characterforge/{CharacterForge,ForgeNavigation,ForgeToolbar,ForgeViewport}.qml",
+    "apps/desktop/qml/settings/SettingsCenter.qml",
+    "apps/desktop/viewmodels/workbench_state.{hpp,cpp}, apps/desktop/components/workbench_check.cpp, tests/app/test_workbench_state.cpp"
   ]
 }

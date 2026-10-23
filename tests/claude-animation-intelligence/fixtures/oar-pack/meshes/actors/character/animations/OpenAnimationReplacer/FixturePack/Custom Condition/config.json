@@ -1,0 +1,11 @@
+{
+    "name": "Custom Condition",
+    "priority": 800,
+    "conditions": [
+        {
+            "condition": "ThirdPartyMysteryCondition",
+            "requiredVersion": "1.0.0.0",
+            "requiredPlugin": "MysteryPlugin.dll"
+        }
+    ]
+}

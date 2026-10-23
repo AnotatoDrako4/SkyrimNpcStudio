@@ -1,0 +1,5 @@
+{
+    "name": "Disabled Submod",
+    "priority": 700,
+    "disabled": true
+}

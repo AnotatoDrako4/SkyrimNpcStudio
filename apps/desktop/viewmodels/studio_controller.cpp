@@ -449,6 +449,7 @@ void StudioController::start_index() {
 
   set_progress(tr("Indexando plugins…"), 0.0);
   forge_->invalidate_validation();
+  forge_->set_profile_key(profile_key);  // behavior requests name this profile; the worker refuses one made for another
   index_cancel_ = worker_->call(
       method::kCatalogIndex,
       Json{{"profileKey", ss(profile_key)}, {"cacheDirectory", ss(QDir::toNativeSeparators(cache))}, {"plugins", plugins},

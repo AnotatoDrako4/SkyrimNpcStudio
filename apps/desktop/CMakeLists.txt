@@ -64,6 +64,12 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/components/WorkbenchSplit.qml
     qml/components/ScalePreferencesDialog.qml
     qml/components/PortraitThumb.qml
+    qml/components/Icon.qml
+    qml/components/IconToolButton.qml
+    qml/components/PanelHeader.qml
+    qml/components/SegmentedControl.qml
+    qml/components/EmptyState.qml
+    qml/components/CommandPalette.qml
     qml/settings/SettingControl.qml
     qml/settings/SettingsCenter.qml
     qml/settings/PortraitCacheInspector.qml

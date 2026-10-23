@@ -69,16 +69,159 @@ ApplicationWindow {
     readonly property var workspaceKeys: ["creator", "outfit", "forge"]
     readonly property WorkspaceLayout layout: Workbench.layout(workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
 
-    // Show or hide one panel of the current workspace; showing one leaves the focused viewer.
+    // Which side panel is on screen: wanted by the user, not put away for lack of room, not in focus mode.
+    function panelOnScreen(which) {
+        if (layout.maximized) return false
+        if (which === "left") return layout.leftVisible && !layout.leftAutoHidden
+        if (which === "right") return layout.rightVisible && !layout.rightAutoHidden
+        return layout.bottomVisible
+    }
+    // The panel the user asked for but the window has no room for (it is put away on screen only).
+    function panelAutoHidden(which) {
+        return !layout.maximized && (which === "left" ? layout.leftAutoHidden : which === "right" ? layout.rightAutoHidden : false)
+    }
+
+    // Show or hide one panel of the current workspace; showing one leaves the focused viewer. When the window
+    // cannot hold both side panels, the one that was asked for wins and the other gives way (that is the
+    // user's own action, so the other panel is hidden as a choice and comes back with its shortcut).
     function setPanel(which, shown) {
         if (layout.maximized) {
             layout.maximized = false
             if (!shown)
                 return
         }
-        if (which === "left") layout.leftVisible = shown
-        else if (which === "right") layout.rightVisible = shown
-        else layout.bottomVisible = shown
+        if (which === "left") {
+            layout.leftVisible = shown
+            if (shown && layout.leftAutoHidden) layout.rightVisible = false
+        } else if (which === "right") {
+            layout.rightVisible = shown
+            if (shown && layout.rightAutoHidden) layout.leftVisible = false
+        } else {
+            layout.bottomVisible = shown
+        }
+    }
+    // Save the project of the workspace on screen (.sncf in Character Forge, .snps elsewhere): header button,
+    // Proyecto › Guardar (Ctrl+S) and the command palette all call this one.
+    readonly property bool canSave: workspaceTabs.currentIndex === 2 ? studio.forge.hasProject : studio.outfit.npcFormKey.length > 0
+    function saveCurrentProject() {
+        if (workspaceTabs.currentIndex === 2) {
+            studio.forge.projectPath.length > 0 ? studio.forge.saveProject(studio.forge.projectPath) : forgeSaveDialog.open()
+        } else {
+            studio.outfit.projectPath.length > 0 ? studio.outfit.saveProject(studio.outfit.projectPath, "") : saveProjectDialog.open()
+        }
+    }
+    function openCurrentProject() { workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open() }
+    // "Buscar NPC" / "Ver prendas" from anywhere: the workspace that has an explorer shows it, search focused.
+    function searchNpc() {
+        if (workspaceTabs.currentIndex === 1) { setPanel("left", true); outfitLeftTabs.currentIndex = 1; outfitNpcBrowser.focusSearch() }
+        else { workspaceTabs.currentIndex = 0; creatorWorkspace.searchNpc() }
+    }
+    function showCatalog() {
+        if (workspaceTabs.currentIndex === 1) { setPanel("left", true); outfitLeftTabs.currentIndex = 0; outfitArmorCatalog.focusSearch() }
+        else { workspaceTabs.currentIndex = 0; creatorWorkspace.showCatalog() }
+    }
+
+    // Commands of the palette (Ctrl+Shift+P) and of the shortcut list: each one calls the handler its menu entry
+    // or button calls, and is enabled exactly when that entry is.
+    readonly property var commands: {
+        const list = [
+            { id: "ws.creator", category: qsTr("Workspace"), label: qsTr("Ir a Personalizar personaje"), shortcut: "", run: () => workspaceTabs.currentIndex = 0 },
+            { id: "ws.outfit", category: qsTr("Workspace"), label: qsTr("Ir a Estudio de atuendos"), shortcut: "", run: () => workspaceTabs.currentIndex = 1 },
+            { id: "ws.forge", category: qsTr("Workspace"), label: qsTr("Ir a Character Forge"), shortcut: "", run: () => workspaceTabs.currentIndex = 2 },
+            { id: "panel.left", category: qsTr("Vista"), label: panelOnScreen("left") ? qsTr("Ocultar el panel izquierdo") : qsTr("Mostrar el panel izquierdo"), shortcut: "Ctrl+B", run: () => setPanel("left", !panelOnScreen("left")) },
+            { id: "panel.right", category: qsTr("Vista"), label: panelOnScreen("right") ? qsTr("Ocultar el panel derecho") : qsTr("Mostrar el panel derecho"), shortcut: "Ctrl+Alt+B", run: () => setPanel("right", !panelOnScreen("right")) },
+            { id: "panel.bottom", category: qsTr("Vista"), label: panelOnScreen("bottom") ? qsTr("Ocultar la consola y diagnósticos") : qsTr("Mostrar la consola y diagnósticos"), shortcut: "Ctrl+J", run: () => setPanel("bottom", !panelOnScreen("bottom")) },
+            { id: "view.focus", category: qsTr("Vista"), label: layout.maximized ? qsTr("Salir del enfoque del visor") : qsTr("Enfocar el visor"), shortcut: "F11", run: () => layout.maximized = !layout.maximized },
+            { id: "layout.reset", category: qsTr("Vista"), label: qsTr("Restablecer paneles de este workspace"), shortcut: "", run: () => layout.reset() },
+            { id: "layout.save", category: qsTr("Vista"), label: qsTr("Guardar la distribución actual…"), shortcut: "", run: () => saveLayoutDialog.open() },
+            { id: "search.npc", category: qsTr("Buscar"), label: qsTr("Buscar NPC"), shortcut: "", enabled: ready, run: () => searchNpc() },
+            { id: "search.armor", category: qsTr("Buscar"), label: qsTr("Buscar prendas en el catálogo"), shortcut: "", enabled: ready, run: () => showCatalog() },
+            { id: "project.open", category: qsTr("Proyecto"), label: workspaceTabs.currentIndex === 2 ? qsTr("Abrir proyecto Character Forge (.sncf)…") : qsTr("Abrir proyecto (.snps)…"), shortcut: "", enabled: workspaceTabs.currentIndex === 2 || ready, run: () => openCurrentProject() },
+            { id: "project.save", category: qsTr("Proyecto"), label: qsTr("Guardar proyecto"), shortcut: "Ctrl+S", enabled: canSave, run: () => saveCurrentProject() },
+            { id: "edit.undo", category: qsTr("Editar"), label: qsTr("Deshacer"), shortcut: "Ctrl+Z", enabled: workspaceTabs.currentIndex === 2 ? studio.forge.canUndo : studio.outfit.canUndo, run: () => workspaceTabs.currentIndex === 2 ? studio.forge.undo() : studio.outfit.undo() },
+            { id: "edit.redo", category: qsTr("Editar"), label: qsTr("Rehacer"), shortcut: "Ctrl+Y", enabled: workspaceTabs.currentIndex === 2 ? studio.forge.canRedo : studio.outfit.canRedo, run: () => workspaceTabs.currentIndex === 2 ? studio.forge.redo() : studio.outfit.redo() },
+            { id: "forge.new", category: qsTr("Forge"), label: qsTr("Nuevo proyecto Character Forge"), shortcut: "", enabled: !studio.forge.busy, run: () => { workspaceTabs.currentIndex = 2; forgeWorkspace.newProject() } },
+            { id: "forge.validate", category: qsTr("Forge"), label: qsTr("Validar el NPC del proyecto"), shortcut: "", enabled: studio.forge.hasProject && studio.forge.catalogReady && !studio.forge.busy, run: () => { workspaceTabs.currentIndex = 2; studio.forge.validateNpc() } },
+            { id: "scale.in", category: qsTr("Escala"), label: qsTr("Aumentar la escala de interfaz"), shortcut: "Ctrl++", run: () => Workbench.zoomIn() },
+            { id: "scale.out", category: qsTr("Escala"), label: qsTr("Reducir la escala de interfaz"), shortcut: "Ctrl+-", run: () => Workbench.zoomOut() },
+            { id: "scale.reset", category: qsTr("Escala"), label: qsTr("Escala de interfaz al 100 %"), shortcut: "Ctrl+0", run: () => Workbench.zoomReset() },
+            { id: "scale.prefs", category: qsTr("Escala"), label: qsTr("Preferencias de apariencia…"), shortcut: "", run: () => scaleDialog.open() },
+            { id: "settings.open", category: qsTr("Configuración"), label: qsTr("Abrir Configuración"), shortcut: "Ctrl+,", run: () => settingsCenter.openAt("", "") },
+            { id: "settings.theme", category: qsTr("Configuración"), label: qsTr("Tema y colores…"), shortcut: "", run: () => settingsCenter.openAt("appearance", "appearance.theme") },
+            { id: "tools.reindex", category: qsTr("Herramientas"), label: qsTr("Reindexar perfil"), shortcut: "F5", enabled: studio.selectedProfile.length > 0 && studio.phase !== StudioController.Scanning && studio.phase !== StudioController.Indexing, run: () => studio.reindex() },
+            { id: "export.mod", category: qsTr("Exportar"), label: qsTr("Exportar mod completo / rostro…"), shortcut: "Ctrl+Shift+E", enabled: workspaceTabs.currentIndex !== 2 && ready && !studio.appearance.exporting, run: () => exportWizardDialog.open() },
+            { id: "help.shortcuts", category: qsTr("Ayuda"), label: qsTr("Atajos de teclado"), shortcut: "", run: () => shortcutsDialog.open() }
+        ]
+        for (const p of Workbench.readabilityPresets)
+            list.push({ id: "readability." + p.key, category: qsTr("Legibilidad"), label: qsTr("Presentación «%1»: %2").arg(p.name).arg(p.detail), shortcut: "",
+                        run: () => Workbench.applyReadabilityPreset(p.key) })
+        for (const b of layoutsFor(workspaceKey))
+            list.push({ id: "layout." + b.key, category: qsTr("Distribución"), label: b.name, shortcut: "",
+                        run: () => Workbench.applyBuiltinLayout(b.key, workspaceKey) })
+        return list
+    }
+
+    // Built-in layouts that make sense for a workspace ("" in the table = every workspace).
+    function layoutsFor(workspace) {
+        return Workbench.builtinLayouts.filter(b => b.workspace === "" || b.workspace === workspace)
+    }
+    readonly property string workspaceKey: workspaceKeys[workspaceTabs.currentIndex] ?? "creator"
+    readonly property var workspaceInfo: [
+        { glyph: "person", full: qsTr("Personalizar personaje"), brief: qsTr("Personaje") },
+        { glyph: "tag", full: qsTr("Estudio de atuendos"), brief: qsTr("Atuendos") },
+        { glyph: "forge", full: qsTr("Character Forge"), brief: qsTr("Forge") }
+    ]
+    // Where the user is working: the NPC of the two NPC workspaces, the project of Character Forge.
+    readonly property string contextText: workspaceTabs.currentIndex === 2
+        ? (studio.forge.hasProject ? (studio.forge.projectName || qsTr("Proyecto sin nombre")) : qsTr("Sin proyecto Forge"))
+        : (studio.outfit.npcLabel.length > 0 ? studio.outfit.npcLabel : qsTr("Ningún NPC seleccionado"))
+    readonly property bool contextDirty: workspaceTabs.currentIndex === 2
+        ? studio.forge.dirty : (studio.appearance.dirty || studio.outfit.dirty)
+
+    // The tabs of the workspaces: glyph + name, the name gives way to a short one and then to the glyph alone
+    // (tooltip and accessible name always carry the full name).
+    component WorkspaceTab: TabButton {
+        id: tab
+        property string glyph
+        property string full
+        property string brief
+        width: implicitWidth
+        implicitHeight: Theme.controlHeight + Theme.spacingXs
+        leftPadding: Theme.sp(12)
+        rightPadding: Theme.sp(12)
+        text: headerRow.ultraCompact ? "" : (headerRow.compact ? brief : full)
+        Accessible.name: full
+        ToolTip.visible: hovered && (headerRow.compact || visualFocus)
+        ToolTip.delay: 450
+        ToolTip.text: full
+        contentItem: Row {
+            spacing: Theme.sp(7)
+            Icon { name: tab.glyph; color: tab.checked ? Theme.accent : Theme.textDim; anchors.verticalCenter: parent.verticalCenter }
+            Text {
+                visible: tab.text.length > 0
+                text: tab.text
+                color: tab.checked ? Theme.text : Theme.textDim
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.normal
+                font.bold: tab.checked
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+        background: Rectangle {
+            radius: Theme.radius
+            color: tab.checked ? Theme.panelAlt : tab.down ? Theme.accentDim : tab.hovered ? Theme.accentSubtle : "transparent"
+            border.width: tab.visualFocus ? Theme.focusWidth : 0
+            border.color: Theme.borderFocus
+            Rectangle {
+                visible: tab.checked
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.sp(16)
+                height: 2
+                radius: 1
+                color: Theme.accent
+            }
+        }
     }
 
     // ---------------------------------------------------------------- DIÁLOGOS
@@ -180,7 +323,8 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(Theme.px(480), window.width - 40)
         Label {
-            width: parent.width
+            // availableWidth, not parent.width: the content item's width follows the label's implicit width (binding loop).
+            width: unsavedDialog.availableWidth
             wrapMode: Text.WordWrap
             text: [window.studio.outfit.dirty ? qsTr("• Atuendo (.snps) modificado") : "",
                    window.studio.appearance.dirty ? qsTr("• Rostro o altura del NPC editados") : "",
@@ -244,18 +388,8 @@ ApplicationWindow {
             Action {
                 text: qsTr("Guardar proyecto")
                 shortcut: StandardKey.Save
-                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
-                onTriggered: {
-                    if (workspaceTabs.currentIndex === 2) {
-                        window.studio.forge.projectPath.length > 0
-                                ? window.studio.forge.saveProject(window.studio.forge.projectPath)
-                                : forgeSaveDialog.open()
-                    } else {
-                        window.studio.outfit.projectPath.length > 0
-                                ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
-                                : saveProjectDialog.open()
-                    }
-                }
+                enabled: window.canSave
+                onTriggered: window.saveCurrentProject()
             }
             Action {
                 text: qsTr("Guardar proyecto como…")
@@ -298,21 +432,21 @@ ApplicationWindow {
                 text: workspaceTabs.currentIndex === 2 ? qsTr("Panel de herramientas") : qsTr("Panel de exploración")
                 shortcut: "Ctrl+B"
                 checkable: true
-                checked: window.layout.leftVisible && !window.layout.maximized
+                checked: window.panelOnScreen("left")
                 onTriggered: window.setPanel("left", checked)
             }
             Action {
                 text: workspaceTabs.currentIndex === 2 ? qsTr("Panel contextual") : qsTr("Panel de propiedades")
                 shortcut: "Ctrl+Alt+B"
                 checkable: true
-                checked: window.layout.rightVisible && !window.layout.maximized
+                checked: window.panelOnScreen("right")
                 onTriggered: window.setPanel("right", checked)
             }
             Action {
                 text: qsTr("Consola y diagnósticos")
                 shortcut: "Ctrl+J"
                 checkable: true
-                checked: window.layout.bottomVisible && !window.layout.maximized
+                checked: window.panelOnScreen("bottom")
                 onTriggered: window.setPanel("bottom", checked)
             }
             Action {
@@ -325,10 +459,10 @@ ApplicationWindow {
             Menu {
                 title: qsTr("Distribuciones de paneles")
                 Repeater {
-                    model: Workbench.builtinLayouts
+                    model: window.layoutsFor(window.workspaceKey)
                     MenuItem {
                         text: modelData.name
-                        onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
+                        onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKey)
                     }
                 }
                 MenuSeparator { visible: Workbench.savedLayouts.length > 0 }
@@ -349,7 +483,8 @@ ApplicationWindow {
                     onTriggered: saveLayoutDialog.open()
                 }
                 Action {
-                    text: qsTr("Restablecer a valores de fábrica")
+                    objectName: "resetPanelsAction"
+                    text: qsTr("Restablecer paneles de este workspace")
                     onTriggered: window.layout.reset()
                 }
             }
@@ -406,6 +541,18 @@ ApplicationWindow {
             }
         }
         Menu {
+            title: qsTr("Ay&uda")
+            Action {
+                objectName: "commandPaletteAction"
+                text: qsTr("Paleta de comandos…  (Ctrl+Shift+P)")
+                onTriggered: commandPalette.openPalette(window.activeFocusItem)
+            }
+            Action {
+                text: qsTr("Atajos de teclado…")
+                onTriggered: shortcutsDialog.open()
+            }
+        }
+        Menu {
             title: qsTr("E&xportar")
             Action {
                 text: qsTr("Exportar mod completo / rostro (Character Creator)…")
@@ -422,6 +569,46 @@ ApplicationWindow {
         }
     }
 
+    // Command palette: the same commands as the menus and buttons (window.commands).
+    CommandPalette {
+        id: commandPalette
+        commands: window.commands
+    }
+    Shortcut {
+        objectName: "commandPaletteShortcut"
+        sequence: "Ctrl+Shift+P"
+        context: Qt.ApplicationShortcut
+        onActivated: commandPalette.opened ? commandPalette.close() : commandPalette.openPalette(window.activeFocusItem)
+    }
+    // Shortcuts that are really bound (taken from the command list), never a list written by hand.
+    Dialog {
+        id: shortcutsDialog
+        objectName: "shortcutsDialog"
+        title: qsTr("Atajos de teclado")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(Theme.px(560), window.width - 40)
+        height: Math.min(Theme.px(560), window.height - 80)
+        standardButtons: Dialog.Close
+        ListView {
+            anchors.fill: parent
+            clip: true
+            model: [{ category: qsTr("Ayuda"), label: qsTr("Paleta de comandos"), shortcut: "Ctrl+Shift+P" }]
+                   .concat(window.commands.filter(c => (c.shortcut || "").length > 0))
+                   .concat([{ category: qsTr("Explorador"), label: qsTr("Lista/galería: Espacio selecciona, Enter abre o equipa, Ctrl+C copia el FormKey"), shortcut: "" },
+                            { category: qsTr("Divisores"), label: qsTr("Doble clic en un divisor: tamaño predeterminado de ese panel"), shortcut: "" }])
+            ScrollBar.vertical: ScrollBar {}
+            delegate: RowLayout {
+                required property var modelData
+                width: ListView.view.width
+                height: Theme.rowHeight - Theme.sp(6)
+                Text { text: modelData.category; color: Theme.textMuted; font.pixelSize: Theme.small; Layout.preferredWidth: Theme.px(110) }
+                Text { text: modelData.label; color: Theme.text; font.pixelSize: Theme.normal; elide: Text.ElideRight; Layout.fillWidth: true }
+                Text { text: modelData.shortcut; color: Theme.textDim; font.family: Theme.mono; font.pixelSize: Theme.small }
+            }
+        }
+    }
+
     // Ctrl+= is Ctrl++ on keyboards where "+" needs Shift (StandardKey.ZoomIn covers the rest).
     Shortcut { sequence: "Ctrl+="; onActivated: Workbench.zoomIn() }
     Shortcut { sequence: "Ctrl+-"; onActivated: Workbench.zoomOut() }
@@ -432,30 +619,36 @@ ApplicationWindow {
         onMoreRequested: { scaleDialog.close(); settingsCenter.openAt("appearance", "") }
     }
 
-    // ---------------------------------------------------------------- TOOLBAR SUPERIOR
+    // ---------------------------------------------------------------- CABECERA
+    // Workspaces, where the user is working, the project actions, the three panels and the two main actions.
+    // Labels give way before anything leaves the window: first the secondary ones (glyph + tooltip), then the
+    // project actions move into "Más". Every action keeps its glyph, tooltip and accessible name.
     header: ToolBar {
         implicitHeight: Theme.toolbarHeight
         background: Rectangle {
             color: Theme.header
-            border.color: Theme.borderSubtle
-            border.width: 1
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.border }
         }
 
         RowLayout {
             id: headerRow
-            // Short labels when the window is narrow for the chosen scale, so every action stays on screen.
-            readonly property bool compact: window.width / Theme.fontFactor < 1200
-            readonly property bool ultraCompact: window.width / Theme.fontFactor < 750
+            objectName: "headerRow"
+            // The window width in design pixels (100 % scale; the legible text floor counts as scale).
+            readonly property real designWidth: window.width / Math.max(Theme.uiFactor, Theme.normal / 13)
+            readonly property bool compact: designWidth < 1500
+            readonly property bool ultraCompact: designWidth < 900
             anchors.fill: parent
             anchors.leftMargin: ultraCompact ? Theme.spacingSm : Theme.spacingLg
             anchors.rightMargin: ultraCompact ? Theme.spacingSm : Theme.spacingLg
-            spacing: ultraCompact ? Theme.spacingSm : Theme.spacingLg
+            spacing: ultraCompact ? Theme.spacingXs : Theme.spacingMd
 
             // Modos de trabajo principales
             TabBar {
                 id: workspaceTabs
                 objectName: "workspaceTabs"
                 implicitHeight: Theme.controlHeight + Theme.spacingXs
+                background: Item {}
+                spacing: Theme.spacingXs
                 // The last workspace comes back on start, or the fixed one chosen in Configuración › General
                 // (automation may still pick another one).
                 Component.onCompleted: {
@@ -463,87 +656,132 @@ ApplicationWindow {
                     currentIndex = fixed >= 0 ? fixed : Workbench.workspace
                 }
                 onCurrentIndexChanged: Workbench.workspace = currentIndex
-                // Each tab as wide as its label (TabBar would otherwise split the width evenly and elide).
-                TabButton {
-                    width: implicitWidth
-                    text: headerRow.ultraCompact ? "🎭" : (headerRow.compact ? qsTr("🎭 PERSONAJE") : qsTr("🎭 PERSONALIZAR PERSONAJE"))
-                    ToolTip.visible: hovered && headerRow.ultraCompact
-                    ToolTip.text: qsTr("Personalizar personaje")
-                }
-                TabButton {
-                    width: implicitWidth
-                    text: headerRow.ultraCompact ? "👗" : (headerRow.compact ? qsTr("👗 ATUENDOS") : qsTr("👗 ESTUDIO DE ATUENDOS"))
-                    ToolTip.visible: hovered && headerRow.ultraCompact
-                    ToolTip.text: qsTr("Estudio de atuendos")
-                }
-                TabButton {
-                    width: implicitWidth
-                    text: headerRow.ultraCompact ? "⚒" : (headerRow.compact ? "FORGE" : "CHARACTER FORGE")
-                    ToolTip.visible: hovered && headerRow.ultraCompact
-                    ToolTip.text: qsTr("Character Forge")
-                }
+                WorkspaceTab { glyph: window.workspaceInfo[0].glyph; full: window.workspaceInfo[0].full; brief: window.workspaceInfo[0].brief }
+                WorkspaceTab { glyph: window.workspaceInfo[1].glyph; full: window.workspaceInfo[1].full; brief: window.workspaceInfo[1].brief }
+                WorkspaceTab { glyph: window.workspaceInfo[2].glyph; full: window.workspaceInfo[2].full; brief: window.workspaceInfo[2].brief }
             }
 
-            Rectangle { width: 1; height: Theme.px(22); color: Theme.borderSubtle }
+            Rectangle { width: 1; height: Theme.px(22); color: Theme.border; visible: !headerRow.ultraCompact }
 
-            // Acciones de proyecto
-            ToolButton {
-                text: headerRow.compact ? "📁" : "📁 " + qsTr("Abrir")
+            // Acciones de proyecto (en ventanas muy estrechas pasan al menú «Más»)
+            IconToolButton {
+                id: openButton
+                objectName: "headerOpenButton"
+                visible: !headerRow.ultraCompact
+                glyph: "folder-open"
+                label: qsTr("Abrir")
+                showLabel: !headerRow.compact
                 enabled: workspaceTabs.currentIndex === 2 || window.ready
-                implicitHeight: Theme.controlHeight
-                onClicked: workspaceTabs.currentIndex === 2 ? forgeOpenDialog.open() : openProjectDialog.open()
-                ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Abrir un proyecto .sncf") : qsTr("Abrir proyecto .snps existente")
+                tip: workspaceTabs.currentIndex === 2 ? qsTr("Abrir un proyecto Character Forge (.sncf)") : qsTr("Abrir un proyecto de atuendo (.snps)")
+                onClicked: window.openCurrentProject()
             }
 
-            ToolButton {
-                text: headerRow.compact ? "💾" : "💾 " + qsTr("Guardar")
-                enabled: workspaceTabs.currentIndex === 2 ? window.studio.forge.hasProject : window.studio.outfit.npcFormKey.length > 0
-                implicitHeight: Theme.controlHeight
-                onClicked: {
-                    if (workspaceTabs.currentIndex === 2) {
-                        window.studio.forge.projectPath.length > 0
-                                ? window.studio.forge.saveProject(window.studio.forge.projectPath)
-                                : forgeSaveDialog.open()
-                    } else {
-                        window.studio.outfit.projectPath.length > 0
-                                ? window.studio.outfit.saveProject(window.studio.outfit.projectPath, "")
-                                : saveProjectDialog.open()
-                    }
+            IconToolButton {
+                id: saveButton
+                objectName: "headerSaveButton"
+                visible: !headerRow.ultraCompact
+                glyph: "save"
+                label: qsTr("Guardar")
+                showLabel: !headerRow.compact
+                shortcutText: "Ctrl+S"
+                enabled: window.canSave
+                tip: workspaceTabs.currentIndex === 2 ? qsTr("Guardar el proyecto independiente .sncf") : qsTr("Guardar el proyecto de atuendo .snps")
+                onClicked: window.saveCurrentProject()
+            }
+
+            Rectangle { width: 1; height: Theme.px(22); color: Theme.border; visible: !headerRow.ultraCompact }
+
+            // Dónde se trabaja: el NPC o el proyecto, y si tiene cambios sin guardar.
+            RowLayout {
+                id: contextRow
+                objectName: "headerContext"
+                visible: !headerRow.ultraCompact
+                spacing: Theme.spacingSm
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Text {
+                    id: contextLabel
+                    objectName: "headerContextLabel"
+                    text: window.contextText
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.normal
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Accessible.name: qsTr("Trabajando en: %1").arg(window.contextText)
+                    ToolTip.visible: contextHover.hovered && truncated
+                    ToolTip.delay: 450
+                    ToolTip.text: window.contextText
+                    HoverHandler { id: contextHover }
                 }
-                ToolTip.visible: hovered; ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("Guardar proyecto independiente .sncf") : qsTr("Guardar proyecto .snps actual")
+                StatusBadge {
+                    visible: window.contextDirty
+                    text: workspaceTabs.currentIndex === 2 ? qsTr("SIN GUARDAR") : qsTr("MODIFICADO")
+                    tone: Theme.warn
+                    Layout.alignment: Qt.AlignVCenter
+                }
             }
-
-            Rectangle { width: 1; height: Theme.px(22); color: Theme.borderSubtle }
+            Item { visible: headerRow.ultraCompact; Layout.fillWidth: true }
 
             // Visor a pantalla completa dentro de la ventana; la escena y la selección no cambian.
-            ToolButton {
+            IconToolButton {
                 objectName: "focusViewerButton"
-                text: (window.layout.maximized ? "⤡" : "⤢") + (headerRow.compact ? ""
-                      : " " + (window.layout.maximized ? qsTr("Salir del enfoque") : qsTr("Enfocar visor")))
+                glyph: window.layout.maximized ? "exit-fullscreen" : "fullscreen"
+                label: window.layout.maximized ? qsTr("Salir del enfoque") : qsTr("Enfocar visor")
+                showLabel: !headerRow.compact
+                shortcutText: "F11"
                 checkable: true
                 checked: window.layout.maximized
-                implicitHeight: Theme.controlHeight
+                tip: qsTr("Oculta los paneles laterales y la consola. Vuelve a la distribución anterior al salir.")
                 onClicked: window.layout.maximized = !window.layout.maximized
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Oculta los paneles laterales y la consola (F11). Vuelve a la distribución anterior al salir.")
             }
 
-            ToolButton {
+            // Los tres paneles: explorador, inspector y consola.
+            Row {
+                spacing: 0
+                visible: !headerRow.ultraCompact
+                Repeater {
+                    model: [
+                        { key: "left", glyph: "panel-left", name: workspaceTabs.currentIndex === 2 ? qsTr("Panel de herramientas") : qsTr("Panel de exploración"), shortcut: "Ctrl+B" },
+                        { key: "right", glyph: "panel-right", name: workspaceTabs.currentIndex === 2 ? qsTr("Panel contextual") : qsTr("Panel de propiedades"), shortcut: "Ctrl+Alt+B" },
+                        { key: "bottom", glyph: "panel-bottom", name: qsTr("Consola y diagnósticos"), shortcut: "Ctrl+J" }
+                    ]
+                    delegate: IconToolButton {
+                        required property var modelData
+                        objectName: "toggle_" + modelData.key + "_panel"
+                        glyph: modelData.glyph
+                        label: modelData.name
+                        showLabel: false
+                        shortcutText: modelData.shortcut
+                        checkable: true
+                        checked: window.panelOnScreen(modelData.key)
+                        tone: window.panelAutoHidden(modelData.key) ? Theme.warn : Theme.text
+                        tip: window.panelAutoHidden(modelData.key)
+                             ? qsTr("%1: oculto por falta de espacio en la ventana. Clic para mostrarlo (el otro panel lateral cede).").arg(modelData.name)
+                             : (checked ? qsTr("Ocultar: %1").arg(modelData.name) : qsTr("Mostrar: %1").arg(modelData.name))
+                        onClicked: window.setPanel(modelData.key, !window.panelOnScreen(modelData.key))
+                    }
+                }
+            }
+
+            IconToolButton {
                 id: layoutPresetButton
                 objectName: "layoutPresetButton"
-                text: headerRow.compact ? "🗔" : "🗔 " + qsTr("Distribución")
-                implicitHeight: Theme.controlHeight
+                visible: !headerRow.ultraCompact
+                glyph: "layout"
+                label: qsTr("Distribución")
+                showLabel: !headerRow.compact
+                tip: qsTr("Distribuciones de paneles para cada tarea, y las que guardaste")
                 onClicked: layoutPresetMenu.open()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Alternar distribuciones de paneles predefinidas y guardadas")
                 Menu {
                     id: layoutPresetMenu
                     y: layoutPresetButton.height
                     Repeater {
-                        model: Workbench.builtinLayouts
+                        model: window.layoutsFor(window.workspaceKey)
                         MenuItem {
                             text: modelData.name
-                            onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKeys[workspaceTabs.currentIndex] ?? "creator")
+                            onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKey)
                         }
                     }
                     MenuSeparator { visible: Workbench.savedLayouts.length > 0 }
@@ -564,34 +802,74 @@ ApplicationWindow {
                         onTriggered: saveLayoutDialog.open()
                     }
                     MenuItem {
-                        text: qsTr("Restablecer de fábrica")
+                        text: qsTr("Restablecer paneles de este workspace")
                         onTriggered: window.layout.reset()
                     }
                 }
             }
 
-            Item { Layout.fillWidth: true }
+            // Menú «Más»: lo que sale de la barra en ventanas muy estrechas.
+            IconToolButton {
+                id: moreButton
+                objectName: "headerMoreButton"
+                visible: headerRow.ultraCompact
+                glyph: "more"
+                label: qsTr("Más acciones")
+                showLabel: false
+                onClicked: moreMenu.open()
+                Menu {
+                    id: moreMenu
+                    y: moreButton.height
+                    MenuItem {
+                        text: workspaceTabs.currentIndex === 2 ? qsTr("Abrir Character Forge (.sncf)…") : qsTr("Abrir proyecto (.snps)…")
+                        enabled: openButton.enabled
+                        onTriggered: openButton.clicked()
+                    }
+                    MenuItem { text: qsTr("Guardar proyecto"); enabled: saveButton.enabled; onTriggered: saveButton.clicked() }
+                    MenuSeparator {}
+                    MenuItem { text: qsTr("Panel izquierdo (Ctrl+B)"); checkable: true; checked: window.panelOnScreen("left"); onTriggered: window.setPanel("left", checked) }
+                    MenuItem { text: qsTr("Panel derecho (Ctrl+Alt+B)"); checkable: true; checked: window.panelOnScreen("right"); onTriggered: window.setPanel("right", checked) }
+                    MenuItem { text: qsTr("Consola (Ctrl+J)"); checkable: true; checked: window.panelOnScreen("bottom"); onTriggered: window.setPanel("bottom", checked) }
+                    MenuSeparator {}
+                    Menu {
+                        title: qsTr("Distribución")
+                        Repeater {
+                            model: window.layoutsFor(window.workspaceKey)
+                            MenuItem {
+                                text: modelData.name
+                                onTriggered: Workbench.applyBuiltinLayout(modelData.key, window.workspaceKey)
+                            }
+                        }
+                    }
+                }
+            }
 
-            ToolButton {
+            Rectangle { width: 1; height: Theme.px(22); color: Theme.border; visible: !headerRow.ultraCompact }
+
+            IconToolButton {
                 objectName: "settingsButton"
-                text: headerRow.compact ? "⚙" : "⚙ " + qsTr("Configuración")
-                implicitHeight: Theme.controlHeight
-                Accessible.name: qsTr("Configuración")
+                glyph: "settings"
+                label: qsTr("Configuración")
+                showLabel: !headerRow.compact
+                shortcutText: "Ctrl+,"
+                tip: qsTr("Tema, escala, distribuciones, visor 3D, retratos y más")
                 onClicked: settingsCenter.openAt("", "")
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Tema, escala, distribuciones, visor 3D, retratos y más (Ctrl+,)")
             }
 
             // Botón de exportación principal
-            Button {
+            IconToolButton {
                 objectName: "headerExportButton"
-                text: headerRow.ultraCompact ? qsTr("🚀") : (headerRow.compact ? qsTr("🚀 Exportar") : qsTr("🚀 Exportar Mod…"))
-                highlighted: true
+                glyph: "export"
+                label: headerRow.compact ? qsTr("Exportar") : qsTr("Exportar mod…")
+                showLabel: !headerRow.ultraCompact
+                emphasized: true
+                font.bold: true
                 enabled: window.ready && workspaceTabs.currentIndex !== 2
                 implicitHeight: Theme.controlHeight + Theme.spacingXs
-                font.bold: true
-                ToolTip.visible: (hovered && workspaceTabs.currentIndex === 2) || (hovered && headerRow.ultraCompact)
-                ToolTip.text: workspaceTabs.currentIndex === 2 ? qsTr("La exportación de NPC nuevos llegará en Fase 2") : qsTr("Exportar mod completo / rostro")
+                tip: workspaceTabs.currentIndex === 2
+                     ? qsTr("No disponible en Character Forge: la exportación de NPC nuevos está bloqueada hasta validar FaceGen nativo.")
+                     : (window.ready ? qsTr("Exportar el mod completo o solo el rostro") : qsTr("Carga un perfil de MO2 para poder exportar"))
+                shortcutText: workspaceTabs.currentIndex === 2 ? "" : "Ctrl+Shift+E"
                 onClicked: exportWizardDialog.open()
             }
         }
@@ -603,7 +881,10 @@ ApplicationWindow {
         objectName: "mainVerticalSplit"
         anchors.fill: parent
         orientation: Qt.Vertical
-        handle: SplitHandleBar { vertical: true }
+        handle: SplitHandleBar {
+            vertical: true
+            onResetRequested: window.layout.bottomHeight = window.layout.defaultBottomHeight
+        }
 
         readonly property bool bottomShown: window.layout.bottomVisible && !window.layout.maximized
         property int appliedBottom: 0
@@ -640,6 +921,7 @@ ApplicationWindow {
 
             // Vista 1: Character Creator completo
             CharacterCreator {
+                id: creatorWorkspace
                 studio: window.studio
             }
 
@@ -665,7 +947,7 @@ ApplicationWindow {
                         spacing: 0
 
                         TabBar {
-                            id: leftTabs
+                            id: outfitLeftTabs
                             Layout.fillWidth: true
                             TabButton { text: qsTr("Prendas") }
                             TabButton { text: qsTr("NPCs") }
@@ -673,11 +955,12 @@ ApplicationWindow {
                         }
 
                         StackLayout {
-                            currentIndex: leftTabs.currentIndex
+                            currentIndex: outfitLeftTabs.currentIndex
                             Layout.fillWidth: true
                             Layout.fillHeight: true
 
                             ArmorCatalog {
+                                id: outfitArmorCatalog
                                 studio: window.studio
                                 onPreviewRequested: (formKey) => {
                                     window.studio.armorPreview.selectArmor(formKey)
@@ -685,6 +968,7 @@ ApplicationWindow {
                             }
 
                             NpcBrowser {
+                                id: outfitNpcBrowser
                                 objectName: "outfitNpcBrowser"
                                 studio: window.studio
                                 // The editor of the selected NPC is the character workspace.
@@ -708,6 +992,8 @@ ApplicationWindow {
                         studio: window.studio
                         sceneOverride: window.studio.armorPreview
                         previewMode: true
+                        onCatalogRequested: window.showCatalog()
+                        onNpcSearchRequested: window.searchNpc()
                     }
                 }
 
@@ -747,6 +1033,7 @@ ApplicationWindow {
             }
 
             CharacterForge {
+                id: forgeWorkspace
                 forge: window.studio.forge
             }
         }
@@ -765,8 +1052,7 @@ ApplicationWindow {
     footer: Rectangle {
         implicitHeight: Theme.statusHeight
         color: Theme.header
-        border.color: Theme.borderSubtle
-        border.width: 1
+        Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.border }
 
         RowLayout {
             anchors.fill: parent
@@ -787,6 +1073,7 @@ ApplicationWindow {
             Text {
                 text: window.studio.progressText
                 color: Theme.textDim
+                font.family: Theme.fontFamily
                 font.pixelSize: Theme.small
                 elide: Text.ElideRight
                 Layout.fillWidth: true
@@ -800,43 +1087,62 @@ ApplicationWindow {
             }
 
             Text {
+                id: summaryText
                 visible: window.ready
                 text: qsTr("%1 NPC · %2 armaduras · %3 plugins · %4 archivos")
                       .arg(window.studio.summary.npcs ?? 0).arg(window.studio.summary.armors ?? 0)
                       .arg(window.studio.summary.activePlugins ?? 0).arg(window.studio.summary.files ?? 0)
                 color: Theme.textDim
+                font.family: Theme.fontFamily
                 font.pixelSize: Theme.small
                 // Gives way (elided) before the scale and console buttons leave a narrow window.
                 elide: Text.ElideRight
                 Layout.fillWidth: true
                 Layout.maximumWidth: implicitWidth
+                ToolTip.visible: summaryHover.hovered && truncated
+                ToolTip.text: text
+                HoverHandler { id: summaryHover }
+            }
+
+            // Text held at its legible minimum: the preference stays as chosen, and this says so.
+            StatusBadge {
+                objectName: "legibilityBadge"
+                visible: Theme.legibilityFloor
+                text: qsTr("TEXTO AL MÍNIMO LEGIBLE")
+                tone: Theme.warn
+                ToolTip.visible: legibilityHover.hovered
+                ToolTip.text: qsTr("La escala %1 % con texto %2 % haría el texto demasiado pequeño: se mantiene en %3 px. Tu preferencia no cambia. Clic para ajustarla.")
+                              .arg(Workbench.uiScale).arg(Workbench.fontScale).arg(Theme.normal)
+                HoverHandler { id: legibilityHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: scaleDialog.open() }
             }
 
             Rectangle { width: 1; height: Theme.px(16); color: Theme.borderSubtle }
 
             // Escala actual; un clic abre las preferencias de apariencia.
-            ToolButton {
+            IconToolButton {
                 objectName: "scaleStatusButton"
-                text: Workbench.uiScale + " %" + (Workbench.fontScale !== 100 ? " · " + qsTr("texto %1 %").arg(Workbench.fontScale) : "")
+                label: Workbench.uiScale + " %" + (Workbench.fontScale !== 100 ? " · " + qsTr("texto %1 %").arg(Workbench.fontScale) : "")
+                glyph: "zoom-in"
                 implicitHeight: Theme.statusHeight - 6
                 font.pixelSize: Theme.small
+                tip: qsTr("Escala de interfaz y tamaño del texto (Ctrl++ / Ctrl+- / Ctrl+0)")
                 onClicked: scaleDialog.open()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Escala de interfaz: Ctrl++ / Ctrl+- / Ctrl+0")
             }
 
             Rectangle { width: 1; height: Theme.px(16); color: Theme.borderSubtle }
 
             // Botón de alternancia de Consola y Diagnósticos
-            ToolButton {
-                text: "📟 " + qsTr("Consola & Diagnósticos") + (window.studio.diagnostics.count > 0 ? " (" + window.studio.diagnostics.count + ")" : "")
+            IconToolButton {
+                objectName: "consoleToggleButton"
+                glyph: "console"
+                label: qsTr("Consola y diagnósticos") + (window.studio.diagnostics.count > 0 ? " (" + window.studio.diagnostics.count + ")" : "")
                 checkable: true
                 checked: mainSplit.bottomShown
                 implicitHeight: Theme.statusHeight - 6
-                font.pixelSize: Theme.small
+                shortcutText: "Ctrl+J"
+                tip: qsTr("Mostrar u ocultar la consola y los diagnósticos técnicos")
                 onClicked: window.setPanel("bottom", !mainSplit.bottomShown)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Mostrar/ocultar panel de consola y diagnósticos técnicos")
             }
         }
     }

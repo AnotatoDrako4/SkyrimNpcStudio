@@ -9,6 +9,21 @@ Item {
     required property StudioController studio
     property bool advancedMode: Theme.advancedMode
 
+    // Explorer on screen (the user asked for it), on the NPC search or on the armor catalog, search focused.
+    // Used by the empty viewer and by the command palette.
+    function searchNpc() {
+        creatorSplit.layout.maximized = false
+        creatorSplit.layout.leftVisible = true
+        leftTabs.currentIndex = 0
+        creatorNpcBrowser.focusSearch()
+    }
+    function showCatalog() {
+        creatorSplit.layout.maximized = false
+        creatorSplit.layout.leftVisible = true
+        leftTabs.currentIndex = 1
+        creatorArmorCatalog.focusSearch()
+    }
+
     ExportWizardDialog {
         id: exportWizard
         studio: root.studio
@@ -52,12 +67,14 @@ Item {
                     Layout.fillHeight: true
 
                     NpcBrowser {
+                        id: creatorNpcBrowser
                         objectName: "creatorNpcBrowser"
                         studio: root.studio
                         onEditRequested: rightTabs.currentIndex = 1  // Rostro
                     }
 
                     ArmorCatalog {
+                        id: creatorArmorCatalog
                         studio: root.studio
                         onPreviewRequested: (formKey) => {
                             root.studio.armorPreview.selectArmor(formKey)
@@ -173,6 +190,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 studio: root.studio
+                // The empty viewer's actions: the explorer comes back (a user action) on the right tab, search focused.
+                onNpcSearchRequested: root.searchNpc()
+                onCatalogRequested: root.showCatalog()
             }
 
             // Barra inferior de acciones rápidas
