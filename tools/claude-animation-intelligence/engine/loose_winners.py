@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from . import issues, sandbox
 from .mo2_profile import Instance, Profile
@@ -158,6 +159,7 @@ def build_index(
     include_overwrite: bool = True,
     hash_limit: int = 600,
     full_walk: bool = False,
+    progress: "Callable[[dict[str, object]], None] | None" = None,
 ) -> LooseIndex:
     """Walk every enabled provider in ascending priority and index relevant paths."""
     clock = clock or Clock(budget)
@@ -179,7 +181,10 @@ def build_index(
         top = (providers[-1][1] + 1) if providers else 0
         providers.append(("<Overwrite>", top, instance.overwrite_dir))
 
-    for mod_name, priority, root in providers:
+    for done, (mod_name, priority, root) in enumerate(providers):
+        if progress is not None:
+            progress({"event": "progress", "phase": "walk", "done": done,
+                      "total": len(providers), "mod": mod_name})
         if clock.expired:
             index.walk.note_truncation("time budget exhausted before all mods were walked")
             break

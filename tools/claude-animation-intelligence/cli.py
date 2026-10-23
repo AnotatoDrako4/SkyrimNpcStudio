@@ -25,6 +25,7 @@ import time
 import traceback
 from ctypes import wintypes
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -96,6 +97,18 @@ def working_set_bytes() -> int | None:
         return None
 
 
+def progress_emitter(args: argparse.Namespace) -> "Callable[[dict[str, object]], None] | None":
+    """JSON-lines progress on stderr, for a UI that needs more than a blocking call."""
+    if not getattr(args, "progress", False):
+        return None
+
+    def emit(event: dict[str, object]) -> None:
+        sys.stderr.write(json.dumps(event, ensure_ascii=False) + "\n")
+        sys.stderr.flush()
+
+    return emit
+
+
 def budget_from_args(args: argparse.Namespace) -> Budget:
     return Budget(
         max_depth=args.max_depth,
@@ -115,6 +128,12 @@ def add_budget_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-rows", type=int, default=2_000)
     parser.add_argument("--max-seconds", type=float, default=1_800.0)
     parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="emit one JSON progress event per line on stderr (stdout stays human-readable); "
+        "interrupting the process cancels the scan with exit code 3",
+    )
+    parser.add_argument(
         "--full-walk",
         action="store_true",
         help="also walk top-level textures/, sound/, music/ and calientetools/ "
@@ -128,16 +147,28 @@ def scan_profile(
     budget: Budget,
     *,
     full_walk: bool = False,
+    progress: "Callable[[dict[str, object]], None] | None" = None,
 ) -> reports.ScanResult:
     """One profile, one isolated snapshot. No state is shared between calls."""
     started = time.monotonic()
     profile = mo2_profile.load_profile(instance, profile_name, budget)
     clock = Clock(budget)
 
-    index = loose_winners.build_index(instance, profile, budget, clock, full_walk=full_walk)
+    def phase(name: str) -> None:
+        if progress is not None:
+            progress({"event": "phase", "phase": name, "profile": profile_name})
+
+    phase("walk")
+    index = loose_winners.build_index(
+        instance, profile, budget, clock, full_walk=full_walk, progress=progress
+    )
+    phase("oar")
     oar = oar_discovery.discover(index, budget)
+    phase("dar")
     dar = dar_discovery.discover(index, budget)
+    phase("behavior")
     behavior = behavior_outputs.detect(index, budget)
+    phase("archives")
 
     primary, primary_source = mo2_profile.primary_plugins(instance, budget)
     active = {name.lower() for name, is_active in profile.plugins if is_active}
@@ -148,6 +179,7 @@ def scan_profile(
         index, budget, loaded_plugins=active | primary, listed_plugins=listed
     )
 
+    phase("issues")
     found: list[issue_mod.Issue] = []
     found.extend(loose_winners.conflict_issues(index, budget))
     found.extend(
@@ -229,7 +261,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return EXIT_INPUT
 
     try:
-        result = scan_profile(instance, args.profile, budget, full_walk=args.full_walk)
+        result = scan_profile(
+            instance, args.profile, budget, full_walk=args.full_walk,
+            progress=progress_emitter(args),
+        )
     except (mo2_profile.ProfileError, sandbox.SandboxError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_INPUT
@@ -245,7 +280,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     print(f"scan complete in {result.duration_seconds:.2f}s")
     _print_summary(payload, written)
-    return exit_code_for(result)
+    code = exit_code_for(result)
+    emit = progress_emitter(args)
+    if emit is not None:
+        emit({"event": "done", "exitCode": code, "result": str(written[0])})
+    return code
 
 
 def _comparison(a: reports.ScanResult, b: reports.ScanResult) -> dict[str, object]:
@@ -310,8 +349,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
         )
         return EXIT_INPUT
 
-    result_a = scan_profile(instance, args.profile_a, budget, full_walk=args.full_walk)
-    result_b = scan_profile(instance, args.profile_b, budget, full_walk=args.full_walk)
+    emit = progress_emitter(args)
+    result_a = scan_profile(
+        instance, args.profile_a, budget, full_walk=args.full_walk, progress=emit
+    )
+    result_b = scan_profile(
+        instance, args.profile_b, budget, full_walk=args.full_walk, progress=emit
+    )
     comparison = _comparison(result_a, result_b)
 
     out_dir = Path(args.out)
@@ -338,7 +382,10 @@ def cmd_compare(args: argparse.Namespace) -> int:
     for path in written:
         print(f"  wrote                       : {path}")
 
-    return max(exit_code_for(result_a), exit_code_for(result_b))
+    code = max(exit_code_for(result_a), exit_code_for(result_b))
+    if emit is not None:
+        emit({"event": "done", "exitCode": code, "result": str(written[0])})
+    return code
 
 
 def cmd_inspect_oar(args: argparse.Namespace) -> int:
@@ -625,6 +672,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except KeyboardInterrupt:
+        # Cancellation contract for a UI: an interrupt ends the run with exit 3 and a
+        # final event; nothing outside --out has been written, so no cleanup is needed.
+        if getattr(args, "progress", False):
+            sys.stderr.write(json.dumps({"event": "cancelled", "exitCode": EXIT_PARTIAL}) + "\n")
         print("interrupted", file=sys.stderr)
         return EXIT_PARTIAL
     except sandbox.SandboxError as exc:
