@@ -234,16 +234,17 @@ class OarTests(FixtureCase):
         self.assertEqual(overlap.runtime_verification, issues.RUNTIME_CONDITION_DEPENDENT)
 
     def test_O07_priority_tie_is_a_warning_not_an_arbitrary_choice(self) -> None:
-        _, _, catalog = self._catalog(
-            pack(
-                {
-                    f"{OAR_BASE}/Pack/config.json": group(),
-                    f"{OAR_BASE}/Pack/A/config.json": submod("A", 500),
-                    f"{OAR_BASE}/Pack/A/female/mt_sprint.hkx": HKX,
-                    f"{OAR_BASE}/Pack/B/config.json": submod("B", 500),
-                    f"{OAR_BASE}/Pack/B/female/mt_sprint.hkx": HKX,
-                }
-            )
+        catalog = self._two_mod_catalog(
+            {
+                f"{OAR_BASE}/A/config.json": group("A"),
+                f"{OAR_BASE}/A/A/config.json": submod("A", 500),
+                f"{OAR_BASE}/A/A/female/mt_sprint.hkx": HKX,
+            },
+            {
+                f"{OAR_BASE}/B/config.json": group("B"),
+                f"{OAR_BASE}/B/B/config.json": submod("B", 500),
+                f"{OAR_BASE}/B/B/female/mt_sprint.hkx": HKX,
+            },
         )
         found = oar_rules.overlap_issues(catalog, self.budget)
         self.assertEqual(len(found), 1)
@@ -252,6 +253,148 @@ class OarTests(FixtureCase):
         self.assertEqual(tie.confidence, issues.UNVERIFIABLE)
         self.assertEqual(tie.detail["priority"], 500)
         self.assertEqual(len(tie.providers), 2)
+
+    def test_O07b_tie_inside_one_mod_is_informational(self) -> None:
+        """Real case: weapon-specific jump submods of one mod all at priority 99999."""
+        _, _, catalog = self._catalog(
+            pack(
+                {
+                    f"{OAR_BASE}/Pack/config.json": group(),
+                    f"{OAR_BASE}/Pack/Dagger/config.json": submod("Dagger jump", 99999),
+                    f"{OAR_BASE}/Pack/Dagger/mt_jumpfast.hkx": HKX,
+                    f"{OAR_BASE}/Pack/Sword/config.json": submod("Sword jump", 99999),
+                    f"{OAR_BASE}/Pack/Sword/mt_jumpfast.hkx": HKX,
+                }
+            )
+        )
+        found = oar_rules.overlap_issues(catalog, self.budget)
+        self.assertEqual([i.category for i in found], [issues.INTRA_MOD_OVERLAP])
+        self.assertEqual(found[0].severity, "info")
+        self.assertIn("share priority 99999", found[0].what_was_observed)
+
+    def test_O06c_variants_folder_targets_the_animation_it_replaces(self) -> None:
+        """Parsing.cpp ConvertVariantsPath: _variants_X is one replacement for X.hkx."""
+        catalog = self._two_mod_catalog(
+            {
+                f"{OAR_BASE}/A/config.json": group("A"),
+                f"{OAR_BASE}/A/Sub/config.json": submod("Variants", 300),
+                f"{OAR_BASE}/A/Sub/female/_variants_mt_runforward/v1.hkx": HKX,
+                f"{OAR_BASE}/A/Sub/female/_variants_mt_runforward/v2.hkx": HKX,
+            },
+            {
+                f"{OAR_BASE}/B/config.json": group("B"),
+                f"{OAR_BASE}/B/Sub/config.json": submod("Plain", 100),
+                f"{OAR_BASE}/B/Sub/female/mt_runforward.hkx": HKX,
+            },
+        )
+        variants = next(s for s in catalog.submods if s.name == "Variants")
+        self.assertEqual(variants.targets, ["female/mt_runforward.hkx"])
+        overlaps = oar_rules.overlap_issues(catalog, self.budget)
+        self.assertEqual(len(overlaps), 1, "the variants folder must collide with the plain clip")
+        self.assertEqual(overlaps[0].subject, "female/mt_runforward.hkx")
+        self.assertTrue(overlaps[0].detail["crossMod"])
+
+    def test_O06d_animation_disabled_in_replacementanimdatas_is_not_a_target(self) -> None:
+        sub_dir = f"{OAR_BASE}/Pack/Sub"
+        _, _, catalog = self._catalog(
+            pack(
+                {
+                    f"{OAR_BASE}/Pack/config.json": group(),
+                    f"{sub_dir}/config.json": submod(
+                        "Sub", 100,
+                        replacementAnimDatas=[{
+                            "projectName": "DefaultFemale",
+                            "path": "data\\" + sub_dir.replace("/", "\\") + "\\female\\mt_walk.hkx",
+                            "disabled": True,
+                        }],
+                    ),
+                    f"{sub_dir}/female/mt_walk.hkx": HKX,
+                    f"{sub_dir}/female/mt_idle.hkx": HKX,
+                }
+            )
+        )
+        found = catalog.submods[0]
+        self.assertEqual(found.targets, ["female/mt_idle.hkx"])
+        self.assertEqual(len(found.disabled_animation_keys), 1)
+
+    def test_O06e_replacementanimdatas_are_settings_not_targets(self) -> None:
+        """Regression: a submod carrying replacementAnimDatas used them as targets, so it
+        never overlapped a submod without them (ReplacerMods.cpp LoadAnimData)."""
+        catalog = self._two_mod_catalog(
+            {
+                f"{OAR_BASE}/A/config.json": group("A"),
+                f"{OAR_BASE}/A/Sub/config.json": submod(
+                    "WithSettings", 300,
+                    replacementAnimDatas=[{"projectName": "DefaultFemale",
+                                           "path": "data\\x\\female\\mt_idle.hkx"}],
+                ),
+                f"{OAR_BASE}/A/Sub/female/mt_idle.hkx": HKX,
+            },
+            {
+                f"{OAR_BASE}/B/config.json": group("B"),
+                f"{OAR_BASE}/B/Sub/config.json": submod("WithoutSettings", 100),
+                f"{OAR_BASE}/B/Sub/female/mt_idle.hkx": HKX,
+            },
+        )
+        overlaps = oar_rules.overlap_issues(catalog, self.budget)
+        self.assertEqual([o.subject for o in overlaps], ["female/mt_idle.hkx"])
+
+    def test_preset_conditions_count_for_references_and_extensions(self) -> None:
+        root = build_instance(
+            self.tmp / "inst",
+            {
+                "OarMod": pack(
+                    {
+                        f"{OAR_BASE}/Pack/config.json": {
+                            "name": "Pack",
+                            "conditionPresets": [{
+                                "name": "Base",
+                                "conditions": [{
+                                    "condition": "HasMagicEffect",
+                                    "requiredVersion": "1.0.0.0",
+                                    "Magic effect": {"pluginName": "Aroused.esm", "formID": "1"},
+                                }],
+                            }],
+                        },
+                        f"{OAR_BASE}/Pack/Sub/config.json": submod(
+                            "Sub", 100,
+                            conditions=[{"condition": "PRESET", "requiredVersion": "2.2.0.0",
+                                         "Preset": "Base"}],
+                        ),
+                    }
+                )
+            },
+            ["+OarMod"],
+            plugins=["*SomeMod.esp"],
+        )
+        instance, profile = self.load(root)
+        index = loose_winners.build_index(instance, profile, self.budget, include_overwrite=False)
+        catalog = oar_discovery.discover(index, self.budget)
+        found = catalog.submods[0]
+        self.assertEqual(len(found.preset_conditions), 1)
+        self.assertEqual(found.referenced_plugins, ["Aroused.esm"])
+        missing = [i for i in oar_rules.config_issues(catalog, profile, self.budget)
+                   if i.category == issues.MISSING_REFERENCE]
+        self.assertEqual(missing[0].detail["absentPlugins"], ["Aroused.esm"])
+
+    def test_missing_preset_is_a_config_error(self) -> None:
+        _, profile, catalog = self._catalog(
+            pack(
+                {
+                    f"{OAR_BASE}/Pack/config.json": group(),
+                    f"{OAR_BASE}/Pack/Sub/config.json": submod(
+                        "Sub", 100,
+                        conditions=[{"condition": "PRESET", "requiredVersion": "2.2.0.0",
+                                     "Preset": "DoesNotExist"}],
+                    ),
+                }
+            )
+        )
+        self.assertEqual(catalog.submods[0].missing_presets, ["DoesNotExist"])
+        errors = [i for i in oar_rules.config_issues(catalog, profile, self.budget)
+                  if i.category == issues.CONFIG_ERROR]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].detail["missingPresets"], ["DoesNotExist"])
 
     def test_O08_unknown_condition_is_an_extension_requirement_not_an_error(self) -> None:
         _, profile, catalog = self._catalog(
