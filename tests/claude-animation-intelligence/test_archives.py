@@ -178,6 +178,43 @@ class AnalysisTests(FixtureCase):
         self.assertIn("plugin", overlap[0].why_it_matters)
         self.assertNotIn("winner", {p.role for p in overlap[0].providers})
 
+    def test_A06b_load_order_names_the_archive_loaded_last_as_likely_winner(self) -> None:
+        root = build_instance(
+            self.tmp / "inst",
+            {
+                "PackA": {"PackA.bsa": make_bsa({ANIM_DIR: ["mt_run.hkx"]})},
+                "PackB": {"PackB.bsa": make_bsa({ANIM_DIR: ["mt_run.hkx"]})},
+            },
+            ["+PackA", "+PackB"],  # MO2 priority favours PackA: must NOT decide archives
+        )
+        instance, profile = self.load(root)
+        index = loose_winners.build_index(instance, profile, self.budget, include_overwrite=False)
+        catalog = bsa_index.index_archives(
+            index, self.budget, load_order=["skyrim.esm", "packb.esp", "packa.esp"]
+        )
+        overlap = [i for i in bsa_index.archive_issues(catalog, index, self.budget)
+                   if i.category == issues.ARCHIVE_PATH_OVERLAP][0]
+        self.assertEqual(overlap.confidence, issues.LIKELY)
+        self.assertTrue(overlap.providers[0].role.startswith("winner"))
+        self.assertEqual(overlap.providers[0].path, "PackA.bsa", "packa.esp loads last")
+        self.assertIn("load order", overlap.why_it_matters)
+
+    def test_load_order_is_masters_then_ccc_then_plugins_txt(self) -> None:
+        from engine import mo2_profile
+
+        root = build_instance(
+            self.tmp / "inst2", {"M": {MT_IDLE: b"x"}}, ["+M"],
+            plugins=["*Zeta.esp", "Inactive.esp", "*Alpha.esp"],
+        )
+        instance, profile = self.load(root)
+        game = self.tmp / "game"
+        game.mkdir()
+        (game / "Skyrim.ccc").write_text("ccFirst.esl\nccSecond.esm\n", encoding="utf-8")
+        instance.game_path = str(game)
+        order = mo2_profile.load_order(instance, profile, self.budget)
+        self.assertEqual(order[:5], list(mo2_profile.BASE_MASTER_ORDER))
+        self.assertEqual(order[5:], ["ccfirst.esl", "ccsecond.esm", "zeta.esp", "alpha.esp"])
+
     def test_A07_plugin_association_marks_loaded_and_disabled_archives(self) -> None:
         _, catalog, _ = self._scan(
             {

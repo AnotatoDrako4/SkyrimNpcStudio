@@ -176,7 +176,8 @@ def scan_profile(
     # Must run before conflict_issues: it marks which archives were indexed, so the
     # loose-only coverage note only lists archives whose names could not be read.
     archives = bsa_index.index_archives(
-        index, budget, loaded_plugins=active | primary, listed_plugins=listed
+        index, budget, loaded_plugins=active | primary, listed_plugins=listed,
+        load_order=mo2_profile.load_order(instance, profile, budget),
     )
 
     phase("issues")
