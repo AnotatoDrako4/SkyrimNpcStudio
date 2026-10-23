@@ -323,7 +323,8 @@ def archive_issues(catalog: ArchiveCatalog, loose: LooseIndex, budget: Budget) -
                 f"load order the last one loaded is {winner.path} (via {winner.plugin})."
             )
             why = (
-                "Between archives the copy from the plugin loaded LAST is used. The order comes "
+                "Between archives the copy from the plugin loaded LAST in the load order is "
+                "used. The order comes "
                 "from plugins.txt (MO2 LoadOrderMechanism::PluginsTxt) after the primary "
                 "plugins; the engine's mounting order itself was not verified, hence 'likely'."
             )
