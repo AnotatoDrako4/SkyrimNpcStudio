@@ -11,6 +11,7 @@ ScrollView {
     required property StudioController studio
     readonly property OutfitEditor outfit: studio.outfit
     signal exportRequested()
+    signal browseRequested()
     clip: true
     // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
     Component.onCompleted: {
@@ -228,6 +229,18 @@ ScrollView {
         SectionHeader {
             title: qsTr("Diseñador de Atuendos")
             detail: root.outfit.npcLabel.length > 0 ? root.outfit.npcLabel : qsTr("Outfit independiente")
+        }
+
+        // Quick path into the actual armor catalog; the editor never invents ARMO records.
+        Button {
+            objectName: "outfitBrowseArmorsButton"
+            Layout.fillWidth: true
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            text: qsTr("Añadir prendas desde el catálogo…")
+            enabled: root.outfit.npcFormKey.length > 0 || root.outfit.pieces.length > 0
+            Accessible.name: qsTr("Abrir catálogo de prendas y añadirlas al conjunto")
+            onClicked: root.browseRequested()
         }
 
         // Estado sin NPC seleccionado
