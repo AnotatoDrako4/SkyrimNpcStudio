@@ -187,58 +187,142 @@ ScrollView {
             }
         }
 
-        // Change a head part: only parts valid for this NPC's race and sex (worker query), applied as
-        // a PNAM edit; the head is rebuilt and the export carries it. Blocked for heads whose morphs do
-        // not match their mesh (see «Protección facial»).
+        // Safe HeadPart selection: live search and readable mod provenance; the existing
+        // worker still checks race/sex and the AppearanceEditor still guards FaceGen.
         Text {
-            text: qsTr("Cambiar pieza de cabeza")
+            text: qsTr("Elegir peinado, ojos o cejas")
+            color: Theme.accent
+            font.bold: true
+            font.pixelSize: Theme.fs(13)
+        }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("Busca estilos de los mods activos. Haz clic para probar uno en el NPC; puedes deshacer el cambio.")
             color: Theme.textDim
             font.pixelSize: Theme.small
+            wrapMode: Text.WordWrap
+        }
+        Timer {
+            id: partSearchDebounce
+            interval: 280
+            repeat: false
+            onTriggered: {
+                if (root.headPartsAllowed && root.studio.appearance.loaded)
+                    root.studio.appearance.searchHeadParts(partType.currentValue, partFilter.text)
+            }
+        }
+        Connections {
+            target: root.studio.appearance
+            function onRecipeChanged() {
+                // Every new NPC starts a fresh search against that NPC's valid records.
+                if (root.studio.appearance.loaded) partSearchDebounce.restart()
+            }
+        }
+        Component.onCompleted: {
+            if (root.studio.appearance.loaded) partSearchDebounce.restart()
         }
         RowLayout {
             Layout.fillWidth: true
-            enabled: root.headPartsAllowed
+            spacing: 5
+            enabled: root.headPartsAllowed && root.studio.appearance.loaded
             ComboBox {
                 id: partType
-                implicitWidth: 120
-                model: ["Hair", "Eyes", "Eyebrows", "FacialHair", "Scars"]
+                objectName: "headPartTypeSelector"
+                Layout.preferredWidth: Theme.px(126)
+                model: [
+                    { text: qsTr("Peinados"), value: "Hair" },
+                    { text: qsTr("Ojos"), value: "Eyes" },
+                    { text: qsTr("Cejas"), value: "Eyebrows" },
+                    { text: qsTr("Barba"), value: "FacialHair" },
+                    { text: qsTr("Cicatrices"), value: "Scars" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                Accessible.name: qsTr("Tipo de parte de cabeza")
+                onActivated: partSearchDebounce.restart()
             }
             TextField {
                 id: partFilter
+                objectName: "headPartQuickSearch"
                 Layout.fillWidth: true
-                placeholderText: qsTr("Filtrar (opcional)")
-                onAccepted: root.studio.appearance.searchHeadParts(partType.currentText, partFilter.text)
+                placeholderText: qsTr("Nombre del estilo…")
+                Accessible.name: qsTr("Buscar peinado o parte de cabeza")
+                onTextChanged: partSearchDebounce.restart()
+                onAccepted: partSearchDebounce.restart()
             }
             Button {
                 text: qsTr("Buscar")
-                onClicked: root.studio.appearance.searchHeadParts(partType.currentText, partFilter.text)
+                Accessible.name: qsTr("Buscar partes de cabeza")
+                onClicked: partSearchDebounce.restart()
             }
         }
         Text {
             visible: !root.headPartsAllowed
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            color: Theme.textDim
+            color: Theme.warn
             font.pixelSize: Theme.small
             text: root.studio.appearance.analysing ? qsTr("Disponible cuando termine el análisis del FaceGen.")
-                                                   : qsTr("Bloqueado para esta cabeza: ver «Protección facial».")
+                                                   : qsTr("Bloqueado para este rostro: revisa Protección facial antes de cambiar las piezas.")
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: root.headPartsAllowed && root.studio.appearance.loaded
+            color: Theme.textDim
+            font.pixelSize: Theme.small
+            text: partOptions.count > 0 ? qsTr("%1 estilos disponibles · clic para previsualizar").arg(partOptions.count)
+                                        : qsTr("Sin resultados para esta búsqueda.")
         }
         ListView {
             id: partOptions
+            objectName: "headPartQuickResults"
             Layout.fillWidth: true
-            Layout.preferredHeight: count > 0 ? Math.min(contentHeight, 180) : 0
+            Layout.preferredHeight: count > 0 ? Math.min(contentHeight, Theme.px(245)) : 0
             visible: count > 0
             clip: true
             enabled: root.headPartsAllowed
+            boundsBehavior: Flickable.StopAtBounds
+            spacing: 3
             model: root.studio.appearance.headPartOptions
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             delegate: ItemDelegate {
+                id: partResult
                 required property var modelData
                 width: ListView.view.width
-                height: 26
-                font.pixelSize: Theme.small
-                text: (modelData.editorId || modelData.formKey) + "  ·  " + modelData.plugin
+                height: Theme.px(52)
+                Accessible.name: qsTr("%1, plugin %2. Aplicar al NPC")
+                    .arg(modelData.name || modelData.editorId || modelData.formKey).arg(modelData.plugin)
+                ToolTip.visible: hovered
+                ToolTip.delay: 650
+                ToolTip.text: (modelData.editorId || modelData.formKey) + "\n" + modelData.plugin
+                    + (modelData.modelPath ? "\n" + modelData.modelPath : "")
+                contentItem: ColumnLayout {
+                    spacing: 2
+                    Text {
+                        Layout.fillWidth: true
+                        text: partResult.modelData.name || partResult.modelData.editorId || partResult.modelData.formKey
+                        color: Theme.text
+                        font.bold: true
+                        font.pixelSize: Theme.small
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: (partResult.modelData.editorId || partResult.modelData.formKey) + " · " + partResult.modelData.plugin
+                        color: Theme.textDim
+                        font.pixelSize: Theme.micro
+                        elide: Text.ElideRight
+                    }
+                }
                 onClicked: root.studio.appearance.setHeadPart(modelData.formKey, modelData.type)
             }
+        }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("Los paquetes que solo contienen NIF necesitan un registro HDPT para añadir un peinado equipable en Skyrim.")
+            color: Theme.textMuted
+            font.pixelSize: Theme.micro
+            wrapMode: Text.WordWrap
         }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
