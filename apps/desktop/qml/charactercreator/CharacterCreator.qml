@@ -305,6 +305,7 @@ Item {
                     OutfitPanel {
                         studio: root.studio
                         onExportRequested: exportWizard.open()
+                        onBrowseRequested: root.showCatalog()
                     }
 
                     // Pestaña 6: Origen (qué mod controla cada parte y conflictos de FaceGen)
