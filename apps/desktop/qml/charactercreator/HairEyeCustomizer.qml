@@ -38,6 +38,9 @@ ScrollView {
         && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "hair-color")
     readonly property bool headPartsAllowed: !root.studio.appearance.analysing
         && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "head-parts")
+    onHeadPartsAllowedChanged: {
+        if (headPartsAllowed && studio.appearance.loaded) partSearchDebounce.restart()
+    }
 
     ColumnLayout {
         width: root.availableWidth
