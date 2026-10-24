@@ -211,6 +211,7 @@ Item {
 
                     Button {
                         text: qsTr("↶ Deshacer")
+                        Accessible.name: qsTr("Deshacer")
                         Layout.fillWidth: true
                         Layout.maximumWidth: implicitWidth
                         Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))
@@ -220,6 +221,7 @@ Item {
 
                     Button {
                         text: qsTr("↷ Rehacer")
+                        Accessible.name: qsTr("Rehacer")
                         Layout.fillWidth: true
                         Layout.maximumWidth: implicitWidth
                         Layout.minimumWidth: Math.min(implicitWidth, Theme.px(44))

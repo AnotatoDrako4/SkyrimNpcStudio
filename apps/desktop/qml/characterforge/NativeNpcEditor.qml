@@ -27,9 +27,15 @@ ColumnLayout {
         }
     }
     ScrollView {
+        id: editorScroll
         Layout.fillWidth: true
         Layout.fillHeight: true
         contentWidth: availableWidth
+        // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+        Component.onCompleted: {
+            editorScroll.ScrollBar.vertical.Accessible.name = qsTr("Desplazar el editor del NPC")
+            editorScroll.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar el editor del NPC en horizontal")
+        }
         ColumnLayout {
             width: parent.width
             spacing: 12

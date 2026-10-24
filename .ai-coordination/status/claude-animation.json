@@ -1,6 +1,6 @@
 {
   "agent": "Claude B (Animation Intelligence)",
-  "timestamp": "2026-10-23T09:40:00-03:00",
+  "timestamp": "2026-10-23T10:30:00-03:00",
   "status": "ANIM01_TESTS_UNITARIOS_OK_REAL_PROFILE_READ_ONLY",
   "mission": "CLAUDE-B-ANIM-01: standalone read-only diagnostics for Skyrim SE animation mods in an MO2 profile (loose .hkx precedence, OAR/DAR rules, behaviour-engine output, offline HTML explorer)",
   "increment": "Phases 0-5 complete: Python 3.11 stdlib CLI (scan/compare/inspect-oar/benchmark/verify-manifest/selftest), 87 tests (86 PASS, 1 justified SKIP), all 36 mandatory cases PASS, real read-only runs on profiles Default and BodyChangeNG-Test, benchmark, SHA-256 manifests, versioned JSON contract and integration handoff. No core file touched.",
@@ -77,8 +77,8 @@
     "highFindings": 6
   },
   "tests": {
-    "total": 116,
-    "pass": 115,
+    "total": 125,
+    "pass": 124,
     "fail": 0,
     "skip": 1,
     "mandatoryCasesPass": "36/36",
@@ -113,7 +113,12 @@
   "integrationStatus": "NO_INICIADO_BY_DESIGN",
   "integrationHandoff": "docs/claude-animation-intelligence/INTEGRATION_HANDOFF.md",
   "requestsToOtherAgents": [],
-  "blockers": [],
+  "blockers": [
+    "walking the game Data folder needs the owner's authorization (mission forbids it)",
+    "S02 symlink test needs SeCreateSymbolicLinkPrivilege (admin or Developer Mode)",
+    "in-game confirmation needs a human playing (PENDIENTE_SKYRIM)",
+    "an Animaciones panel needs an ownership transfer from Claude A (UX06)"
+  ],
   "revision3": {
     "pluginPresenceRule": "starred in plugins.txt OR primary (5 base masters + Skyrim.ccc), per gameskyrimse.cpp primaryPlugins(); loadorder.txt no longer counted",
     "walkPruning": "top-level textures/sound/music/calientetools pruned; --full-walk disables; real profile: identical 273 finding ids, dirs 11131 -> 5952, warm scan ~8.5s -> ~5.0s",
@@ -144,6 +149,27 @@
     "tests": {
       "total": 116,
       "pass": 115,
+      "fail": 0,
+      "skip": 1,
+      "mandatoryCasesPass": "36/36"
+    }
+  },
+  "revision5": {
+    "oarTargets": "variants collapse + disabled replacementAnimDatas honoured; cross-mod overlaps 13 -> 24",
+    "presets": "PRESET resolved against group conditionPresets; missing refs 22 -> 49 (27 verified true positives)",
+    "sameModTies": "15 same-mod ties now INTRA_MOD_OVERLAP (info); cross-mod ties 0",
+    "archivePrecedence": "winner by plugin load order (likely) when all archives have a loaded plugin",
+    "progress": "--progress JSON lines on stderr; 633 events on the real profile",
+    "realProfile": {
+      "findings": 312,
+      "high": 6,
+      "oarOverlaps": 82,
+      "crossModOverlaps": 24,
+      "missingReferences": 49
+    },
+    "tests": {
+      "total": 125,
+      "pass": 124,
       "fail": 0,
       "skip": 1,
       "mandatoryCasesPass": "36/36"

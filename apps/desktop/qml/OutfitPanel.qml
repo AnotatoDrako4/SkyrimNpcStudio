@@ -12,6 +12,11 @@ ScrollView {
     readonly property OutfitEditor outfit: studio.outfit
     signal exportRequested()
     clip: true
+    // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+    Component.onCompleted: {
+        root.ScrollBar.vertical.Accessible.name = qsTr("Desplazar el panel de atuendo")
+        root.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar el panel de atuendo en horizontal")
+    }
     contentWidth: availableWidth
 
     function getSlotIcon(slots) {
@@ -53,9 +58,19 @@ ScrollView {
         anchors.centerIn: Overlay.overlay
         title: qsTr("Eliminar preset propio")
         standardButtons: Dialog.Yes | Dialog.Cancel
+        // Fixed width and a layout around the text: a bare Label made the closed dialog's implicit size loop on every
+        // font scale change.
+        width: Math.min(Theme.px(420), Overlay.overlay ? Overlay.overlay.width - 40 : Theme.px(420))
         property string presetId: ""
         onAccepted: root.outfit.deletePreset(presetId)
-        Label { text: qsTr("Se eliminará este preset de tu biblioteca personal.") }
+        ColumnLayout {
+            anchors.fill: parent
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: qsTr("Se eliminará este preset de tu biblioteca personal.")
+            }
+        }
     }
 
     ColorDialog {
@@ -250,6 +265,7 @@ ScrollView {
                     }
                     Button {
                         text: qsTr("✨ Crear Nuevo Outfit Vacío")
+                        Accessible.name: qsTr("Crear nuevo outfit vacío")
                         highlighted: true
                         Layout.fillWidth: true
                         onClicked: root.outfit.createNewOutfit()
@@ -272,6 +288,7 @@ ScrollView {
 
                 Button {
                     text: "↶ " + qsTr("Deshacer")
+                    Accessible.name: qsTr("Deshacer")
                     enabled: root.outfit.canUndo
                     implicitHeight: 26
                     onClicked: root.outfit.undo()
@@ -281,6 +298,7 @@ ScrollView {
 
                 Button {
                     text: "↷ " + qsTr("Rehacer")
+                    Accessible.name: qsTr("Rehacer")
                     enabled: root.outfit.canRedo
                     implicitHeight: 26
                     onClicked: root.outfit.redo()
@@ -384,6 +402,7 @@ ScrollView {
                         }
                         Button {
                             text: "★ " + qsTr("Favorito")
+                            Accessible.name: qsTr("Favorito")
                             enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
                             checkable: true
                             checked: presetCombo.currentIndex >= 0 && !!root.outfit.outfitPresets[presetCombo.currentIndex]?.favorite
@@ -395,6 +414,7 @@ ScrollView {
                         }
                         Button {
                             text: "✕"
+                            Accessible.name: qsTr("Eliminar preset propio")
                             enabled: presetCombo.currentIndex >= 0 && !root.outfit.outfitPresets[presetCombo.currentIndex]?.builtin
                             implicitHeight: 24
                             onClicked: {
@@ -470,6 +490,7 @@ ScrollView {
 
                             ToolButton {
                                 text: "🎨"
+                                Accessible.name: qsTr("Material de %1").arg(modelData.name)
                                 implicitHeight: 26
                                 // At least 26 px, wider when the glyph needs it (the style elides a clipped label).
                                 implicitWidth: Math.max(26, implicitContentWidth + leftPadding + rightPadding)
@@ -488,6 +509,7 @@ ScrollView {
 
                             ToolButton {
                                 text: "✕"
+                                Accessible.name: qsTr("Quitar %1 del atuendo").arg(modelData.name)
                                 implicitHeight: 26
                                 // At least 26 px, wider when the glyph needs it (the style elides a clipped label).
                                 implicitWidth: Math.max(26, implicitContentWidth + leftPadding + rightPadding)

@@ -10,6 +10,11 @@ ScrollView {
     required property StudioController studio
     contentWidth: availableWidth
     clip: true
+    // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+    Component.onCompleted: {
+        root.ScrollBar.vertical.Accessible.name = qsTr("Desplazar el panel de presets")
+        root.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar el panel de presets en horizontal")
+    }
 
     FileDialog {
         id: jslotFileDialog
@@ -206,6 +211,7 @@ ScrollView {
             TextField {
                 id: donorSearchField
                 Layout.fillWidth: true
+                Accessible.name: qsTr("Buscar NPC donante")
                 placeholderText: qsTr("Buscar NPC donante por nombre...")
                 onAccepted: root.studio.searchDonors(text)
             }
@@ -259,7 +265,7 @@ ScrollView {
             cellWidth: Math.floor(width / columns)
             cellHeight: cellWidth - 10 + 74
             cacheBuffer: cellHeight
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: ScrollBar { Accessible.name: qsTr("Desplazar la galería de donantes") }
 
             delegate: Item {
                 id: donorCard

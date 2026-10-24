@@ -127,6 +127,22 @@ bool orient_tangent_basis(Shape& s) {
   return s.tangents_swapped;
 }
 
+std::vector<StringExtraData> string_extra_data(std::string_view bytes, std::string_view label) {
+  nifly::NifFile nif;
+  load_nif(nif, bytes, label);
+  std::vector<StringExtraData> out;
+  auto collect = [&](const std::string& owner, auto& refs) {
+    for (const auto& ref : refs) {
+      if (const auto* data = nif.GetHeader().GetBlock<nifly::NiStringExtraData>(ref)) {
+        out.push_back({owner, data->name.get(), data->stringData.get()});
+      }
+    }
+  };
+  if (auto* root = nif.GetRootNode()) collect({}, root->extraDataRefs);
+  for (auto* shape : nif.GetShapes()) collect(shape->name.get(), shape->extraDataRefs);
+  return out;
+}
+
 MeshFile load_mesh(std::string_view bytes, std::string_view label) {
   nifly::NifFile nif;
   load_nif(nif, bytes, label);

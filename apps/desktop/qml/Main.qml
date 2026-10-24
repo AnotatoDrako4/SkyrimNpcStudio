@@ -322,14 +322,18 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(Theme.px(480), window.width - 40)
-        Label {
-            // availableWidth, not parent.width: the content item's width follows the label's implicit width (binding loop).
-            width: unsavedDialog.availableWidth
-            wrapMode: Text.WordWrap
-            text: [window.studio.outfit.dirty ? qsTr("• Atuendo (.snps) modificado") : "",
-                   window.studio.appearance.dirty ? qsTr("• Rostro o altura del NPC editados") : "",
-                   window.studio.forge.dirty ? qsTr("• Proyecto Character Forge (.sncf) modificado") : ""]
-                  .filter(s => s.length > 0).join("\n") + "\n\n" + qsTr("Si sales ahora se perderán. Nada se ha escrito en Skyrim ni en MO2.")
+        // The text sits in a layout: a wrapped Label as the dialog's only child loops its implicitHeight when the font
+        // scale changes (reproduced with plain Qt 6.11).
+        ColumnLayout {
+            anchors.fill: parent
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: [window.studio.outfit.dirty ? qsTr("• Atuendo (.snps) modificado") : "",
+                       window.studio.appearance.dirty ? qsTr("• Rostro o altura del NPC editados") : "",
+                       window.studio.forge.dirty ? qsTr("• Proyecto Character Forge (.sncf) modificado") : ""]
+                      .filter(s => s.length > 0).join("\n") + "\n\n" + qsTr("Si sales ahora se perderán. Nada se ha escrito en Skyrim ni en MO2.")
+            }
         }
         footer: DialogButtonBox {
             Button { text: qsTr("Volver"); DialogButtonBox.buttonRole: DialogButtonBox.RejectRole; highlighted: true }
@@ -1122,6 +1126,7 @@ ApplicationWindow {
             // Escala actual; un clic abre las preferencias de apariencia.
             IconToolButton {
                 objectName: "scaleStatusButton"
+                Accessible.name: qsTr("Escala de interfaz: %1").arg(label)
                 label: Workbench.uiScale + " %" + (Workbench.fontScale !== 100 ? " · " + qsTr("texto %1 %").arg(Workbench.fontScale) : "")
                 glyph: "zoom-in"
                 implicitHeight: Theme.statusHeight - 6

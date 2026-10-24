@@ -30,12 +30,12 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
-    public void TheWorkerSpeaksProtocol1_6_AndAdvertisesTheFiveBehaviorEndpoints()
+    public void TheWorkerSpeaksProtocol1_7_AndAdvertisesTheFiveBehaviorEndpoints()
     {
         var rpc = new WorkerRpcTarget(new WorkerState(), () => { }, (_, _) => { });
         var hello = rpc.Handshake(new HandshakeRequest { ClientName = "contract-test", ClientVersion = "0", ProtocolMajor = 1, ProtocolMinor = 6 });
         Assert.Equal(1, hello.ProtocolMajor);
-        Assert.Equal(6, hello.ProtocolMinor);
+        Assert.Equal(7, hello.ProtocolMinor);
         foreach (var method in BehaviorMethods) Assert.Contains(method, hello.Capabilities);
     }
 

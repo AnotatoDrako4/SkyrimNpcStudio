@@ -11,8 +11,11 @@ public static class Protocol
     /// <summary>Incompatible changes bump the major version; the handshake rejects a mismatch.</summary>
     public const int Major = 1;
 
-    /// <summary>Additive changes (new optional fields, new methods) bump the minor version.</summary>
-    public const int Minor = 6;
+    /// <summary>
+    /// Additive changes (new optional fields, new methods) bump the minor version.
+    /// 1.7: body.inspectNpcs and export.bodyDistribution (Universal Body Director).
+    /// </summary>
+    public const int Minor = 7;
 }
 
 public static class Methods
@@ -43,6 +46,8 @@ public static class Methods
     public const string CreationApplyArchetype = "creation.applyArchetype";
     public const string CreationUndoArchetype = "creation.undoArchetype";
     public const string CreationValidateBehavior = "creation.validateBehavior";
+    public const string BodyInspectNpcs = "body.inspectNpcs";
+    public const string ExportBodyDistribution = "export.bodyDistribution";
 
     /// <summary>Server → client notification emitted while indexing.</summary>
     public const string IndexProgress = "catalog.progress";

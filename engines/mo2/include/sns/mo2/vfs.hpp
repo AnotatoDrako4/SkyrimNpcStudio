@@ -67,6 +67,9 @@ class VirtualFileSystem {
   [[nodiscard]] ProviderConflicts conflicts(std::uint32_t provider, std::size_t sample_limit = 200) const;
   // Plugin files (.esp/.esm/.esl) at the root of the virtual Data folder, original case.
   [[nodiscard]] std::vector<std::string> root_plugins() const;
+  // Files inside a virtual folder (directly, or in any subfolder when `recursive`), as found on disk, sorted.
+  // "" is the Data root.
+  [[nodiscard]] std::vector<std::string> list_directory(std::string_view data_relative_dir, bool recursive = false) const;
 
  private:
   struct Entry {

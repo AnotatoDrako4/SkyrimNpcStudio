@@ -124,4 +124,18 @@ std::vector<std::string> VirtualFileSystem::root_plugins() const {
   return out;
 }
 
+std::vector<std::string> VirtualFileSystem::list_directory(std::string_view data_relative_dir, bool recursive) const {
+  auto prefix = text::data_path_key(data_relative_dir);
+  while (!prefix.empty() && prefix.back() == '\\') prefix.pop_back();
+  if (!prefix.empty()) prefix += '\\';
+  std::vector<std::string> out;
+  for (const auto& [key, entry] : files_) {
+    if (entry.providers.empty() || key.size() <= prefix.size() || key.compare(0, prefix.size(), prefix) != 0) continue;
+    if (!recursive && key.find('\\', prefix.size()) != std::string::npos) continue;
+    out.push_back(entry.display);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
 }  // namespace sns::mo2

@@ -249,7 +249,7 @@ ColumnLayout {
         Layout.fillHeight: true
         clip: true
         model: visible ? root.studio.npcResults : null
-        ScrollBar.vertical: ScrollBar {}
+        ScrollBar.vertical: ScrollBar { Accessible.name: qsTr("Desplazar la lista de NPC") }
         onAtYEndChanged: root.loadMoreIfAtEnd()
         onContentHeightChanged: Qt.callLater(root.loadMoreIfAtEnd)
         // Keyboard: arrows move, Space selects, Enter opens the editor, Ctrl+C copies the FormKey.
@@ -284,7 +284,7 @@ ColumnLayout {
             Accessible.name: (name.trim().length > 0 ? name : editorId) + ", " + formKey
             ToolTip.visible: hovered
             ToolTip.delay: 900
-            ToolTip.text: (name.trim().length > 0 ? name : qsTr("(sin nombre)")) + "\n" + editorId + " · " + formKey
+            ToolTip.text: !hovered ? "" : (name.trim().length > 0 ? name : qsTr("(sin nombre)")) + "\n" + editorId + " · " + formKey
                           + "\n" + qsTr("Gana: %1").arg(winningPlugin) + (winningMod ? " [" + winningMod + "]" : "")
                           + "\n" + qsTr("Doble clic o Enter: editar · Ctrl+C: copiar FormKey")
             onClicked: { ListView.view.currentIndex = index; ListView.view.forceActiveFocus(); root.studio.selectNpc(formKey) }
@@ -347,7 +347,7 @@ ColumnLayout {
         cacheBuffer: cellHeight  // one row beyond the visible ones
         currentIndex: -1
         keyNavigationEnabled: true
-        ScrollBar.vertical: ScrollBar {}
+        ScrollBar.vertical: ScrollBar { Accessible.name: qsTr("Desplazar la galería de NPC") }
         onAtYEndChanged: root.loadMoreIfAtEnd()
         onContentHeightChanged: { Qt.callLater(root.loadMoreIfAtEnd); prefetchTimer.restart() }
         onContentYChanged: prefetchTimer.restart()
@@ -459,7 +459,7 @@ ColumnLayout {
             }
             ToolTip.visible: cardArea.containsMouse
             ToolTip.delay: 900
-            ToolTip.text: (card.name.trim().length > 0 ? card.name : qsTr("(sin nombre)")) + "\n" + card.editorId + " · " + card.formKey
+            ToolTip.text: !cardArea.containsMouse ? "" : (card.name.trim().length > 0 ? card.name : qsTr("(sin nombre)")) + "\n" + card.editorId + " · " + card.formKey
                           + "\n" + qsTr("Gana: %1").arg(card.winningPlugin) + (card.winningMod ? " [" + card.winningMod + "]" : "")
                           + "\n" + root.stateText(card.appearanceState)
             MouseArea {

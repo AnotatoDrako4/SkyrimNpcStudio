@@ -424,6 +424,7 @@ Rectangle {
                     }
                     ToolButton {
                         text: "✕"
+                        Accessible.name: qsTr("Cerrar la lista de partes")
                         implicitHeight: 20
                         implicitWidth: 20
                         onClicked: root.partsVisible = false
@@ -492,6 +493,7 @@ Rectangle {
                     }
                     ToolButton {
                         text: "✕"
+                        Accessible.name: qsTr("Cerrar el inspector")
                         implicitHeight: 20
                         implicitWidth: 20
                         onClicked: { root.inspectorVisible = false }
@@ -615,6 +617,7 @@ Rectangle {
                 }
 
                 Slider {
+                    Accessible.name: qsTr("Intensidad de la luz ambiental")
                     from: 0
                     to: 0.6
                     value: root.ambient

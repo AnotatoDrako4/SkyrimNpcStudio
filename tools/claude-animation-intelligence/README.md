@@ -57,6 +57,9 @@ reading that file; no path is assumed and no disk is scanned looking for MO2.
 
 `--max-depth --max-files --max-json-bytes --max-submods --max-rows --max-seconds`.
 
+`--progress` prints one JSON event per line on stderr (`phase`, `progress`, `done`,
+`cancelled`) so a UI can show progress and cancel by interrupting the process (exit 3).
+
 `--full-walk` also walks a mod's top-level `textures/`, `sound/`, `music/` and
 `calientetools/`. They are skipped by default because the engine never loads animations
 from them; on a real 621-mod profile skipping them gave identical findings in ~40% less

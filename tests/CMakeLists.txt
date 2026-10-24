@@ -19,7 +19,8 @@ add_executable(sns_engine_tests
   unit/engines/test_compatibility_guardian.cpp
   unit/engines/test_control_map.cpp
   unit/engines/test_easy_mod.cpp
-  unit/engines/test_review_case.cpp)
+  unit/engines/test_review_case.cpp
+  unit/engines/test_body_presets.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
 # Audit F-10/F-12: damaged NIFs refused before nifly; one bad mesh never empties the preview.
 target_sources(sns_engine_tests PRIVATE unit/engines/test_nif_safe_load.cpp)
@@ -27,7 +28,7 @@ target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
   sns::core sns::ipc sns::mo2 sns::projects sns::creation sns::outfit sns::appearance sns::presets sns::face sns::rendering
-  sns::gltf sns::nif nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
+  sns::gltf sns::nif sns::body nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
 
 # ---- Tool: loads one NIF in a process of its own and reports outcome, time and peak memory (audit F-10) --

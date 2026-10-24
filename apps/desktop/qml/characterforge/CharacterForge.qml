@@ -82,10 +82,16 @@ Item {
                         onCollapseRequested: root.panelLayout.leftVisible = false
                     }
                     ScrollView {
+                        id: navigationScroll
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.margins: Theme.spacingMd
                         contentWidth: availableWidth
+                        // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+                        Component.onCompleted: {
+                            navigationScroll.ScrollBar.vertical.Accessible.name = qsTr("Desplazar la navegación de Forge")
+                            navigationScroll.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar la navegación de Forge en horizontal")
+                        }
                         ForgeNavigation {
                             width: parent.width
                             forge: root.forge
@@ -132,9 +138,15 @@ Item {
                         wrapMode: Text.WordWrap
                     }
                     ScrollView {
+                        id: contextScroll
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         contentWidth: availableWidth
+                        // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+                        Component.onCompleted: {
+                            contextScroll.ScrollBar.vertical.Accessible.name = qsTr("Desplazar el panel de la herramienta")
+                            contextScroll.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar el panel de la herramienta en horizontal")
+                        }
                         Loader {
                             id: contextPanel
                             width: parent.width
@@ -178,7 +190,13 @@ Item {
                         text: qsTr("Inspector avanzado")
                     }
                     ScrollView {
+                        id: advancedScroll
                         visible: advanced.checked
+                        // Qt creates the scroll view's bars unnamed; screen readers announce them by these names.
+                        Component.onCompleted: {
+                            advancedScroll.ScrollBar.vertical.Accessible.name = qsTr("Desplazar el inspector avanzado")
+                            advancedScroll.ScrollBar.horizontal.Accessible.name = qsTr("Desplazar el inspector avanzado en horizontal")
+                        }
                         Layout.fillWidth: true
                         Layout.preferredHeight: 220
                         contentWidth: availableWidth

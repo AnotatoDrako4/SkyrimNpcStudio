@@ -107,6 +107,16 @@ struct MeshFile {
 // shapes that cannot be converted are skipped with a warning.
 MeshFile load_mesh(std::string_view bytes, std::string_view label);
 
+struct StringExtraData {
+  std::string owner;  // shape name, "" for the root node
+  std::string name;   // e.g. "BODYTRI" (BodySlide "Build Morphs"), "HDT Skinned Mesh Physics Object"
+  std::string value;  // as stored
+};
+
+// Every NiStringExtraData attached to the root node and to each shape, without converting geometry.
+// Throws sns::Error(Parse) like load_mesh.
+std::vector<StringExtraData> string_extra_data(std::string_view bytes, std::string_view label);
+
 struct Bone {
   std::string name;
   int parent = -1;

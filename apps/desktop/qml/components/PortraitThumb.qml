@@ -83,12 +83,20 @@ Rectangle {
         : (reason.indexOf("Template") >= 0 || reason.indexOf("plantilla") >= 0) ? ["TEMPLATE", qsTr("Hereda de una plantilla")]
         : reason.indexOf("fuera de pantalla") >= 0 ? ["OFFSCREEN", qsTr("Render no disponible")]
         : ["ERROR", qsTr("No se pudo dibujar")]
+    // Built only while there is no image: thousands of cards scroll past, and most of them have a portrait.
+    Loader {
+        anchors.fill: parent
+        active: !thumb.ready && !thumb.provisional
+        sourceComponent: placeholderComponent
+    }
+    Component {
+        id: placeholderComponent
+        Item {
     Column {
         objectName: "npcCardPortraitPlaceholder"
         anchors.centerIn: parent
         width: parent.width - 12
         spacing: Theme.sp(4)
-        visible: !thumb.ready && !thumb.provisional
         Icon {
             anchors.horizontalCenter: parent.horizontalCenter
             name: thumb.portrait.state === "error" ? "warning" : thumb.portrait.state === "rendering" ? "refresh" : "person"
@@ -119,8 +127,10 @@ Rectangle {
             elide: Text.ElideRight
         }
     }
+    HoverHandler { id: placeholderHover }
     ToolTip.visible: placeholderHover.hovered && thumb.portrait.state === "error"
     ToolTip.delay: 500
-    ToolTip.text: qsTr("Sin retrato: %1").arg(thumb.reason || "?")
-    HoverHandler { id: placeholderHover }
+    ToolTip.text: placeholderHover.hovered ? qsTr("Sin retrato: %1").arg(thumb.reason || "?") : ""
+        }
+    }
 }

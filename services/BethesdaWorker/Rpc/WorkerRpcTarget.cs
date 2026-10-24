@@ -36,7 +36,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
             Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords,
-                Methods.CreationAnalyzeVoice, Methods.CreationGetBehaviorCatalog, Methods.CreationApplyArchetype, Methods.CreationUndoArchetype, Methods.CreationValidateBehavior],
+                Methods.CreationAnalyzeVoice, Methods.CreationGetBehaviorCatalog, Methods.CreationApplyArchetype, Methods.CreationUndoArchetype, Methods.CreationValidateBehavior, Methods.BodyInspectNpcs, Methods.ExportBodyDistribution],
         };
     }
 
@@ -156,6 +156,20 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     [JsonRpcMethod(Methods.CreationValidateBehavior)]
     public CreationValidateBehaviorResponse ValidateBehavior(CreationValidateBehaviorRequest request) =>
         Guard(() => state.Read(c => Behavior.BehaviorRpc.ValidateBehavior(c, request)));
+
+    [JsonRpcMethod(Methods.BodyInspectNpcs)]
+    public Task<BodyInspectResponse> InspectBodyNpcs(BodyInspectRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() => state.Read(c => BodyQueries.Inspect(c, request, ct))), ct);
+
+    [JsonRpcMethod(Methods.ExportBodyDistribution)]
+    public Task<ExportBodyDistributionResponse> ExportBodyDistribution(ExportBodyDistributionRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() =>
+        {
+            Log.Info($"exporting body distribution {request.ModName} ({request.Files?.Count ?? 0} files) to {request.OutputDirectory}");
+            var response = state.Export(c => BodyDistributionPackager.Export(c.Session, request, ct));
+            Log.Info($"exported {response.ModDirectory}{(response.ZipPath is null ? "" : " + " + response.ZipPath)}");
+            return response;
+        }), ct);
 
     internal static T Guard<T>(Func<T> body)
     {

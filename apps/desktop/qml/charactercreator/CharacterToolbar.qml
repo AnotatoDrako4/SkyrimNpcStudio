@@ -88,6 +88,7 @@ Rectangle {
 
         ToolButton {
             text: "↻"
+            Accessible.name: qsTr("Restablecer cámara orbital")
             implicitHeight: Theme.controlHeight
             onClicked: if (root.viewport) root.viewport.reset()
             ToolTip.text: qsTr("Restablecer cámara orbital")
@@ -106,6 +107,7 @@ Rectangle {
             checkable: true
             checked: root.studio.scene.original
             text: checked ? qsTr("👁 Viendo: ORIGINAL") : qsTr("✨ Viendo: MODIFICADO")
+            Accessible.name: checked ? qsTr("Viendo la apariencia original") : qsTr("Viendo la apariencia modificada")
             palette.button: checked ? "#8B4513" : "#2E7D32"
             onToggled: root.studio.scene.original = checked
             ToolTip.text: qsTr("Alternar en tiempo real entre la apariencia original de Skyrim y tus modificaciones")

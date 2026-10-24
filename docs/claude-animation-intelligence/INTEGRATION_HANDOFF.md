@@ -150,11 +150,12 @@ This mission changed **none** of them. Everything it created lives under
    plugin load order.
 2. Include the game `Data` folder as the lowest-priority provider behind an explicit flag,
    so vanilla loose files are counted.
-3. Streaming progress plus cancellation, as the prerequisite for any UI.
-4. Parse `conditionPresets` from the group `config.json` and resolve `PRESET` references in
-   submod conditions.
+3. ~~Streaming progress plus cancellation~~ — DONE in revision 5: `--progress` emits
+   JSON lines on stderr (`phase`, `progress` with `done`/`total`/`mod`, `done` with
+   `exitCode`, `cancelled` on interrupt). A panel can spawn the CLI and render them.
+4. ~~Parse `conditionPresets` and resolve `PRESET`~~ — DONE in revision 5.
 5. Resolve `pluginName`/`formID` operands against the real plugin headers (the repository
    already has `engines/mo2/plugin_header`) to turn `MISSING_REFERENCE` from `likely` into
    `proven`.
-6. Optional cross-check of `replacementAnimDatas[].projectName` against behaviour project
-   names found on disk, to tighten overlap targeting.
+6. ~~`replacementAnimDatas`~~ — resolved differently in revision 5: OAR's source shows
+   they are per-animation settings, not targets; disabled entries are now honoured.

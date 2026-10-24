@@ -121,3 +121,17 @@ Build aislado `build/ux06` bajo `.ai-coordination/locks/heavy-build.lock` (Agent
 ## UX06 (2026-10-22): CIERRE
 
 Entregado en `out/uiux-ux06/ux06-20261022-1630/FINAL_REPORT.md`. Reservados editados con respaldo/hash: `Main.qml`, `Theme.qml`, `CharacterViewport.qml` (solo controles), `apps/desktop/CMakeLists.txt` (aditivo: 6 QML nuevos en `qml/components/`). `full-qa-gate -BuildDir build\ux06` 19/19 PASS; ctest 289/289; escenarios reales forge-behavior, source-compare, cache-inspector, preset-head-check, skin-match, npc-gallery, armor-mod-filter, forge-reopen PASS. Contrato a respetar: la entrada de navegación de Forge se sigue llamando «Crear NPC» (la usa appearance_stress). Ningún archivo vuestro tocado; lock liberado; sin Git; PENDIENTE_SKYRIM.
+
+
+---
+
+## UX06 (2026-10-23): cierre de pendientes
+
+Binario final `build/ux06/bin/SkyrimNpcStudio.exe` SHA-256 `063A0D89…`. Matriz 30/30 PASS. Cambios QML posteriores al cierre anterior: tooltips de NpcBrowser/ArmorCatalog armados solo al pasar el ratón y marcador de retrato en `Loader` (corrige mi regresión de la galería: 19,3 s frente a 28,9 s de la baseline); nombres accesibles en `SegmentedControl`, nombre/descripción del proyecto de Forge y buscador de donante de `charactercreator/PresetManager.qml` (solo `Accessible.name`, respaldado). Repetidos con el binario final: ctest 289/289, escenarios forge-behavior, source-compare, cache-inspector, preset-head-check, skin-match, forge-reopen, npc-gallery, armor-mod-filter, npc-portraits PASS. Ningún archivo vuestro tocado; lock libre; sin Git; PENDIENTE_SKYRIM.
+
+
+---
+
+## UX06 (2026-10-23): binario final 4455913F
+
+Sustituye al cierre anterior (063A0D89). Cambios solo en QML: los 2 bucles de binding preexistentes (`OutfitPanel.qml` diálogo de borrar preset, diálogo de salida de `Main.qml`) corregidos con ancho explícito + `ColumnLayout`; nombres accesibles en palabras para barras de desplazamiento, la luz del visor y botones con símbolo (`CharacterToolbar`, `HairEyeCustomizer`, `CharacterCreator`, `OutfitPanel`, `NativeNpcEditor`, `CharacterForge`). Repetidos con este binario: workbench-check 1366/1100/125 %/150 %, settings-check, ctest 289/289, los 10 escenarios (incl. forge-behavior AG04 y A1–A4) PASS; 0 advertencias QML. Ningún archivo vuestro tocado; lock libre; sin Git; PENDIENTE_SKYRIM.

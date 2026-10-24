@@ -189,6 +189,60 @@ For validation only, the directory of one file in the game's `Data` folder
 
 Tests after revision 4: **116 total, 115 PASS, 0 FAIL, 1 justified SKIP; 36/36 mandatory.**
 
+## Revision 5 — pending items closed: OAR targets, presets, archive precedence, progress
+
+**OAR replacement targets were wrong, found by reading OAR's source.** A survey of the
+real profile found 117 `replacementAnimDatas` entries and `_variants_` folders. OAR's
+`ReplacerMods.cpp` shows replacement animations are always built from the submod's own
+`.hkx` files; `replacementAnimDatas` is only a table of per-animation SETTINGS
+(`LoadAnimData`: disabled, variants), looked up by `(projectName, path)`. The tool had
+used those entries as targets, so a submod carrying them could never overlap one that did
+not. And `Parsing.cpp` (`ConvertVariantsPath`) shows a `_variants_X` folder is ONE
+replacement for `X.hkx`; the tool keyed each variant file separately, so it never matched
+another submod's `X.hkx`. Targets are now the folder's `.hkx` files with `_variants_X`
+collapsed to `X.hkx`, minus the 53 animations `replacementAnimDatas` marks
+`"disabled": true` (`SetDisabled`). Real effect: **cross-mod overlaps 13 -> 24**; eleven
+real competitions (e.g. `male/mt_runforward.hkx`) had been hidden.
+
+**Condition presets are resolved.** The real profile has 2 groups defining
+`conditionPresets` and **36 `PRESET` conditions** (`{"condition":"PRESET","Preset":
+"Malignis_Base"}`; key verified in `Conditions.h` `PRESETCondition`). Their inner
+conditions now count for unknown-extension detection and for `MISSING_REFERENCE`, and a
+preset the group does not define is a `CONFIG_ERROR`. Real effect: **`MISSING_REFERENCE`
+22 -> 49**. The 27 new ones were verified: `KP_NCFIA`'s preset needs `SexLabAroused.esm`,
+which is in neither `plugins.txt` nor `Skyrim.ccc` nor any enabled mod.
+
+**A tie inside one mod is informational.** Collapsing variants surfaced 15 priority ties,
+all within `Gulan0_walk_run_sprint` (weapon-specific jump submods at 99999, mutually
+exclusive by design). Same-mod ties now fall into `INTRA_MOD_OVERLAP` (info) with the tie
+noted; `PRIORITY_TIE` is kept for ties across mods (0 on the real profile).
+
+**Archive-vs-archive precedence.** `mo2_profile.load_order()` builds the load order MO2
+uses for Skyrim SE (`LoadOrderMechanism::PluginsTxt`): base masters, `Skyrim.ccc`, then
+starred `plugins.txt` entries. When every archive sharing a path has a loaded plugin, the
+one loaded last is named winner with confidence `likely` (the engine's mounting order was
+not verified); otherwise no winner. Real profile: 0 archive overlaps.
+
+**Progress and cancellation.** `--progress` emits JSON lines on stderr — one `phase`
+event per stage, one `progress` event per provider walked, a final `done` with the exit
+code, and `cancelled` (exit 3) on interrupt — while stdout stays human-readable. Real
+profile: 633 events, 626 providers.
+
+Real profile after revision 5: 312 findings (all ids unique), 6 high, 82 OAR overlaps
+(24 cross-mod, 58 within one mod), 49 missing references. Bracketed hash+mtime check of
+6 MO2 files around `scan` + `compare`: 0 changes.
+
+Tests after revision 5: **125 total, 124 PASS, 0 FAIL, 1 justified SKIP; 36/36 mandatory.**
+
+## Pending items that need someone else
+
+| item | state | why it is not done here |
+|---|---|---|
+| walk the game's `Data` folder as the lowest provider | `BLOQUEADO` — needs the owner's authorization | the mission forbids it ("No escanear o modificar la carpeta Data"); vanilla loose files are therefore not counted |
+| S02 symlink-escape test | SKIP (justified) | creating a directory symlink needs `SeCreateSymbolicLinkPrivilege` (admin or Windows Developer Mode); the guard itself is tested by S02b |
+| any in-game confirmation | `PENDIENTE_SKYRIM` | only a human playing can observe it; every report says `NOT_VERIFIED_IN_GAME` |
+| an Animaciones panel in Character Forge | `NO_INICIADO` — needs an ownership transfer | QML/viewmodels belong to Claude A (UX06); the contract is in `INTEGRATION_HANDOFF.md` |
+
 ## Known limits, stated rather than hidden
 
 - BSA archive names are read, but file data is never extracted, archive-vs-archive

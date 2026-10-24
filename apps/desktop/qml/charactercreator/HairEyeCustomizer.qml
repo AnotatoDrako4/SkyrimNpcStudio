@@ -176,6 +176,7 @@ ScrollView {
 
                     Button {
                         text: "✕"
+                        Accessible.name: qsTr("Quitar parte de cabeza")
                         implicitWidth: 24
                         implicitHeight: 24
                         onClicked: root.studio.appearance.removeHeadPart(modelData.type)

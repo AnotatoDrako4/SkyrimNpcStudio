@@ -299,7 +299,7 @@ Item {
             keyNavigationEnabled: true
             activeFocusOnTab: true
             Keys.onPressed: event => root.handleKeys(armorListView, event)
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: ScrollBar { Accessible.name: qsTr("Desplazar la lista de prendas") }
 
             delegate: ItemDelegate {
                 id: card
@@ -326,7 +326,7 @@ Item {
                 Accessible.name: (name && name.length > 0 ? name : editorId) + ", " + formKey
                 ToolTip.visible: hovered
                 ToolTip.delay: 900
-                ToolTip.text: root.detailsOf(card)
+                ToolTip.text: hovered ? root.detailsOf(card) : ""   // built on hover only: rows scroll by the thousand
 
                 background: Rectangle {
                     radius: Theme.radius
@@ -483,7 +483,7 @@ Item {
             keyNavigationEnabled: true
             activeFocusOnTab: true
             Keys.onPressed: event => root.handleKeys(armorGridView, event)
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: ScrollBar { Accessible.name: qsTr("Desplazar la cuadrícula de prendas") }
 
             delegate: ItemDelegate {
                 id: gridCard
@@ -509,7 +509,7 @@ Item {
                 Accessible.name: (name && name.length > 0 ? name : editorId) + ", " + formKey
                 ToolTip.visible: hovered
                 ToolTip.delay: 900
-                ToolTip.text: root.detailsOf(gridCard)
+                ToolTip.text: hovered ? root.detailsOf(gridCard) : ""
 
                 background: Rectangle {
                     radius: Theme.radiusLarge

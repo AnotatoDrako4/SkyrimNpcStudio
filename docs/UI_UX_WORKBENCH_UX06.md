@@ -90,6 +90,19 @@ motor (NIF, FaceGen, render 3D, worker, IPC, formatos `.sncf`/`.snps`).
 - Configuración › Apariencia: tarjeta «Presentación» con los presets y el aviso de legibilidad (vista previa con
   revertir automático). Sin nuevo almacén: todo pasa por `WorkbenchState`/`AppSettings`.
 
+## 9. Accesibilidad y diálogos (reglas)
+
+- Todo control enfocable lleva un nombre en palabras. Si el texto visible es un símbolo («↻», «✕», «🎨», «★», «↶»,
+  «100 %»), `Accessible.name` lo dice con palabras; en filas repetidas incluye el elemento («Quitar *pieza* del atuendo»).
+- Las barras de desplazamiento también: `ScrollBar { Accessible.name: … }` en listas y cuadrículas; las que crea un
+  `ScrollView` se nombran en su `Component.onCompleted` (`id.ScrollBar.vertical.Accessible.name = …`).
+- Comprobación: auditoría `QAccessible` en `workbench_check` (U26) y auditoría UI Automation (la interfaz de
+  Narrador/NVDA) sobre la ventana real: 0 controles enfocables sin nombre y 0 nombres-símbolo en los tres workspaces.
+  Los campos internos de los `ComboBox` de Fusion quedan sin nombre: no reciben foco.
+- Un `Dialog` Fusion con un `Label` como único hijo produce bucles de binding (`implicitWidth`/`implicitHeight`) cada
+  vez que cambia la escala, aunque esté cerrado. Patrón sin bucle: ancho explícito y el texto dentro de un
+  `ColumnLayout { anchors.fill: parent; Label { Layout.fillWidth: true; wrapMode: Text.WordWrap } }`.
+
 ## Componentes nuevos (`apps/desktop/qml/components/`)
 
 `Icon`, `IconToolButton`, `PanelHeader`, `SegmentedControl`, `EmptyState`, `CommandPalette` — registrados de forma

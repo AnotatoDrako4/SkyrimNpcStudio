@@ -360,7 +360,7 @@ internal static class ModPackager
         return sb.ToString();
     }
 
-    private static string BuildMetaIni(string? description, string modName)
+    internal static string BuildMetaIni(string? description, string modName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("[General]");
@@ -517,7 +517,7 @@ internal static class ModPackager
         }
     }
 
-    private static void CreateZip(string modDir, string zipPath)
+    internal static void CreateZip(string modDir, string zipPath)
     {
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
         foreach (var file in Directory.EnumerateFiles(modDir, "*", SearchOption.AllDirectories))
