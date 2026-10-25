@@ -84,6 +84,8 @@ class AppearanceSources : public QObject {
   //  sources, geometryPath, tintPath, looseMods, archives}]}. `names`: FormKey -> display name (studio.npcNames).
   Q_INVOKABLE QVariantMap queryFaceIndex(const QString& text, const QString& source, bool onlyAlternatives, const QString& flag,
                                          int limit, const QVariantMap& names) const;
+  // Every FormKey of the index (to ask the catalog for their names), in index order.
+  Q_INVOKABLE QStringList faceIndexFormKeys() const;
   // What giving the NPC on view the face of candidate `id` takes (sns::appearance::plan_face_transfer):
   // {candidate, verdict, chosen, canCreatePatch, requirement, reasons: [...], actions: [...]}.
   Q_INVOKABLE QVariantMap transferPlan(const QString& id) const;

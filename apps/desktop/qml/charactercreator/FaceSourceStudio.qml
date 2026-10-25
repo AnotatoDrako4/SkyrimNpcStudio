@@ -64,7 +64,7 @@ Popup {
     function nameOf(formKey) { return studio.npcNames[studio.npcKey(formKey)] ?? "" }
     function resolveAllNames() {
         if (index.state !== "ready") return
-        const all = sources.queryFaceIndex("", "", false, "", 5000, {}).rows.map(r => r.formKey)
+        const all = sources.faceIndexFormKeys()
         if (all.length > 0) studio.resolveNpcNames(all)
     }
     function refresh() {
@@ -111,7 +111,8 @@ Popup {
     Connections {
         target: root.studio
         // Each answer covers at most 200 FormKeys: ask for the next ones until every NPC of the index has its name.
-        function onNpcNamesChanged() { if (root.opened) { root.resolveAllNames(); refreshDelay.restart() } }
+        // Not restart(): batches keep arriving and would postpone the refresh until the last one.
+        function onNpcNamesChanged() { if (root.opened) { root.resolveAllNames(); if (!refreshDelay.running) refreshDelay.start() } }
     }
     Timer { id: refreshDelay; interval: 200; onTriggered: root.refresh() }
 

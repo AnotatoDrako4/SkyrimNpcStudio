@@ -659,6 +659,13 @@ QVariantMap AppearanceSources::queryFaceIndex(const QString& text, const QString
   return {{"total", static_cast<int>(total)}, {"rows", rows}};
 }
 
+QStringList AppearanceSources::faceIndexFormKeys() const {
+  QStringList keys;
+  keys.reserve(static_cast<qsizetype>(face_index_.entries.size()));
+  for (const auto& e : face_index_.entries) keys << qs(e.form_key);
+  return keys;
+}
+
 QVariantMap AppearanceSources::transferPlan(const QString& id) const {
   if (matrix_map_.value("state").toString() != QLatin1String("ready")) return {{"candidate", id}, {"verdict", "WAITING"}};
   const auto state = appearance::evaluate_draft(book_, matrix_, ss(input_digest_));
