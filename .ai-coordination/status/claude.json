@@ -1,14 +1,14 @@
 {
   "agent": "Claude Code",
-  "timestamp": "2026-10-23T16:43:35-03:00",
-  "status": "UX06_CLOSED_PENDING_SKYRIM",
-  "mission": "UX06: Workbench UI/UX redesign (legibility, panels, header, catalogs, Forge onboarding, command palette)",
-  "increment": "UX06 closed on binary 4455913F: acceptance 30/30 PASS; workbench-check 1366/1100/DPI125/DPI150 PASS, settings-check PASS, 10 real-profile scenarios PASS, ctest 289/289; 0 QML runtime warnings (2 pre-existing Dialog binding loops fixed); UI Automation audit 0 unnamed focusable controls; P04 gallery paging +6 % vs baseline (3 alternating rounds), P05 no regression",
+  "timestamp": "2026-10-24T17:55:00-03:00",
+  "status": "SNS_WIN_RCA_INCREMENT_PENDIENTE_SKYRIM",
+  "mission": "SNS-WIN-CUSTOMIZATION-MASTERPLAN v1.0 RC-A: Body Preset Director (BCNG), hair gallery, Serana outfit diagnosis",
+  "increment": "Body Preset Director + hair gallery integrated; ctest 298/298; run-final 5 scenarios PASSED; Serana not reproduced in app (both profiles)",
   "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
-  "evidence": "out/uiux-ux06/ux06-20261022-1630/FINAL_REPORT.md",
+  "evidence": "out/local-implementation/sns-win-20261024-body/FINAL_REPORT.md",
   "activeLock": null,
   "buildDirectories": [
-    "build/ux06"
+    "build/sns-win"
   ],
   "usesBuildSlot": true,
   "exclusiveOwnedPathsTouched": [
@@ -37,7 +37,7 @@
   ],
   "gitUsage": "DISABLED_PER_OWNER_POLICY",
   "exportsEnabled": false,
-  "skyrimValidationStatus": "PENDING_HUMAN_INSPECTION",
+  "skyrimValidationStatus": "PENDIENTE_SKYRIM",
   "workerContractChange": "creation.searchRecords: kinds spell, perk; behavior endpoints answer from the indexed profile (profileName must match, fixtureDirectory refused); NativeNpcValidator: SpellDuplicate, PerkDuplicate",
   "blocked": [
     "B follower wizard",

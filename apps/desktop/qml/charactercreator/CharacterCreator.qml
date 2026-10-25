@@ -190,6 +190,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 studio: root.studio
+                sceneOverride: (leftTabs.currentIndex === 1 && root.studio.armorPreview.selectedArmor !== "") ? root.studio.armorPreview : null
+                previewMode: leftTabs.currentIndex === 1 && root.studio.armorPreview.selectedArmor !== ""
                 // The empty viewer's actions: the explorer comes back (a user action) on the right tab, search focused.
                 onNpcSearchRequested: root.searchNpc()
                 onCatalogRequested: root.showCatalog()

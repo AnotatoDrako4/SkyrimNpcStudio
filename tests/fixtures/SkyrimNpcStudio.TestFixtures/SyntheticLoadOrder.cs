@@ -303,6 +303,7 @@ public sealed class SyntheticLoadOrder : IDisposable
             EditorID = "NordRaceVampire", Name = "Nord", Height = new GenderedItem<float>(1.0f, 1.0f),
         };
         vampireRace.MorphRace.SetTo(nordRace);
+        vampireRace.ArmorRace.SetTo(nordRace);
         vampireRace.Keywords = new ExtendedList<IFormLinkGetter<IKeywordGetter>> { new FormLink<IKeywordGetter>(VampireKeyword) };
         vampireRace.HeadData = nordRace.HeadData;
         master.Races.Add(vampireRace);

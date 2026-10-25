@@ -256,5 +256,19 @@ ScrollView {
                 }
             }
         }
+
+        // Diagnóstico en tiempo real de coincidencia de tono de piel (cuello/cuerpo)
+        SkinMatchCard {
+            Layout.fillWidth: true
+            studio: root.studio
+        }
+
+        Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
+        // --- SECCIÓN: PRESETS DE BODYSLIDE (Body Change NG) ---
+        BodyPresetSection {
+            Layout.fillWidth: true
+            studio: root.studio
+        }
     }
 }

@@ -21,6 +21,8 @@
 #include "portrait_renderer.hpp"
 #include "appearance_sources.hpp"
 #include "preset_head_checker.hpp"
+#include "body_director.hpp"
+#include "loose_resource_library.hpp"
 
 namespace sns::app {
 
@@ -45,6 +47,10 @@ class StudioController : public QObject {
   Q_PROPERTY(AppearanceSources* sources READ sources CONSTANT)
   // Preset <-> Export Head readiness of a RaceMenu .jslot (diagnosis only; see PresetHeadChecker).
   Q_PROPERTY(PresetHeadChecker* presetHeads READ preset_heads CONSTANT)
+  // BodySlide presets / Body Change NG distribution of the selected NPC (see BodyDirector).
+  Q_PROPERTY(BodyDirector* body READ body CONSTANT)
+  // Loose outfit packs, replacers, and BodySlide projects without ESP (see LooseResourceLibrary).
+  Q_PROPERTY(LooseResourceLibrary* looseResources READ loose_resources CONSTANT)
   // Display names of NPCs asked for by FormKey (resolveNpcNames): npcKey(FormKey) -> name (or EditorID). Lists of FormKeys (the portrait
   // cache inspector) show the name next to the key once the catalog answered.
   Q_PROPERTY(QVariantMap npcNames READ npc_names NOTIFY npcNamesChanged)
@@ -106,6 +112,8 @@ class StudioController : public QObject {
   [[nodiscard]] SceneViewModel* portrait_scene() const { return portrait_scene_; }
   [[nodiscard]] AppearanceSources* sources() const { return sources_; }
   [[nodiscard]] PresetHeadChecker* preset_heads() const { return preset_heads_; }
+  [[nodiscard]] BodyDirector* body() const { return body_; }
+  [[nodiscard]] LooseResourceLibrary* loose_resources() const { return loose_resources_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
   [[nodiscard]] VariantListModel* diagnostics() const { return diagnostics_; }
@@ -246,6 +254,9 @@ class StudioController : public QObject {
   PortraitRenderer* portraits_ = nullptr;
   AppearanceSources* sources_ = nullptr;
   PresetHeadChecker* preset_heads_ = nullptr;
+  BodyDirector* body_ = nullptr;
+  LooseResourceLibrary* loose_resources_ = nullptr;
+  std::unordered_map<std::string, std::string> registered_armor_meshes_;
   VariantListModel* instances_;
   VariantListModel* mods_;
   VariantListModel* diagnostics_;

@@ -33,6 +33,8 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QVariantMap visibility READ visibility NOTIFY visibilityChanged)
   Q_PROPERTY(QVariantList issues READ issues NOTIFY changed)
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
+  Q_PROPERTY(QVariantList outfitDiagnostics READ outfit_diagnostics NOTIFY changed)
+  Q_PROPERTY(QVariantList coveredBodyDiagnostics READ covered_body_diagnostics NOTIFY changed)
   // Head <-> body skin match of the scene on view (an ESTIMATE of the seam at the neck, see sns::appearance::evaluate_skin_match):
   // {state: "none" | "ready", verdict, message, worst, worstRole, codes, caveats, head: {label, color}, pairs: [{role, label, color,
   // deltaE}]}. "none" while nothing is installed.
@@ -60,6 +62,8 @@ class SceneViewModel : public QObject {
   QVariantMap visibility() const { return visibility_; }
   QVariantList issues() const { return issues_; }
   QVariantMap stats() const { return stats_; }
+  QVariantList outfit_diagnostics() const { return outfit_diagnostics_; }
+  QVariantList covered_body_diagnostics() const { return covered_body_diagnostics_; }
   QVariantMap skin_match() const { return skin_match_.isEmpty() ? QVariantMap{{"state", "none"}} : skin_match_; }
   QVector3D center() const { return center_; }
   float radius() const { return radius_; }
@@ -86,10 +90,13 @@ class SceneViewModel : public QObject {
   Q_INVOKABLE QVariantMap selectedPart() const;
   // Every part back to its default visibility (shapes the game does not draw stay hidden).
   Q_INVOKABLE void restoreVisibility();
+  Q_INVOKABLE QVariantMap explainPieceVisibility(const QString& armorFormKey) const;
+  Q_INVOKABLE QVariantMap explainShapeVisibility(const QString& shapeId) const;
   // Preview-only armor list (FormKeys; [] = skin only); null follows the outfit editor again.
   // Used by viewport verification; it never touches the project, the outfit or undo/redo.
   Q_INVOKABLE void setPreviewArmor(const QVariant& formKeys);
   Q_INVOKABLE void selectArmor(const QString& formKey);
+  Q_INVOKABLE void selectMesh(const QString& dataRelativePath);
   Q_INVOKABLE void setPreviewMode(const QString& mode);
   // Portrait renderer: this scene shows one fixed NPC, independent of the editors (empty: it follows the
   // outfit editor again), and builds with a resource cache of its own, so rendering many NPCs neither
@@ -155,6 +162,7 @@ class SceneViewModel : public QObject {
   bool portrait_mode_ = false;
   std::shared_ptr<const rendering::AssetOverlay> portrait_overlay_;
   QVariantList parts_, issues_;
+  QVariantList outfit_diagnostics_, covered_body_diagnostics_;
   QVariantMap stats_;
   QVariantMap skin_match_;  // see the skinMatch property; empty until a scene is installed
   QVariantMap visibility_;

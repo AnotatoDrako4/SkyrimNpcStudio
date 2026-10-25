@@ -31,6 +31,15 @@ TEST_CASE("CompatibilityGuardian: Body system detection", "[compatibility]") {
     auto body = CompatibilityGuardian::inspect_body_system({"Skyrim.esm", "HIMBO.esp"}, {}, false);
     REQUIRE(body.body_type == DetectedBodyType::HIMBO);
   }
+
+  SECTION("Detects UBE from plugin or path") {
+    auto body_plugin = CompatibilityGuardian::inspect_body_system({"Skyrim.esm", "UBE_AllRace.esp"}, {}, true);
+    REQUIRE(body_plugin.body_type == DetectedBodyType::UBE);
+    REQUIRE(body_plugin.supports_weight_sliders);
+
+    auto body_path = CompatibilityGuardian::inspect_body_system({"Skyrim.esm"}, {"meshes/actors/character/character assets/femalebody_ube.nif"}, true);
+    REQUIRE(body_path.body_type == DetectedBodyType::UBE);
+  }
 }
 
 TEST_CASE("CompatibilityGuardian: Draft evaluation", "[compatibility]") {
@@ -133,4 +142,31 @@ TEST_CASE("CompatibilityGuardian: Draft evaluation", "[compatibility]") {
     REQUIRE(std::any_of(report.issues.begin(), report.issues.end(),
                         [](const auto& issue) { return issue.code == "MaterialVariantPreviewOnly"; }));
   }
+
+  SECTION("Reports warning when outfit piece designed for CBBE is equipped on UBE body") {
+    draft.set_target(projects::NpcTarget{
+        .form_key = "000A2C8E:Skyrim.esm",
+        .editor_id = "Lydia",
+        .name = "Lydia",
+        .winning_plugin = "Skyrim.esm",
+    });
+    FaceState face;
+    face.head_parts = {"051193:Skyrim.esm"};
+    draft.set_face_baseline(face);
+
+    projects::OutfitPieceRef cbbe_armor{
+        .form_key = "010001:Mod.esp",
+        .name = "Minidress CBBE 3BA",
+        .slot_mask = 1u << (32 - 30),
+    };
+    draft.outfit().assign({cbbe_armor});
+
+    auto report = CompatibilityGuardian::evaluate(draft, std::nullopt, {"UBE_AllRace.esp"}, {});
+    REQUIRE(report.body_inspection.body_type == DetectedBodyType::UBE);
+    const bool has_mismatch = std::any_of(report.issues.begin(), report.issues.end(), [](const auto& i) {
+      return i.code == "BodyOutfitMismatch";
+    });
+    REQUIRE(has_mismatch);
+  }
 }
+

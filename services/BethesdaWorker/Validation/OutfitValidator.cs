@@ -180,20 +180,6 @@ internal static class OutfitValidator
     }
 
     /// <summary>The NPC's race plus its armor race (e.g. NordRace → DefaultRace), which ARMA lists target.</summary>
-    private static HashSet<FormKey> RaceAndArmorRace(LoadOrderSession session, INpcGetter npc)
-    {
-        var keys = new HashSet<FormKey>();
-        if (npc.Race.FormKeyNullable is not { } raceKey)
-        {
-            return keys;
-        }
-
-        keys.Add(raceKey);
-        if (session.LinkCache.TryResolve<IRaceGetter>(raceKey, out var race) && race.ArmorRace.FormKeyNullable is { } armorRace)
-        {
-            keys.Add(armorRace);
-        }
-
-        return keys;
-    }
+    private static HashSet<FormKey> RaceAndArmorRace(LoadOrderSession session, INpcGetter npc) =>
+        npc.Race.FormKeyNullable is { } raceKey ? RaceAncestry.CollectRaces(session, raceKey) : [];
 }

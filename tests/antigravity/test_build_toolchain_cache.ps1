@@ -14,6 +14,8 @@ if (-not (Test-Path -LiteralPath $helper)) {
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ("sns-build-toolchain-" + [Guid]::NewGuid().ToString('N'))
 $buildDir = Join-Path $scratch 'debug'
 $cache = Join-Path $buildDir 'CMakeCache.txt'
+$ninjaDeps = Join-Path $buildDir '.ninja_deps'
+$ninjaLog = Join-Path $buildDir '.ninja_log'
 $staleNinja = Join-Path $scratch 'stale\ninja.exe'
 $activeNinja = Join-Path $scratch 'active\ninja.exe'
 
@@ -25,11 +27,15 @@ try {
         "CMAKE_MAKE_PROGRAM:FILEPATH=$($staleNinja -replace '\\','/')"
         'CMAKE_GENERATOR:INTERNAL=Ninja'
     )
+    Set-Content -LiteralPath $ninjaDeps -Value 'stale dependency database'
+    Set-Content -LiteralPath $ninjaLog -Value 'stale command log'
 
     $result = Resolve-CMakeNinjaCache -BuildDirectory $buildDir -ActiveNinja $activeNinja
 
     if (-not $result.CacheRemoved) { throw 'Expected stale CMake cache to be removed.' }
     if (Test-Path -LiteralPath $cache) { throw 'Stale CMakeCache.txt still exists.' }
+    if (Test-Path -LiteralPath $ninjaDeps) { throw 'Stale .ninja_deps still exists.' }
+    if (Test-Path -LiteralPath $ninjaLog) { throw 'Stale .ninja_log still exists.' }
 
     New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
     Set-Content -LiteralPath $cache -Value @(

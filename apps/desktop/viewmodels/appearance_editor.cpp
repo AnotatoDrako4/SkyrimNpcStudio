@@ -231,10 +231,9 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   resolution_.reset();  // a resolution belongs to the NPC it was offered for
   resolution_npc_.clear();
   ++head_part_serial_;  // options of the previous NPC are not valid for this one
-  if (!head_part_options_.isEmpty()) {
-    head_part_options_.clear();
-    emit headPartOptionsChanged();
-  }
+  head_part_search_ = {{"state", "none"}};
+  head_part_options_.clear();
+  emit headPartOptionsChanged();
   diag::set_context("npc", target.form_key + " " + target.editor_id + " (" + target.name + ")");
   diag::set_context("winningPlugin", target.winning_plugin);
   base_recipe_.reset();
@@ -1024,10 +1023,9 @@ void AppearanceEditor::searchHeadParts(const QString& type, const QString& text)
   if (target_.form_key.empty() || !worker_) return;
   const int serial = ++head_part_serial_;
   // A new search replaces the list: never show (or pick from) the results of another type.
-  if (!head_part_options_.isEmpty()) {
-    head_part_options_.clear();
-    emit headPartOptionsChanged();
-  }
+  head_part_options_.clear();
+  head_part_search_ = {{"state", "searching"}, {"type", type}, {"text", text.trimmed()}};
+  emit headPartOptionsChanged();
   Json params{{"npcFormKey", target_.form_key}, {"limit", 300}};
   if (!type.isEmpty()) params["type"] = ss(type);
   if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
@@ -1035,11 +1033,15 @@ void AppearanceEditor::searchHeadParts(const QString& type, const QString& text)
                 [this, serial](const Json& r) {
                   if (serial != head_part_serial_) return;
                   head_part_options_ = to_variant(r.value("items", Json::array())).toList();
+                  head_part_search_["state"] = QStringLiteral("ready");
+                  head_part_search_["count"] = head_part_options_.size();
                   emit headPartOptionsChanged();
                 },
                 [this, serial](int, const QString& message, const Json&) {
                   if (serial != head_part_serial_) return;
                   head_part_options_.clear();
+                  head_part_search_["state"] = QStringLiteral("error");
+                  head_part_search_["error"] = message;
                   emit headPartOptionsChanged();
                   console_->append("warning", "appearance", tr("Búsqueda de piezas de cabeza: %1").arg(message));
                 });

@@ -136,7 +136,9 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   portraits_ = new PortraitRenderer(portrait_scene_, this);
   sources_ = new AppearanceSources(portraits_, this);
   preset_heads_ = new PresetHeadChecker(worker_, this);
-  forge_ = new CharacterForgeViewModel([this] {
+  body_ = new BodyDirector(worker_, this);
+  loose_resources_ = new LooseResourceLibrary(worker_, this);
+  forge_ =new CharacterForgeViewModel([this] {
     creation::ForgeEnvironment env;
     env.instance_name = ss(instance_name_);
     env.instance_ini = ss(instance_path_);
@@ -318,6 +320,9 @@ void StudioController::loadProfile(const QString& profile) {
   portraits_->set_profile(nullptr, {});
   sources_->set_profile(nullptr, {});
   preset_heads_->set_profile(nullptr);
+  body_->set_profile(nullptr);
+  loose_resources_->set_profile(nullptr);
+  registered_armor_meshes_.clear();
   ++names_epoch_;  // names asked for the old profile's catalog are dropped on return, and asked again for the new one
   npc_names_.clear();
   npc_names_asked_.clear();
@@ -444,7 +449,9 @@ void StudioController::start_index() {
   portraits_->set_profile(snapshot_, profile_key);
   sources_->set_profile(snapshot_, profile_key);
   preset_heads_->set_profile(snapshot_, profile_key);
-  const auto cache = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/cache";
+  body_->set_profile(snapshot_);
+  loose_resources_->set_profile(snapshot_, registered_armor_meshes_);
+  const auto cache =QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/cache";
   QDir().mkpath(cache);
 
   set_progress(tr("Indexando plugins…"), 0.0);
@@ -825,6 +832,7 @@ void StudioController::selectNpc(const QString& form_key) {
     history_->clear();
     outfit_->setTarget(details);
     appearance_->set_target(target);
+    body_->inspect(form_key);  // effective body + preset verdicts for the Cuerpo tab
   }, [this, form_key](int, const QString& message, const Json&) {
     if (form_key != pending_npc_) return;
     npc_loading_ = false;
@@ -1555,6 +1563,17 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
 
       const auto male_model = row.value("maleModel").toString();
       const auto female_model = row.value("femaleModel").toString();
+      const auto fk = row.value("formKey").toString();
+      if (!fk.isEmpty()) {
+        auto norm = [](const QString& p) {
+          auto s = p.toLower();
+          s.replace('/', '\\');
+          if (!s.startsWith("meshes\\")) s = "meshes\\" + s;
+          return s.toStdString();
+        };
+        if (!male_model.isEmpty()) registered_armor_meshes_[norm(male_model)] = fk.toStdString();
+        if (!female_model.isEmpty()) registered_armor_meshes_[norm(female_model)] = fk.toStdString();
+      }
       const auto effective_model = !female_model.isEmpty() ? female_model : male_model;
       bool nif_found = false;
       if (!effective_model.isEmpty()) {

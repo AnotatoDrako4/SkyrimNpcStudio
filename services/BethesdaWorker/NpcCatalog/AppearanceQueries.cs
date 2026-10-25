@@ -18,8 +18,7 @@ internal static class AppearanceQueries
             throw new WorkerException(ErrorCodes.RecordNotFound, "NPC race is unresolved.");
 
         var female = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
-        var races = new HashSet<FormKey> { race.FormKey };
-        if (race.ArmorRace.FormKeyNullable is { } armorRace) races.Add(armorRace);
+        var races = RaceAncestry.CollectRaces(session, race.FormKey);
         var pieces = new List<AppearancePiece>();
         void AddArmor(FormKey armorKey, string source)
         {

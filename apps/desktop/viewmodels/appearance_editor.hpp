@@ -104,6 +104,9 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QVariantMap easyModPlan READ easy_mod_plan NOTIFY easyModChanged)
   // Head parts the current NPC can use (race and sex), from the last searchHeadParts().
   Q_PROPERTY(QVariantList headPartOptions READ head_part_options NOTIFY headPartOptionsChanged)
+  // The last searchHeadParts(): {state: "none" | "searching" | "ready" | "error", type, text, count, error}. Lets the UI tell
+  // "no compatible parts" from "the search failed" (both leave headPartOptions empty).
+  Q_PROPERTY(QVariantMap headPartSearch READ head_part_search NOTIFY headPartOptionsChanged)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
@@ -165,6 +168,7 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantMap last_export() const { return last_export_; }
   [[nodiscard]] QVariantMap easy_mod_plan() const;
   [[nodiscard]] QVariantList head_part_options() const { return head_part_options_; }
+  [[nodiscard]] QVariantMap head_part_search() const { return head_part_search_; }
   [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
   // The FaceGen the profile loads for the NPC (MO2 winner), as read for the analysis; null if none.
   [[nodiscard]] std::shared_ptr<const std::string> winning_facegen() const { return existing_facegen_; }
@@ -254,6 +258,7 @@ class AppearanceEditor : public QObject {
   ConsoleModel* console_;
   OutfitEditor* outfit_;
   QVariantList head_part_options_;
+  QVariantMap head_part_search_{{"state", "none"}};
   int head_part_serial_ = 0;
   SnapshotProvider snapshot_;
   appearance::AppearanceDraft& draft_;

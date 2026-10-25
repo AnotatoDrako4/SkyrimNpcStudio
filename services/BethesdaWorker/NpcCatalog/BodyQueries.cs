@@ -200,12 +200,7 @@ internal static class BodyQueries
 
             var flagsRace = effectiveRace ?? race;
             var raceFlags = flagsRace?.Flags ?? 0;
-            var matchRaces = new HashSet<FormKey>();
-            if (flagsRace is not null)
-            {
-                matchRaces.Add(flagsRace.FormKey);
-                if (flagsRace.ArmorRace.FormKeyNullable is { } armorRace) matchRaces.Add(armorRace);
-            }
+            var matchRaces = flagsRace is not null ? RaceAncestry.CollectRaces(session, flagsRace.FormKey) : [];
 
             var addonSkin = effectiveSkinKey ?? ownSkinKey;
             var addons = new List<BodySkinAddon>();

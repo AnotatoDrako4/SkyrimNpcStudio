@@ -64,7 +64,8 @@ enum class DetectedBodyType {
   CBBE,
   ThreeBA,
   UNP,
-  HIMBO
+  HIMBO,
+  UBE
 };
 
 struct BodyInspectionResult {

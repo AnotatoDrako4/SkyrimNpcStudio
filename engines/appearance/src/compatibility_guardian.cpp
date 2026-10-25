@@ -48,6 +48,15 @@ BodyInspectionResult CompatibilityGuardian::inspect_body_system(
   }
 
   if (is_female) {
+    if (has_plugin("UBE_AllRace") || has_plugin("UBE") || has_path("femalebody_ube") ||
+        has_path("!ube") || has_path("_ube")) {
+      result.body_type = DetectedBodyType::UBE;
+      result.body_name = "UBE (Ultimate Body Enhancer)";
+      result.supports_weight_sliders = true;
+      result.physics_enabled = true;
+      result.details = "Malla UBE de alta definición con topología y UV propios.";
+      return result;
+    }
     if (has_plugin("3BA") || has_path("3BA") || has_path("3BBB")) {
       result.body_type = DetectedBodyType::ThreeBA;
       result.body_name = "CBBE 3BA (3BBB Extended)";
@@ -201,6 +210,37 @@ DiagnosticReport CompatibilityGuardian::evaluate(
     is_female = recipe->female;
   }
   report.body_inspection = inspect_body_system(active_plugins, active_file_paths, is_female);
+
+  // 4b. Body & Outfit Cross-Compatibility Validation
+  for (const auto& piece : draft.outfit().pieces()) {
+    if (report.body_inspection.body_type == DetectedBodyType::UBE) {
+      if (contains_ignore_case(piece.name, "cbbe") || contains_ignore_case(piece.name, "3ba") ||
+          contains_ignore_case(piece.name, "unp")) {
+        report.issues.push_back({
+            .code = "BodyOutfitMismatch",
+            .severity = DiagnosticSeverity::Warning,
+            .component = DiagnosticComponent::Wardrobe,
+            .message = "La prenda '" + (piece.name.empty() ? piece.form_key : piece.name) +
+                       "' está diseñada para CBBE/3BA/UNP pero el cuerpo activo es UBE (puede presentar costuras o deformaciones).",
+            .target = piece.form_key,
+            .suggested_action = "Utiliza una variante adaptada a UBE o convierte la prenda mediante BodySlide.",
+        });
+      }
+    } else if (report.body_inspection.body_type == DetectedBodyType::CBBE ||
+               report.body_inspection.body_type == DetectedBodyType::ThreeBA) {
+      if (contains_ignore_case(piece.name, "ube")) {
+        report.issues.push_back({
+            .code = "BodyOutfitMismatch",
+            .severity = DiagnosticSeverity::Warning,
+            .component = DiagnosticComponent::Wardrobe,
+            .message = "La prenda '" + (piece.name.empty() ? piece.form_key : piece.name) +
+                       "' está diseñada para UBE pero el cuerpo activo es CBBE/3BA.",
+            .target = piece.form_key,
+            .suggested_action = "Utiliza una versión diseñada para CBBE o CBBE 3BA.",
+        });
+      }
+    }
+  }
 
   // 5. Project & Save Game Persistence Notice
   if (draft.is_dirty()) {

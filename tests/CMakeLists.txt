@@ -20,7 +20,9 @@ add_executable(sns_engine_tests
   unit/engines/test_control_map.cpp
   unit/engines/test_easy_mod.cpp
   unit/engines/test_review_case.cpp
-  unit/engines/test_body_presets.cpp)
+  unit/engines/test_body_presets.cpp
+  unit/engines/test_body_analysis.cpp
+  unit/engines/test_loose_outfit_indexer.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
 # Audit F-10/F-12: damaged NIFs refused before nifly; one bad mesh never empties the preview.
 target_sources(sns_engine_tests PRIVATE unit/engines/test_nif_safe_load.cpp)

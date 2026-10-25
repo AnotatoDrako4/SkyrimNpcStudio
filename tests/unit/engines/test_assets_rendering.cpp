@@ -42,6 +42,18 @@ std::string bsa(std::string data, bool compress, bool embedded = false) {
   const auto record=61+folder.size(); put(b,record+8,static_cast<std::uint32_t>(payload.size())); put(b,record+12,static_cast<std::uint32_t>(offset));
   b.replace(record+16,filename.size(),filename); b+=payload; return b;
 }
+std::string make_test_nif(const std::string& shape_name) {
+  nifly::NifFile file;
+  file.Create(nifly::NiVersion::getSSE());
+  std::vector<nifly::Vector3> v{{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}};
+  std::vector<nifly::Triangle> t{{0, 1, 2}, {0, 2, 3}};
+  std::vector<nifly::Vector2> uv{{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  std::vector<nifly::Vector3> n(4, nifly::Vector3(0, 0, 1));
+  file.CreateShapeFromData(shape_name, &v, &t, &uv, &n);
+  std::ostringstream out(std::ios::binary);
+  file.Save(out);
+  return out.str();
+}
 }
 TEST_CASE("BSA 105 reads LZ4, plain and embedded files", "[assets]") {
   sns::test::TempDir dir;
@@ -666,4 +678,74 @@ TEST_CASE("AssetResolver locates assets packed inside BSA archives", "[assets]")
   CHECK(loc->archive_provider == "<Game Data>");
   CHECK_FALSE(resolver.locate("meshes/nonexistent.nif").has_value());
 }
+
+TEST_CASE("Outfit visibility diagnostics track unequipped pieces and covered skin parts", "[rendering][outfit]") {
+  sns::test::TempDir dir;
+  dir.write("Base Mod/meshes/test/cuirass.nif", make_test_nif("CuirassShape"));
+  dir.write("Base Mod/meshes/test/pants.nif", make_test_nif("PantsShape"));
+  dir.write("Base Mod/meshes/test/skin_body.nif", make_test_nif("SkinBody"));
+  dir.write("Base Mod/meshes/test/skin_hands.nif", make_test_nif("SkinHands"));
+
+  const auto vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}});
+  sns::assets::AssetResolver resolver(vfs, {});
+
+  sns::rendering::Appearance a;
+  a.npc_form_key = "000001:Test.esp";
+  // Piece 1: First outfit piece occupying slot 32 (Body) - will be unequipped by Piece 2
+  a.pieces.push_back({"000100:Test.esp", "First Robes", "outfit", 1u << (32 - 30),
+                      {{"000101:Test.esp", "meshes\\test\\cuirass.nif", false, 1u << (32 - 30)}}});
+  // Piece 2: Second outfit piece also occupying slot 32 (Body) - will stay equipped
+  a.pieces.push_back({"000200:Test.esp", "Second Armor", "outfit", 1u << (32 - 30),
+                      {{"000201:Test.esp", "meshes\\test\\pants.nif", false, 1u << (32 - 30)}}});
+  // Piece 3: Skin piece slot 32 (Body) - will be covered by Piece 2
+  a.pieces.push_back({"000001:Skyrim.esm", "Skin Body", "skin", 1u << (32 - 30),
+                      {{"000002:Skyrim.esm", "meshes\\test\\skin_body.nif", false, 1u << (32 - 30)}}});
+  // Piece 4: Skin piece slot 33 (Hands) - NOT covered, will be shown
+  a.pieces.push_back({"000003:Skyrim.esm", "Skin Hands", "skin", 1u << (33 - 30),
+                      {{"000004:Skyrim.esm", "meshes\\test\\skin_hands.nif", false, 1u << (33 - 30)}}});
+
+  const auto scene = sns::rendering::build_character_scene(a, resolver, {});
+
+  // Check outfit diagnostics
+  REQUIRE(scene.outfit_diagnostics.size() == 2);
+  const auto& d1 = scene.outfit_diagnostics[0];
+  CHECK(d1.armor_form_key == "000100:Test.esp");
+  CHECK_FALSE(d1.equipped);
+  CHECK(d1.unequipped_by == "Second Armor");
+  CHECK(d1.conflicting_slots == std::vector<int>{32});
+  CHECK(d1.reason.find("conflicts with Second Armor") != std::string::npos);
+
+  const auto& d2 = scene.outfit_diagnostics[1];
+  CHECK(d2.armor_form_key == "000200:Test.esp");
+  CHECK(d2.equipped);
+  CHECK(d2.reason.empty());
+
+  // Check covered body diagnostics
+  REQUIRE(scene.covered_body_diagnostics.size() == 1);
+  const auto& cbd = scene.covered_body_diagnostics[0];
+  CHECK(cbd.piece_name == "Skin Body");
+  CHECK(cbd.slot_indices == std::vector<int>{32});
+  CHECK(cbd.covered_by_piece == "Second Armor");
+  CHECK(cbd.mesh_exists);
+
+  // Check that unequipped and covered shapes exist in scene.parts but are hidden by default
+  const auto pants_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "PantsShape"; });
+  REQUIRE(pants_part != scene.parts.end());
+  CHECK(pants_part->shown_by_default);
+
+  const auto cuirass_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "CuirassShape"; });
+  REQUIRE(cuirass_part != scene.parts.end());
+  CHECK_FALSE(cuirass_part->shown_by_default);
+  CHECK(cuirass_part->hidden_reason.find("unequipped: conflicts with Second Armor") != std::string::npos);
+
+  const auto skin_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "SkinBody"; });
+  REQUIRE(skin_part != scene.parts.end());
+  CHECK_FALSE(skin_part->shown_by_default);
+  CHECK(skin_part->hidden_reason.find("covered by outfit (Second Armor)") != std::string::npos);
+
+  const auto hands_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "SkinHands"; });
+  REQUIRE(hands_part != scene.parts.end());
+  CHECK(hands_part->shown_by_default);
+}
+
 

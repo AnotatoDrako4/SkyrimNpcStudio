@@ -32,6 +32,9 @@ inline constexpr const char* kCreationGetBehaviorCatalog = "creation.getBehavior
 inline constexpr const char* kCreationApplyArchetype = "creation.applyArchetype";
 inline constexpr const char* kCreationUndoArchetype = "creation.undoArchetype";
 inline constexpr const char* kCreationValidateBehavior = "creation.validateBehavior";
+// 1.7 (Universal Body Director): body facts of NPCs and the packaging of a generated body distribution.
+inline constexpr const char* kBodyInspectNpcs = "body.inspectNpcs";
+inline constexpr const char* kExportBodyDistribution = "export.bodyDistribution";
 // Server -> client notification.
 inline constexpr const char* kIndexProgress = "catalog.progress";
 // Client -> server notification understood by StreamJsonRpc (same as LSP).

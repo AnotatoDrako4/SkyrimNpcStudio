@@ -66,7 +66,7 @@ Item {
     }
     function equip(index) { root.studio.outfit.addPiece(root.studio.armorResults.get(index), true) }
     // Used by the empty viewer ("Ver prendas") and the command palette.
-    function focusSearch() { searchField.forceActiveFocus(); searchField.selectAll() }
+    function focusSearch() { catalogModeTabs.currentIndex = 0; searchField.forceActiveFocus(); searchField.selectAll() }
 
     // Mod filter: every plugin that defines or overrides armors, labelled with its MO2 mod.
     readonly property var modOptions: [{ text: qsTr("Todos los mods"), value: "" }].concat(
@@ -135,9 +135,28 @@ Item {
         anchors.margins: Theme.spacingMd
         spacing: Theme.spacingSm
 
-        // ------------------------------------------------------------- BÚSQUEDA Y FILTROS
-        ColumnLayout {
+        TabBar {
+            id: catalogModeTabs
             Layout.fillWidth: true
+            TabButton { text: qsTr("Prendas (ARMO)") }
+            TabButton { text: qsTr("Packs sin ESP (%1)").arg(root.studio.looseResources.totalResources) }
+        }
+
+        StackLayout {
+            currentIndex: catalogModeTabs.currentIndex
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            // Modo 1: Catálogo de armaduras indexadas con registro ARMO
+            ColumnLayout {
+                id: armoContainer
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: Theme.spacingSm
+
+                // ------------------------------------------------------------- BÚSQUEDA Y FILTROS
+                ColumnLayout {
+                    Layout.fillWidth: true
             spacing: Theme.spacingSm
 
             TextField {
@@ -625,4 +644,17 @@ Item {
                      ? [{ label: qsTr("Restablecer filtros"), trigger: () => root.resetFilters() }] : []
         }
     }
+
+    // Modo 2: Biblioteca de packs sin ESP y proyectos BodySlide (Épica C / RC-A Punto 4)
+    LooseResourceSection {
+        id: looseResourceSection
+        studio: root.studio
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        onPreviewRequested: (path) => {
+            root.previewRequested(path)
+        }
+    }
+}
+}
 }

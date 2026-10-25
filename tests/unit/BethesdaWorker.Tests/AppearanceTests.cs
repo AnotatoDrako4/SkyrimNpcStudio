@@ -122,5 +122,18 @@ public sealed class AppearanceTests : IClassFixture<CatalogFixture>
         Assert.Contains(search.Items, hp => hp.EditorId == "HairFemaleNord01");
     }
 
+    [Fact]
+    public void VampireNpc_EquippingDefaultRaceArmor_ResolvesArmatureAndAddons()
+    {
+        var result = Get(new AppearanceRequest
+        {
+            NpcFormKey = SyntheticLoadOrder.VampireNpc.ToString(),
+            ArmorFormKeys = [SyntheticLoadOrder.SteelCuirass.ToString()]
+        });
+        Assert.Single(result.Pieces);
+        Assert.Single(result.Pieces[0].Addons);
+        Assert.StartsWith("meshes\\", result.Pieces[0].Addons[0].MeshPath);
+    }
+
     private AppearanceResponse Get(AppearanceRequest request) => _fixture.State.Read(c => AppearanceQueries.Get(c.Session, c.Queries, request));
 }

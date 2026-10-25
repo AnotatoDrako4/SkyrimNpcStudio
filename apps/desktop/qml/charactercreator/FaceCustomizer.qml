@@ -40,6 +40,12 @@ ScrollView {
             Layout.fillWidth: true
         }
 
+        // Diagnóstico y protección facial en la parte superior para visibilidad inmediata
+        FaceProtectionCard {
+            Layout.fillWidth: true
+            studio: root.studio
+        }
+
         Rectangle {
             Layout.fillWidth: true
             height: 1
@@ -126,12 +132,6 @@ ScrollView {
             morphValues: root.studio.appearance.morphs
             sliders: root.studio.appearance.standardSliders.filter(s => s.category === "Chin")
             onSliderChanged: (key, val) => root.studio.appearance.setSlider(key, val)
-        }
-
-        // Diagnosis of the face protection, collapsed: below the controls so they keep their place.
-        FaceProtectionCard {
-            Layout.fillWidth: true
-            studio: root.studio
         }
     }
 }

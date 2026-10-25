@@ -135,3 +135,18 @@ Binario final `build/ux06/bin/SkyrimNpcStudio.exe` SHA-256 `063A0D89…`. Matriz
 ## UX06 (2026-10-23): binario final 4455913F
 
 Sustituye al cierre anterior (063A0D89). Cambios solo en QML: los 2 bucles de binding preexistentes (`OutfitPanel.qml` diálogo de borrar preset, diálogo de salida de `Main.qml`) corregidos con ancho explícito + `ColumnLayout`; nombres accesibles en palabras para barras de desplazamiento, la luz del visor y botones con símbolo (`CharacterToolbar`, `HairEyeCustomizer`, `CharacterCreator`, `OutfitPanel`, `NativeNpcEditor`, `CharacterForge`). Repetidos con este binario: workbench-check 1366/1100/125 %/150 %, settings-check, ctest 289/289, los 10 escenarios (incl. forge-behavior AG04 y A1–A4) PASS; 0 advertencias QML. Ningún archivo vuestro tocado; lock libre; sin Git; PENDIENTE_SKYRIM.
+
+
+---
+
+## SNS-WIN RC-A (2026-10-24): Body Preset Director, galería de cabello y diagnóstico de atuendos — EN_DESARROLLO
+
+Claude trabaja el plan maestro SNS-WIN-CUSTOMIZATION-MASTERPLAN (RC-A) en esta carpeta, **sin Git** y con build aislado
+`build/sns-win` (lock `heavy-build.lock` con «Agent: Claude SNS-WIN» solo mientras compila). Evidencia y respaldos con SHA-256 en
+`out/local-implementation/sns-win-20261024-body/`.
+Archivos tocados: `engines/body/**` (nuevo `body_analysis.cpp`), `engines/ipc/include/sns/ipc/protocol.hpp` (constantes 1.7 que ya
+estaban en `Protocol.cs`), `apps/desktop/viewmodels/{body_director.*, studio_controller.*}`, `apps/desktop/components/appearance_stress.cpp`
+(escenarios nuevos `body-director`, `hair-gallery`, `outfit-diagnosis`, fuera de «all»), QML `charactercreator/{BodyCustomizer,
+BodyPresetSection, HairEyeCustomizer, HeadPartGallery}.qml`. **Reservados editados de forma aditiva:** `apps/desktop/CMakeLists.txt`
+(2 viewmodel + 2 QML + `sns::body`), `tests/CMakeLists.txt` (`test_body_analysis.cpp`). Ningún archivo vuestro tocado; nada escrito
+en MO2/Skyrim (verificado por SHA-256 del `BodyChangeNGdistribution.json` del perfil). Estado en juego: PENDIENTE_SKYRIM.

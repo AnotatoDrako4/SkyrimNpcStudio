@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -104,13 +105,28 @@ using FileReader = std::function<std::string(const std::string& absolute_utf8_pa
 BodyEnvironment inspect_environment(const mo2::VirtualFileSystem& vfs, const mo2::EffectiveLoadOrder* load_order,
                                     const FileReader& read_file = {});
 
+// A Data-relative file as the game would find it: a loose file of the virtual Data folder wins, then (when the
+// caller can read archives) the last loaded BSA that contains it.
+struct DataFile {
+  std::string provider;             // MO2 mod, "<Overwrite>"/"<Game Data>" for loose files, the archive name for BSA
+  bool archived = false;
+  bool game_data = false;           // loose file of the game's own Data folder, or a vanilla archive
+  std::optional<std::string> bytes; // only when asked for
+};
+using DataLookup = std::function<std::optional<DataFile>(std::string_view data_path, bool want_bytes)>;
+// Loose files of the VFS only (BSA contents are invisible: such files read as missing).
+DataLookup loose_lookup(const mo2::VirtualFileSystem& vfs, FileReader read_file = {});
+
 // ---- Body mesh evidence and the NPC's detected family ----
 struct MeshEvidence {
   std::string model;              // ARMA path as stored
   std::string data_path;          // "meshes\..." key looked up in the VFS
   std::string provider;           // winning MO2 provider, "" when the mesh is missing
+  bool archived = false;          // found only inside a BSA
+  bool game_data = false;
   std::vector<std::string> shape_names;
   std::vector<std::string> diffuse_textures;
+  std::vector<std::string> physics_bones;  // breast/butt/belly/thigh bones of 3BA/UBE physics bodies found in the skin
   std::string body_tri;           // BODYTRI value, "" = the mesh was not built with "Build Morphs"
   std::string body_tri_path;      // "meshes\..." key
   std::string body_tri_provider;  // "" = the TRI it names is not in the virtual Data
@@ -134,7 +150,9 @@ struct NpcBodyAnalysis {
   bool follower_candidate = false;  // non-vanilla defining plugin + Potential/CurrentFollowerFaction
   bool custom_appearance = false;   // FaceGen geometry provided by a mod (replacer)
   std::string facegen_provider;
-  unsigned family_mask = 0;         // detected like BCNG ResolveActorFamily; 0 = unknown (BCNG: no filter)
+  // The studio's reading of the body mesh (shape names, mesh/TRI paths, race, BCNG framework plugins), tokenized like
+  // BCNG classifies presets; 0 = unknown. It is evidence for the user, not a copy of BCNG's runtime decision.
+  unsigned family_mask = 0;
   BodyFamily family = BodyFamily::Unknown;
   TextureLayout layout = TextureLayout::Unknown;
   std::vector<std::string> evidence;  // plain-language trail of the decision
@@ -143,23 +161,25 @@ struct NpcBodyAnalysis {
   std::vector<Issue> issues;
 };
 
-// Reads body NIFs through the VFS (cached per mesh path; thread-safe) and decides each NPC's family.
+// Reads body NIFs through `lookup` (cached per mesh path; thread-safe) and decides each NPC's family.
+// `env` must outlive the inspector.
 class BodyInspector {
  public:
+  BodyInspector(const BodyEnvironment& env, DataLookup lookup);
   BodyInspector(const mo2::VirtualFileSystem& vfs, const BodyEnvironment& env, FileReader read_file = {});
   [[nodiscard]] NpcBodyAnalysis analyze(const NpcBodyInfo& npc) const;
   [[nodiscard]] MeshEvidence mesh(std::string_view arma_model) const;
 
  private:
-  const mo2::VirtualFileSystem& vfs_;
   const BodyEnvironment& env_;
-  FileReader read_file_;
+  DataLookup lookup_;
   mutable std::mutex mutex_;
   mutable std::map<std::string, MeshEvidence> cache_;
 };
 
 // ---- Operation A: give the NPC a BodySlide preset of its own family ----
-enum class Verdict { Compatible, NeedsResources, Experimental, Blocked };
+// Ordered from best to worst: an assessment takes the worst verdict any of its checks gives.
+enum class Verdict { Compatible, Experimental, NeedsResources, Blocked };
 std::string_view verdict_id(Verdict v);     // "compatible", "needs-resources", "experimental", "blocked"
 std::string_view verdict_label(Verdict v);  // "Compatible", "Requiere recursos adicionales", "Experimental", "Bloqueada"
 
@@ -174,5 +194,22 @@ Assessment assess_preset(const NpcBodyAnalysis& npc, const BodySlidePreset& pres
 
 // ---- Operation B: change the NPC's body family (3BA <-> UBE). Never a preset assignment. ----
 Assessment assess_family_change(const NpcBodyAnalysis& npc, BodyFamily target, const BodyEnvironment& env);
+
+// ---- Operation C: assess outfit mesh compatibility against an NPC's body ----
+struct OutfitMeshCompatibility {
+  std::string mesh_path;
+  BodyFamily mesh_family = BodyFamily::Unknown;
+  Verdict verdict = Verdict::Compatible;
+  bool weight_variants_found = false;
+  bool morph_tri_found = false;
+  bool physics_bones_compatible = true;
+  std::vector<std::string> missing_bones;
+  std::vector<Issue> issues;
+};
+
+OutfitMeshCompatibility assess_outfit_mesh_compatibility(
+    const NpcBodyAnalysis& npc,
+    std::string_view outfit_mesh_path,
+    const BodyInspector& inspector);
 
 }  // namespace sns::body

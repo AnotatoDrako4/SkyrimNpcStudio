@@ -42,6 +42,7 @@
 #include "viewmodels/studio_controller.hpp"
 #include "viewmodels/portrait_cache.hpp"
 #include "viewmodels/portrait_renderer.hpp"
+#include "sns/body/bcng_rules.hpp"
 #include "sns/core/text.hpp"
 #include "sns/rendering/scene.hpp"
 #include "sns/face/facegen.hpp"
@@ -4291,6 +4292,643 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->step();
         });
       });
+    } else if (name == "body-director") {
+      // RC-A body (BOD-01..04): BodySlide presets of the REAL profile through Body Change NG. Analyses several NPCs (family, mesh,
+      // TRI, evidence), checks that presets of another family are blocked (never exported silently), that a stale answer of a
+      // previous NPC never wins, assigns a compatible preset, refuses an export into MO2, exports a new mod into the work folder and
+      // reads it back, and proves the profile's own distribution file was not touched. Writes body-director-report.json. Not in "all".
+      auto* director = self->studio->body();
+      auto report = std::make_shared<QJsonObject>();
+      auto rows = std::make_shared<QJsonArray>();
+      auto base_file = std::make_shared<QString>();
+      auto base_hash = std::make_shared<QByteArray>();
+      auto file_hash = [](const QString& path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex() : QByteArray();
+      };
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, done, ms, next, timer, poll] {
+          if (self->finished || !self->studio) return;
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          QTimer::singleShot(100, self->studio, *poll);
+        };
+        (*poll)();
+      };
+      QStringList npcs = {QStringLiteral("0A2C8E:Skyrim.esm"), QStringLiteral("002B6C:Dawnguard.esm"), QStringLiteral("013364:Skyrim.esm"),
+                          QStringLiteral("01A696:Skyrim.esm"), QStringLiteral("01414D:Skyrim.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      auto assign_npc = std::make_shared<QString>();
+
+      steps.push_back([self, director, wait_for, report, base_file, base_hash, file_hash] {
+        wait_for([director] { return director->environment().value("state").toString() != QLatin1String("loading"); }, 180000,
+                 [self, director, report, base_file, base_hash, file_hash](bool) {
+                   const auto env = director->environment();
+                   self->check(env.value("state").toString() == QLatin1String("ready"), "body environment ready: " + env.value("error").toString());
+                   self->log(QStringLiteral("body env: bcng=%1 obody=%2 racemenu=%3 global=%4 presets=%5 files=%6 dup=%7 unreadable=%8 dist=%9 (%10 rules) frameworks=%11")
+                                 .arg(env.value("bcng").toString(), env.value("obody").toString(), env.value("racemenu").toString(), env.value("globalFamily").toString())
+                                 .arg(env.value("presets").toInt()).arg(env.value("files").toInt()).arg(env.value("duplicates").toInt()).arg(env.value("unreadableFiles").toInt())
+                                 .arg(env.value("distributionProvider").toString()).arg(env.value("distributionRules").toInt()).arg(env.value("installedFamilies").toString()));
+                   self->check(env.value("presets").toInt() > 0, "the profile's BodySlide presets were read (BOD-01)");
+                   (*report)["environment"] = QJsonObject::fromVariantMap(env);
+                   if (const auto snap = self->studio->snapshot()) {
+                     if (const auto r = snap->vfs.resolve(body::bcng::kDistributionPath)) {
+                       *base_file = QString::fromStdWString(r->absolute.wstring());
+                       *base_hash = file_hash(*base_file);
+                     }
+                   }
+                   self->step();
+                 });
+      });
+      for (const auto& form_key : npcs) {
+        steps.push_back([self, director, wait_for, rows, form_key, assign_npc] {
+          self->studio->selectNpc(form_key);
+          wait_for([director, form_key] {
+                     const auto n = director->npc();
+                     const auto state = n.value("state").toString();
+                     return n.value("formKey").toString() == form_key && (state == QLatin1String("ready") || state == QLatin1String("error"));
+                   },
+                   120000, [self, director, rows, form_key, assign_npc](bool ok) {
+                     const auto n = director->npc();
+                     self->check(ok && n.value("state").toString() == QLatin1String("ready"),
+                                 form_key + ": body analysed " + n.value("error").toString());
+                     QMap<QString, int> verdicts;
+                     int foreign_blocked = 0, foreign = 0;
+                     const auto family = n.value("family").toString();
+                     const auto same = [](const QString& a, const QString& b) {
+                       const auto cbbe = [](const QString& f) { return f == QLatin1String("3ba") || f == QLatin1String("cbbe"); };
+                       return a == b || (cbbe(a) && cbbe(b));
+                     };
+                     static const QSet<QString> known{"compatible", "experimental", "needs-resources", "blocked"};
+                     bool all_known = true;
+                     for (const auto& p : director->presets()) {
+                       const auto row = p.toMap();
+                       const auto v = row.value("verdict").toString();
+                       ++verdicts[v];
+                       all_known &= known.contains(v);
+                       const auto pf = row.value("family").toString();
+                       if (family != QLatin1String("unknown") && pf != QLatin1String("unknown") && pf != QLatin1String("other") && !same(pf, family)) {
+                         ++foreign;
+                         foreign_blocked += v == QLatin1String("blocked") ? 1 : 0;
+                       }
+                     }
+                     self->check(all_known, form_key + ": every preset has one of the four verdicts");
+                     if (foreign > 0) {
+                       self->check(foreign_blocked == foreign,
+                                   QStringLiteral("%1: presets of another family are blocked (%2/%3, BOD-02)").arg(form_key).arg(foreign_blocked).arg(foreign));
+                     }
+                     if (n.value("child").toBool()) self->check(verdicts.value("compatible") == 0, form_key + ": a child gets no compatible preset");
+                     QStringList codes;
+                     for (const auto& i : n.value("issues").toList()) codes << i.toMap().value("code").toString();
+                     QStringList changes;
+                     for (const auto& c : n.value("changes").toList()) {
+                       const auto m = c.toMap();
+                       changes << m.value("target").toString() + "=" + m.value("verdict").toString();
+                       self->check(m.value("verdict").toString() != QLatin1String("compatible"), form_key + ": a family change is never simply compatible");
+                     }
+                     QStringList vparts;
+                     QJsonObject vjson;
+                     for (auto it = verdicts.begin(); it != verdicts.end(); ++it) {
+                       vparts << QStringLiteral("%1=%2").arg(it.key()).arg(it.value());
+                       vjson[it.key()] = it.value();
+                     }
+                     const auto body = n.value("body").toMap();
+                     self->log(QStringLiteral("body %1 (%2, %3): family %4 [%5] mesh %6 @ %7 tri %8 @ %9 | issues %10 | presets %11 | changes %12")
+                                   .arg(form_key, n.value("name").toString(), n.value("sex").toString(), n.value("familyLabel").toString(), n.value("familyMask").toString(),
+                                        body.value("path").toString(), body.value("provider").toString(), body.value("tri").toString(), body.value("triProvider").toString())
+                                   .arg(codes.join(","), vparts.join(" "), changes.join(" ")));
+                     for (const auto& e : n.value("evidence").toStringList()) self->log("    evidence: " + e);
+                     QJsonObject row = QJsonObject::fromVariantMap(n);
+                     row["presetVerdicts"] = vjson;
+                     rows->append(row);
+                     if (assign_npc->isEmpty() && verdicts.value("compatible") > 0) *assign_npc = form_key;
+                     self->step();
+                   });
+        });
+      }
+      // A stale answer never wins: two NPCs in a row, the second must be the one analysed (HAIR-02 for the body).
+      steps.push_back([self, director, wait_for, npcs] {
+        if (npcs.size() < 2) { self->skip("rapid switch needs two NPCs"); self->step(); return; }
+        const auto first = npcs.at(0), second = npcs.at(1);
+        self->studio->selectNpc(first);
+        QTimer::singleShot(30, self->studio, [self, director, wait_for, second] {
+          self->studio->selectNpc(second);
+          wait_for([director, second] { return director->npc().value("formKey").toString() == second && director->npc().value("state").toString() == QLatin1String("ready"); },
+                   120000, [self, director, second](bool ok) {
+                     self->after(1500, [self, director, second, ok] {
+                       self->check(ok && director->npc().value("formKey").toString() == second, "after a rapid switch the body shown is the last NPC's (" + second + ")");
+                       self->step();
+                     });
+                   });
+        });
+      });
+      steps.push_back([self, director, wait_for, assign_npc, report] {
+        if (assign_npc->isEmpty()) {
+          self->check(false, "at least one NPC has a compatible preset to assign");
+          self->step();
+          return;
+        }
+        self->studio->selectNpc(*assign_npc);
+        wait_for([director, assign_npc] { return director->npc().value("formKey").toString() == *assign_npc && director->npc().value("state").toString() == QLatin1String("ready"); },
+                 120000, [self, director, report](bool ok) {
+                   self->check(ok, "assignment NPC analysed again");
+                   if (auto* tabs = self->window->findChild<QObject*>(QStringLiteral("creatorRightTabs"))) tabs->setProperty("currentIndex", 3);
+                   self->after(900, [self, director, report] {
+                     QQuickItem* list = nullptr;
+                     std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+                       for (auto* child : item->childItems()) {
+                         if (child->objectName() == QLatin1String("bodyPresetList") && child->isVisible()) list = child;
+                         walk(child);
+                       }
+                     };
+                     walk(self->window->contentItem());
+                     self->check(list != nullptr, "the preset list is on screen in «Cuerpo»");
+                     // Scroll the Cuerpo panel so the capture shows the preset section.
+                     QQuickItem* viewport = nullptr;
+                     for (auto* p = list ? list->parentItem() : nullptr; p; p = p->parentItem()) {
+                       if (!p->inherits("QQuickFlickable")) continue;
+                       viewport = p;
+                       if (auto* content = p->property("contentItem").value<QQuickItem*>()) {
+                         const auto at = list->mapToItem(content, QPointF(0, 0));
+                         p->setProperty("contentY", std::max(0.0, at.y() - 420.0));
+                       }
+                       break;
+                     }
+                     auto check_layout = [self, viewport](const QString& when) {
+                       if (!viewport) { self->check(false, "the Cuerpo panel scrolls (Flickable found)"); return; }
+                       self->window->grabWindow();  // a frame: the window lays out what changed
+                       int inspected = 0;
+                       const auto problems = layout_problems(viewport, false, &inspected);
+                       self->check(problems.isEmpty(), QStringLiteral("Cuerpo panel %1: %2 items in %3 px, layout %4")
+                                                           .arg(when).arg(inspected).arg(int(viewport->width())).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+                     };
+                     check_layout(QStringLiteral("before assigning"));
+                     // Prefer a preset whose name is repeated (the rule must then name its file, BOD-04).
+                     QVariantMap pick, blocked;
+                     for (const auto& v : director->presets()) {
+                       const auto row = v.toMap();
+                       if (row.value("verdict").toString() == QLatin1String("compatible") && (pick.isEmpty() || (row.value("duplicate").toBool() && !pick.value("duplicate").toBool())))
+                         pick = row;
+                       if (blocked.isEmpty() && row.value("verdict").toString() == QLatin1String("blocked")) blocked = row;
+                     }
+                     if (!blocked.isEmpty()) {
+                       const auto refused = director->assign(blocked.value("uid").toString(), true);
+                       self->check(!refused.isEmpty() && director->draft().value("rules").toList().isEmpty(),
+                                   "a blocked preset is refused even with consent: " + refused.left(120));
+                     }
+                     const auto message = director->assign(pick.value("uid").toString(), false);
+                     self->check(message.isEmpty(), "compatible preset assigned: " + pick.value("name").toString() + " " + message);
+                     const auto draft = director->draft();
+                     const auto rules = draft.value("rules").toList();
+                     self->check(rules.size() == 1 && draft.value("errors").toStringList().isEmpty(), "the draft has one valid rule");
+                     const auto text = draft.value("text").toString();
+                     self->check(text.contains(QStringLiteral("\"schemaVersion\": 8")), "the draft is a schema 8 distribution");
+                     if (pick.value("duplicate").toBool()) {
+                       self->check(!rules.isEmpty() && !rules.first().toMap().value("file").toString().isEmpty(), "a repeated preset name is written with its file (BOD-04)");
+                     } else {
+                       self->skip("no repeated preset name among the compatible ones (BOD-04 not exercised on this NPC)");
+                     }
+                     (*report)["assigned"] = QJsonObject::fromVariantMap(pick);
+                     self->after(600, [self, check_layout] {
+                       check_layout(QStringLiteral("with a rule in the draft"));
+                       self->window->grabWindow().save(QDir(self->work_dir).filePath("body-presets.png"));
+                       self->step();
+                     });
+                   });
+                 });
+      });
+      steps.push_back([self, director, wait_for] {
+        // An export into MO2's mods folder is refused before anything is created (RES-03 for the body package).
+        const auto forbidden = self->studio->mo2_mods_directory();
+        director->exportDistribution(QStringLiteral("SNS Body Forbidden Test"), forbidden, true);
+        wait_for([director] { return director->export_result().value("state").toString() != QLatin1String("exporting"); }, 30000,
+                 [self, director, forbidden](bool) {
+                   const auto r = director->export_result();
+                   self->check(r.value("state").toString() == QLatin1String("error"), "export into MO2's mods folder refused: " + r.value("error").toString().left(140));
+                   self->check(!QFileInfo::exists(QDir(forbidden).filePath(QStringLiteral("SNS Body Forbidden Test"))), "nothing was created in MO2's mods folder");
+                   self->step();
+                 });
+      });
+      steps.push_back([self, director, wait_for, report] {
+        const auto out = QDir(self->work_dir).filePath(QStringLiteral("body-export"));
+        const auto expected = director->draft().value("text").toString();
+        director->exportDistribution(QStringLiteral("SNS Body Test"), out, true);
+        wait_for([director] { const auto s = director->export_result().value("state").toString(); return s == QLatin1String("done") || s == QLatin1String("error"); }, 120000,
+                 [self, director, report, expected](bool) {
+                   const auto r = director->export_result();
+                   self->check(r.value("state").toString() == QLatin1String("done"), "the distribution was exported: " + r.value("error").toString());
+                   const auto mod = r.value("modDirectory").toString();
+                   QFile json(QDir(mod).filePath(QStringLiteral("SKSE/Plugins/BodyChangeNGdistribution.json")));
+                   QByteArray bytes;
+                   if (json.open(QIODevice::ReadOnly)) bytes = json.readAll();
+                   self->check(!bytes.isEmpty() && bytes == expected.toUtf8(), "the exported JSON is byte-identical to the draft (read back)");
+                   QJsonParseError err{};
+                   const auto doc = QJsonDocument::fromJson(bytes, &err);
+                   const auto rules = doc.object().value("rules").toArray();
+                   self->check(err.error == QJsonParseError::NoError && doc.object().value("schemaVersion").toInt() == 8 && !rules.isEmpty() &&
+                                   rules.first().toObject().value("id").toString().startsWith(QStringLiteral("sns-npc-")),
+                               QStringLiteral("schema 8, %1 rules, the studio's rule first").arg(rules.size()));
+                   self->check(rules.size() == director->draft().value("mergedRules").toInt(), "the profile's previous rules are kept behind the studio's");
+                   self->check(QFileInfo::exists(r.value("manifestPath").toString()), "manifest.json written");
+                   self->check(!r.value("zipPath").toString().isEmpty() && QFileInfo::exists(r.value("zipPath").toString()), "ZIP written");
+                   bool hashes = true;
+                   for (const auto& f : r.value("files").toList()) {
+                     const auto m = f.toMap();
+                     QFile file(QDir(mod).filePath(m.value("path").toString()));
+                     hashes &= file.open(QIODevice::ReadOnly) &&
+                               QString::fromLatin1(QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256).toHex()).compare(m.value("sha256").toString(), Qt::CaseInsensitive) == 0;
+                   }
+                   self->check(hashes, "every file's SHA-256 matches the manifest");
+                   self->check(r.value("inGame").toString() == QLatin1String("PENDIENTE_SKYRIM"), "the result says PENDIENTE_SKYRIM");
+                   (*report)["export"] = QJsonObject::fromVariantMap(r);
+                   self->after(600, [self] {
+                     self->window->grabWindow().save(QDir(self->work_dir).filePath("body-export-done.png"));
+                     self->step();
+                   });
+                 });
+      });
+      steps.push_back([self, report, rows, base_file, base_hash, file_hash] {
+        if (base_file->isEmpty()) {
+          self->skip("the profile has no BodyChangeNGdistribution.json to compare");
+        } else {
+          self->check(file_hash(*base_file) == *base_hash, "the profile's own distribution file is unchanged (zero writes into MO2)");
+        }
+        (*report)["npcs"] = *rows;
+        (*report)["baseDistribution"] = *base_file;
+        (*report)["baseDistributionSha256"] = QString::fromLatin1(*base_hash);
+        (*report)["inGame"] = QStringLiteral("PENDIENTE_SKYRIM");
+        QFile out(QDir(self->work_dir).filePath("body-director-report.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*report).toJson());
+        self->step();
+      });
+    } else if (name == "hair-gallery") {
+      // HAIR-01/02 with the head part gallery of «Pelo/Ojos»: real mouse clicks on a card and on «Probar en el NPC», the part shows
+      // up in the NPC's head parts, «Deshacer» brings the previous one back, the panel has no spilled text, and after switching NPC
+      // the gallery lists options again (never the previous NPC's). Captures the gallery. Not in "all": it needs an indexed profile.
+      auto find_named = [self](const QString& object_name) -> QQuickItem* {
+        QQuickItem* found = nullptr;
+        std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+          for (auto* child : item->childItems()) {
+            if (child->objectName() == object_name && child->isVisible()) found = child;
+            walk(child);
+          }
+        };
+        walk(self->window->contentItem());
+        return found;
+      };
+      auto click_item = [self](QQuickItem* item) {
+        QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+      };
+      auto parts_of = [self](const QString& type) {
+        QStringList keys;
+        for (const auto& p : self->appearance()->head_parts()) {
+          const auto m = p.toMap();
+          if (m.value("type").toString() == type) keys << m.value("formKey").toString().toLower();
+        }
+        return keys;
+      };
+      auto before = std::make_shared<QStringList>();
+      auto chosen = std::make_shared<QString>();
+      auto head_blocked = [self] {
+        for (const auto& b : self->appearance()->face_compatibility().value("blocked").toList()) {
+          if (b.toMap().value("op").toString() == QLatin1String("head-parts")) return true;
+        }
+        return false;
+      };
+      // An NPC whose head accepts head part changes (the face protection blocks them for some high-poly replacers). A blocked
+      // head must show no cards at all, only the reason.
+      steps.push_back([self, find_named, head_blocked] {
+        if (auto* tabs = self->window->findChild<QObject*>(QStringLiteral("creatorRightTabs"))) tabs->setProperty("currentIndex", 2);
+        // Only FormKeys known to be NPCs of the profile: a failed NPC load ends an automated run.
+        QStringList known;
+        if (!self->second_npc.isEmpty()) known << self->second_npc;
+        known << QStringLiteral("013364:Skyrim.esm") << QStringLiteral("01A696:Skyrim.esm");
+        if (qEnvironmentVariableIsSet("SNS_STRESS_HAIR_NPCS")) known = qEnvironmentVariable("SNS_STRESS_HAIR_NPCS").split(',', Qt::SkipEmptyParts);
+        auto candidates = std::make_shared<QStringList>(known);
+        auto next = std::make_shared<std::function<void()>>();
+        *next = [self, find_named, head_blocked, candidates, next] {
+          if (!head_blocked()) { self->log("hair gallery NPC: " + self->appearance()->npc_label()); self->step(); return; }
+          self->window->grabWindow();
+          self->check(find_named(QStringLiteral("headPartGrid")) == nullptr,
+                      self->appearance()->npc_label() + ": head parts are blocked by the face protection and the gallery shows no cards");
+          if (candidates->isEmpty()) { self->check(false, "an NPC whose head accepts head part changes"); self->steps.clear(); self->step(); return; }
+          self->studio->selectNpc(candidates->takeFirst());
+          self->when_idle([self, next] { self->after(800, *next); });
+        };
+        self->after(1200, [self, next] { self->when_idle([next] { (*next)(); }); });
+      });
+      steps.push_back([self] {
+        // The gallery searches when the tab opens; wait for the worker's answer (bounded) instead of a fixed delay.
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, timer, poll] {
+          if (self->finished || !self->studio) return;
+          if (!self->appearance()->head_part_options().isEmpty() || timer->elapsed() > 30000) { self->after(500, [self] { self->then_idle(); }); return; }
+          QTimer::singleShot(100, self->studio, *poll);
+        };
+        self->after(300, *poll);
+      });
+      steps.push_back([self, find_named, click_item, parts_of, before, chosen] {
+        auto* grid = find_named(QStringLiteral("headPartGrid"));
+        const auto options = self->appearance()->head_part_options();
+        const auto search = self->appearance()->head_part_search();
+        if (options.isEmpty()) {
+          std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+            for (auto* child : item->childItems()) {
+              if (child->metaObject()->indexOfProperty("lastQuery") >= 0) {
+                self->log(QStringLiteral("gallery state: visible %1 allowed %2 npcKey '%3' query '%4' lastQuery '%5' retries %6 analysing %7")
+                              .arg(child->isVisible()).arg(child->property("allowed").toBool()).arg(child->property("npcKey").toString(),
+                                   child->property("query").toString(), child->property("lastQuery").toString())
+                              .arg(child->property("retries").toInt()).arg(self->appearance()->analysing()));
+              }
+              walk(child);
+            }
+          };
+          walk(self->window->contentItem());
+        }
+        self->check(grid != nullptr && !options.isEmpty(), QStringLiteral("the gallery lists %1 hair option(s) for %2 (search %3 %4)")
+                                                               .arg(options.size()).arg(self->appearance()->npc_label())
+                                                               .arg(search.value("state").toString(), search.value("error").toString()));
+        if (!grid || options.isEmpty()) { self->steps.clear(); self->step(); return; }  // nothing applied: no undo to check
+        // The panel around the gallery: nothing may spill out of it.
+        QQuickItem* viewport = nullptr;
+        for (auto* p = grid->parentItem(); p; p = p->parentItem()) {
+          if (p->inherits("QQuickFlickable") && p != grid) { viewport = p; break; }
+        }
+        if (viewport) {
+          if (auto* content = viewport->property("contentItem").value<QQuickItem*>()) {
+            const auto at = grid->mapToItem(content, QPointF(0, 0));
+            viewport->setProperty("contentY", std::max(0.0, at.y() - 60.0));
+          }
+          self->window->grabWindow();
+          int inspected = 0;
+          const auto problems = layout_problems(viewport, false, &inspected);
+          self->check(problems.isEmpty(), QStringLiteral("Pelo/Ojos panel: %1 items in %2 px, layout %3").arg(inspected).arg(int(viewport->width())).arg(problems.isEmpty() ? "ok" : problems.join("; ")));
+        }
+        *before = parts_of(QStringLiteral("Hair"));
+        // A card on screen that is not the hair already in use; its delegate is a child of the grid's content item. Views keep
+        // delegates outside the viewport too (cache buffer): only one fully inside the grid can be clicked.
+        auto* content = grid->property("contentItem").value<QQuickItem*>();
+        QQuickItem* card = nullptr;
+        if (content) {
+          for (auto* d : content->childItems()) {
+            const auto data = d->property("modelData").toMap();
+            const QRectF r = d->mapRectToItem(grid, QRectF(0, 0, d->width(), d->height()));
+            // Inside the grid AND inside the scrolling panel that holds it (lower rows can sit below the panel's edge).
+            const QRectF v = viewport ? d->mapRectToItem(viewport, QRectF(0, 0, d->width(), d->height())) : QRectF();
+            const bool on_screen = r.top() >= 0 && r.bottom() <= grid->height() + 0.5 && r.left() >= 0 && r.right() <= grid->width() + 0.5 &&
+                                   (!viewport || (v.top() >= 0 && v.bottom() <= viewport->height() + 0.5));
+            if (!data.isEmpty() && on_screen && !before->contains(data.value("formKey").toString().toLower()) && d->isVisible()) {
+              card = d;
+              *chosen = data.value("formKey").toString();
+              break;
+            }
+          }
+        }
+        self->check(card != nullptr, "a card that is not the current hair is on screen: " + *chosen);
+        if (!card) { self->steps.clear(); self->step(); return; }
+        // What the press lands on (diagnosis when the card does not react): the deepest visible item under the card's centre.
+        const QPointF centre = card->mapToScene(QPointF(card->width() / 2, card->height() / 2));
+        QQuickItem* hit = self->window->contentItem();
+        for (QQuickItem* next = hit; next;) {
+          hit = next;
+          next = nullptr;
+          const auto kids = hit->childItems();
+          for (auto it = kids.rbegin(); it != kids.rend(); ++it) {
+            if ((*it)->isVisible() && (*it)->contains((*it)->mapFromScene(centre))) { next = *it; break; }
+          }
+        }
+        QStringList chain;
+        for (auto* p = hit; p; p = p->parentItem()) {
+          chain << QStringLiteral("%1'%2'(%3x%4)").arg(QString::fromLatin1(p->metaObject()->className()), p->objectName()).arg(int(p->width())).arg(int(p->height()));
+        }
+        for (auto* c : card->childItems()) {
+          chain.prepend(QStringLiteral("[child %1 visible %2 enabled %3 %4,%5 %6x%7]").arg(QString::fromLatin1(c->metaObject()->className()))
+                            .arg(c->isVisible()).arg(c->isEnabled()).arg(c->x()).arg(c->y()).arg(c->width()).arg(c->height()));
+        }
+        const QRectF card_scene = card->mapRectToScene(QRectF(0, 0, card->width(), card->height()));
+        self->log(QStringLiteral("hair card at %1,%2 (card scene %3,%4 %5x%6) -> %7").arg(centre.x()).arg(centre.y())
+                      .arg(card_scene.x()).arg(card_scene.y()).arg(card_scene.width()).arg(card_scene.height()).arg(chain.mid(0, 8).join(" < ")));
+        click_item(card);
+        self->after(400, [self, find_named, click_item, grid] {
+          for (auto* p = grid->parentItem(); p; p = p->parentItem()) {
+            if (p->metaObject()->indexOfProperty("selectedKey") >= 0) { self->log("gallery selectedKey after click: " + p->property("selectedKey").toString()); break; }
+          }
+          auto* try_button = find_named(QStringLiteral("headPartTry"));
+          self->check(try_button && try_button->property("enabled").toBool(), "«Probar en el NPC» is enabled after choosing a card");
+          self->window->grabWindow().save(QDir(self->work_dir).filePath("hair-gallery.png"));
+          if (try_button) click_item(try_button);
+          self->then_idle();
+        });
+      });
+      steps.push_back([self, parts_of, before, chosen] {
+        const auto now = parts_of(QStringLiteral("Hair"));
+        self->check(now.contains(chosen->toLower()), QStringLiteral("the chosen hair %1 is now the NPC's (was %2)").arg(*chosen, before->join(",")));
+        self->window->grabWindow().save(QDir(self->work_dir).filePath("hair-gallery-applied.png"));
+        self->studio->history()->undo();
+        self->then_idle();
+      });
+      steps.push_back([self, parts_of, before] {
+        self->check(parts_of(QStringLiteral("Hair")) == *before, "«Deshacer» brings the previous hair back exactly");
+        const auto other = self->second_npc.isEmpty() ? QStringLiteral("002B6C:Dawnguard.esm") : self->second_npc;
+        self->studio->selectNpc(other);
+        self->then_idle();
+      });
+      steps.push_back([self] {
+        self->after(1500, [self] {
+          self->check(!self->appearance()->head_part_options().isEmpty(), QStringLiteral("after switching to %1 the gallery searched again (%2 options)")
+                                                                              .arg(self->appearance()->npc_label()).arg(self->appearance()->head_part_options().size()));
+          self->step();
+        });
+      });
+    } else if (name == "loose-resources") {
+      // RES-01..03 (RC-A Punto 4): Discovery and visual browsing of loose packs and BodySlide projects without ESP.
+      auto* lib = self->studio->loose_resources();
+      auto report = std::make_shared<QJsonObject>();
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, done, ms, next, timer, poll] {
+          if (self->finished || !self->studio) return;
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          QTimer::singleShot(100, self->studio, *poll);
+        };
+        (*poll)();
+      };
+
+      steps.push_back([self, lib, wait_for, report] {
+        self->log("loose-resources: waiting for loose resource indexing...");
+        wait_for([lib] { return lib->state() == "ready"; }, 180000, [self, lib, report](bool ok) {
+          self->check(ok && lib->state() == "ready", "loose resource library is ready");
+          if (!ok) { self->next_scenario(); return; }
+
+          const int total = lib->total_resources();
+          self->log(QStringLiteral("loose-resources: indexed %1 resources (%2 loose meshes, %3 bodyslide, %4 replacers)")
+                        .arg(total).arg(lib->loose_mesh_count()).arg(lib->bodyslide_project_count()).arg(lib->replacer_mesh_count()));
+          self->check(total > 0, QStringLiteral("discovered %1 loose resources in the MO2 profile").arg(total));
+
+          // RES-01 verification: loose meshes without ESP have equippable=false and no fake ARMO FormKey
+          bool res01_ok = true;
+          int loose_checked = 0;
+          for (const auto& v : lib->resources()) {
+            const auto m = v.toMap();
+            if (m.value("kind").toString() == "loose-mesh") {
+              ++loose_checked;
+              const auto cap = m.value("capabilities").toMap();
+              const auto assoc = m.value("association").toMap();
+              if (cap.value("equippable").toBool()) { res01_ok = false; break; }
+              if (!assoc.value("armorFormKey").toString().isEmpty()) { res01_ok = false; break; }
+            }
+          }
+          self->check(res01_ok && loose_checked > 0, QStringLiteral("RES-01 PASS: %1 loose meshes verified with equippable=false and no fake ARMO").arg(loose_checked));
+
+          // RES-02 verification: replacers report the replaced ARMO record and confirmed confidence
+          bool res02_ok = true;
+          int replacers_checked = 0;
+          for (const auto& v : lib->resources()) {
+            const auto m = v.toMap();
+            if (m.value("kind").toString() == "replacer-mesh") {
+              ++replacers_checked;
+              const auto assoc = m.value("association").toMap();
+              if (assoc.value("armorFormKey").toString().isEmpty()) { res02_ok = false; break; }
+              if (assoc.value("confidence").toString() != "confirmed") { res02_ok = false; break; }
+            }
+          }
+          if (replacers_checked > 0) {
+            self->check(res02_ok, QStringLiteral("RES-02 PASS: %1 replacers report replaced ARMO record with confirmed confidence").arg(replacers_checked));
+          } else {
+            self->log("RES-02: no replacers in current profile sample (SKIP honesto)");
+          }
+
+          // Test filter and search
+          lib->search(QStringLiteral("boots"), QStringLiteral(""), QStringLiteral(""), QStringLiteral(""));
+          const int filtered = lib->resources().size();
+          self->log(QStringLiteral("loose-resources: search 'boots' returned %1 items").arg(filtered));
+          lib->search(QStringLiteral(""), QStringLiteral(""), QStringLiteral(""), QStringLiteral(""));
+
+          // Test selection
+          if (total > 0) {
+            const auto first = lib->resources().first().toMap();
+            const auto first_id = first.value("resourceId").toString();
+            lib->selectResource(first_id);
+            self->check(lib->selected_resource().value("resourceId").toString() == first_id, "selectResource updates selectedResource");
+            lib->clearSelection();
+            self->check(lib->selected_resource().isEmpty(), "clearSelection clears selectedResource");
+          }
+
+          (*report)["totalResources"] = total;
+          (*report)["looseMeshCount"] = lib->loose_mesh_count();
+          (*report)["bodyslideProjectCount"] = lib->bodyslide_project_count();
+          (*report)["replacerMeshCount"] = lib->replacer_mesh_count();
+          (*report)["res01Verified"] = res01_ok;
+          (*report)["res02Verified"] = res02_ok;
+          (*report)["status"] = QStringLiteral("INTEGRACION_WINDOWS_OK");
+
+          QFile out(QDir(self->work_dir).filePath("loose-resources-report.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*report).toJson());
+
+          self->step();
+        });
+      });
+    } else if (name == "outfit-diagnosis") {
+      // SER-01..03: what the 3D view draws of each NPC's default outfit and why. For every NPC (SNS_STRESS_NPCS, default Serana and
+      // Lydia): the outfit of the winning record (armor, slots, plugin), every drawn shape with its NIF, MO2 provider, slots, visibility
+      // and hidden reason, the scene issues (missing meshes, pieces left unequipped by a shared slot) and the vertical coverage of the
+      // visible outfit (does anything reach below the knees?). Captures the front view. Writes outfit-diagnosis.json. Not in "all".
+      auto rows = std::make_shared<QJsonArray>();
+      QStringList npcs = {QStringLiteral("002B6C:Dawnguard.esm"), QStringLiteral("0A2C8E:Skyrim.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      for (const auto& form_key : npcs) {
+        steps.push_back([self, form_key] {
+          self->studio->selectNpc(form_key);
+          self->then_idle();
+        });
+        steps.push_back([self, rows, form_key] {
+          const auto npc = self->studio->npc();
+          const auto outfit = npc.value("defaultOutfit").toMap();
+          QJsonArray armors;
+          for (const auto& a : outfit.value("armors").toList()) {
+            const auto m = a.toMap();
+            armors.append(QJsonObject{{"formKey", m.value("formKey").toString()}, {"name", m.value("name").toString()}, {"editorId", m.value("editorId").toString()},
+                                      {"slots", QJsonArray::fromVariantList(m.value("slots").toList())}, {"winningPlugin", m.value("winningPlugin").toString()},
+                                      {"provider", self->studio->providerOf(m.value("winningPlugin").toString())}, {"addons", m.value("addonCount").toInt()},
+                                      {"femaleModel", m.value("femaleModel").toString()}});
+            self->log(QStringLiteral("  outfit armor %1 %2 slots %3 plugin %4 (%5)")
+                          .arg(m.value("formKey").toString(), m.value("name").toString().isEmpty() ? m.value("editorId").toString() : m.value("name").toString())
+                          .arg(QJsonDocument(QJsonArray::fromVariantList(m.value("slots").toList())).toJson(QJsonDocument::Compact),
+                               m.value("winningPlugin").toString(), self->studio->providerOf(m.value("winningPlugin").toString())));
+          }
+          QJsonArray parts;
+          double visible_min_z = 1e9, body_min_z = 1e9, body_max_z = -1e9;
+          for (const auto& p : self->scene()->parts()) {
+            const auto row = p.toMap();
+            const auto insp = row.value("inspector").toMap();
+            const bool shown = row.value("shownByDefault").toBool();
+            const auto group = row.value("group").toString();
+            // Bounds "(x, y, z) - (x, y, z)" in Skyrim units (Z up), as SceneViewModel's inspector writes them.
+            static const QRegularExpression number(QStringLiteral("-?\\d+(?:\\.\\d+)?"));
+            QList<double> values;
+            for (auto it = number.globalMatch(insp.value("bounds").toString()); it.hasNext();) values << it.next().captured().toDouble();
+            const double zmin = values.size() == 6 ? values[2] : 0, zmax = values.size() == 6 ? values[5] : 0;
+            if (shown && group != QLatin1String("head")) {
+              body_min_z = std::min(body_min_z, zmin);
+              body_max_z = std::max(body_max_z, zmax);
+            }
+            if (shown && group == QLatin1String("outfit")) visible_min_z = std::min(visible_min_z, zmin);
+            parts.append(QJsonObject{{"group", group}, {"piece", insp.value("piece").toString()}, {"shape", insp.value("shape").toString()},
+                                     {"nif", insp.value("nif").toString()}, {"provider", insp.value("nifProvider").toString()},
+                                     {"armor", insp.value("armor").toString()}, {"addon", insp.value("addon").toString()},
+                                     {"slots", insp.value("slots").toString()}, {"shown", shown}, {"hiddenReason", row.value("hiddenReason").toString()},
+                                     {"zmin", zmin}, {"zmax", zmax}, {"triangles", insp.value("triangles").toLongLong()},
+                                     {"missingTextures", insp.value("textures").toList().size()}});
+            self->log(QStringLiteral("  part [%1] %2 / %3 :: %4 @ %5 slots %6 %7 z %8..%9%10")
+                          .arg(group, insp.value("piece").toString().left(40), insp.value("shape").toString().left(30), insp.value("nif").toString().right(70),
+                               insp.value("nifProvider").toString().left(40), insp.value("slots").toString(), shown ? "SHOWN" : "hidden")
+                          .arg(zmin, 0, 'f', 1).arg(zmax, 0, 'f', 1)
+                          .arg(row.value("hiddenReason").toString().isEmpty() ? QString() : " (" + row.value("hiddenReason").toString() + ")"));
+          }
+          QJsonArray issues;
+          for (const auto& i : self->scene()->issues()) {
+            const auto m = i.toMap();
+            issues.append(QJsonObject{{"severity", m.value("severity").toString()}, {"code", m.value("code").toString()},
+                                      {"message", m.value("message").toString()}, {"subject", m.value("subject").toString()}});
+            self->log(QStringLiteral("  issue %1 %2: %3 [%4]").arg(m.value("severity").toString(), m.value("code").toString(),
+                                                                   m.value("message").toString().left(200), m.value("subject").toString().right(80)));
+          }
+          const double height = body_max_z - body_min_z;
+          // Knee height of an upright Skyrim human is about 28% of the body height from the feet.
+          const double knee = body_min_z + 0.28 * height;
+          const bool legs_covered = visible_min_z < knee;
+          self->log(QStringLiteral("outfit %1 (%2): outfit %3, %4 armor(s), %5 shapes, lowest visible outfit z %6, body z %7..%8, knee ~%9 -> legs %10")
+                        .arg(form_key, self->appearance()->npc_label(), outfit.value("outfit").toMap().value("editorId").toString())
+                        .arg(armors.size()).arg(parts.size()).arg(visible_min_z, 0, 'f', 1).arg(body_min_z, 0, 'f', 1).arg(body_max_z, 0, 'f', 1)
+                        .arg(knee, 0, 'f', 1).arg(legs_covered ? "covered by the outfit" : "NOT covered by any visible outfit shape"));
+          self->check(!parts.isEmpty(), form_key + ": the scene drew something");
+          const auto shot = QDir(self->work_dir).filePath(QStringLiteral("outfit-%1.png").arg(QString(form_key).replace(':', '_')));
+          self->window->grabWindow().save(shot);
+          rows->append(QJsonObject{{"npc", form_key}, {"name", self->appearance()->npc_label()},
+                                   {"outfit", outfit.value("outfit").toMap().value("editorId").toString()},
+                                   {"outfitFormKey", outfit.value("outfit").toMap().value("formKey").toString()},
+                                   {"armors", armors}, {"parts", parts}, {"issues", issues},
+                                   {"outfitDiagnostics", QJsonArray::fromVariantList(self->scene()->outfit_diagnostics())},
+                                   {"coveredBodyDiagnostics", QJsonArray::fromVariantList(self->scene()->covered_body_diagnostics())},
+                                   {"stats", QJsonObject::fromVariantMap(self->scene()->stats())},
+                                   {"lowestVisibleOutfitZ", visible_min_z}, {"bodyMinZ", body_min_z}, {"bodyMaxZ", body_max_z},
+                                   {"legsCoveredByOutfit", legs_covered}, {"capture", shot}});
+          self->step();
+        });
+      }
+      steps.push_back([self, rows] {
+        QFile out(QDir(self->work_dir).filePath("outfit-diagnosis.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*rows).toJson());
+        self->step();
+      });
     } else if (name == "skin-match") {
       // Reference integration A4: the head <-> body skin match (an ESTIMATE of the seam at the neck) of several real NPCs of the profile.
       // Checks the invariants of every result (verdict, thresholds, ΔE of each part, the ESTIMATE / UNVERIFIED_IN_SKYRIM caveats, an
@@ -5532,7 +6170,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
 QStringList appearance_stress_scenarios() {
   return {"hair-single", "hair-sequence", "hair-rapid", "ui-hair-clicks", "color-dialog", "viewport-during-build",
           "early-edit", "sliders", "undo-redo", "reset", "original-toggle", "outfit-during-build", "material-preview-block", "workspace-during-build",
-          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "appearance-scan", "face-resolution", "npc-gallery", "npc-portraits", "npc-gallery-paging", "quit-during-build"};
+          "replacer-facegen", "hair-safe", "easy-mod", "easy-mod-layout", "easy-mod-outfit", "head-part", "head-part-eyes", "sliders-export", "skin-export", "preset-export", "donor-export", "body-export", "export-reopen", "switch-npc", "undo-redo-exact", "switch-npc-rapid", "project-cycle", "project-blocked-face", "creator-layout", "armor-mod-filter", "appearance-control", "appearance-scan", "face-resolution", "npc-gallery", "npc-portraits", "npc-gallery-paging", "loose-resources", "quit-during-build"};
 }
 
 void run_appearance_stress(QQuickWindow* window, StudioController* studio, const QStringList& scenarios,

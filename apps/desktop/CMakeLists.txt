@@ -24,6 +24,8 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/portrait_renderer.cpp viewmodels/portrait_renderer.hpp
   viewmodels/appearance_sources.cpp viewmodels/appearance_sources.hpp
   viewmodels/preset_head_checker.cpp viewmodels/preset_head_checker.hpp
+  viewmodels/body_director.cpp viewmodels/body_director.hpp
+  viewmodels/loose_resource_library.cpp viewmodels/loose_resource_library.hpp
   viewmodels/studio_controller.cpp viewmodels/studio_controller.hpp
   viewmodels/workbench_state.cpp viewmodels/workbench_state.hpp
   viewmodels/settings_service.cpp viewmodels/settings_service.hpp
@@ -79,6 +81,9 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/PresetManager.qml
     qml/charactercreator/HairEyeCustomizer.qml
     qml/charactercreator/BodyCustomizer.qml
+    qml/charactercreator/BodyPresetSection.qml
+    qml/charactercreator/HeadPartGallery.qml
+    qml/charactercreator/LooseResourceSection.qml
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/AppearanceControlPanel.qml
@@ -128,7 +133,7 @@ target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Test  # QTest::mouseClick for the --forge-preview automation (platform input path)
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face
-  sns::rendering
+  sns::rendering sns::body
   sns::compile_options
   dbghelp)
 

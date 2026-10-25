@@ -94,4 +94,13 @@ public sealed class OutfitValidatorTests(CatalogFixture fixture) : IClassFixture
         Assert.True(r.Exportable);
         Assert.Contains(r.Issues, i => i.Code == "EmptyOutfit");
     }
+
+    [Fact]
+    public void VampireNpc_CanWearDefaultRaceArmor_WithoutNoAddonForRaceError()
+    {
+        var r = Validate(SyntheticLoadOrder.VampireNpc.ToString(), SyntheticLoadOrder.SteelCuirass.ToString());
+        Assert.True(r.Exportable, string.Join("; ", r.Issues.Select(i => i.Message)));
+        Assert.DoesNotContain(r.Issues, i => i.Code == "NoAddonForRace");
+        Assert.Single(r.Pieces);
+    }
 }

@@ -17,10 +17,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'dev-env.ps1')
+. (Join-Path $PSScriptRoot 'build-toolchain.ps1')
 
 Push-Location $root
 try {
-    cmake --preset $Preset
+    $ninja = (Get-Command ninja -ErrorAction Stop).Source
+    $toolchain = Resolve-CMakeNinjaCache -BuildDirectory (Join-Path $root "build\$Preset") -ActiveNinja $ninja
+    if ($toolchain.CacheRemoved) {
+        Write-Warning "Removed stale CMake cache ($($toolchain.Reason)): $($toolchain.CachedNinja)"
+    }
+
+    cmake --preset $Preset "-DCMAKE_MAKE_PROGRAM=$ninja"
     if ($LASTEXITCODE) { throw "cmake configure failed ($LASTEXITCODE)" }
     cmake --build --preset $Preset
     if ($LASTEXITCODE) { throw "cmake build failed ($LASTEXITCODE)" }

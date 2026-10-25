@@ -244,8 +244,38 @@ struct SceneOptions {
   std::uint64_t texture_budget_bytes = 512ull * 1024 * 1024;  // decoded RGBA8 for the whole scene
 };
 
+struct OutfitPieceDiagnostic {
+  std::string armor_form_key;
+  std::string name;
+  std::uint32_t slot_mask = 0;
+  std::vector<int> slot_indices;
+  bool equipped = true;
+  std::string unequipped_by;
+  std::string unequipped_by_form_key;
+  std::vector<int> conflicting_slots;
+  std::vector<std::string> mesh_paths;
+  std::vector<std::string> mesh_providers;
+  bool meshes_exist = true;
+  std::string reason;
+};
+
+struct CoveredBodyDiagnostic {
+  std::string piece_name;
+  std::string addon_form_key;
+  std::uint32_t slot_mask = 0;
+  std::vector<int> slot_indices;
+  std::string covered_by_piece;
+  std::string covered_by_form_key;
+  std::vector<int> covering_slots;
+  std::string mesh_path;
+  std::string mesh_provider;
+  bool mesh_exists = true;
+};
+
 struct CharacterScene {
   std::vector<RenderPart> parts;
+  std::vector<OutfitPieceDiagnostic> outfit_diagnostics;
+  std::vector<CoveredBodyDiagnostic> covered_body_diagnostics;
   std::vector<float> skeleton_lines;  // pairs of view-space points
   std::size_t skeleton_bones = 0;
   std::unordered_map<std::string, std::shared_ptr<const textures::DdsImage>> textures;
@@ -332,5 +362,10 @@ bool is_covered(std::uint32_t slots, std::uint32_t covered);
 // not move the result. nullopt for a missing or non-RGBA8 image, a shape with no usable UV triangle, or no opaque covered texel.
 std::optional<std::array<float, 3>> median_skin_color(const textures::DdsImage& image, const RenderPart& part);
 inline constexpr std::uint32_t kHairSlots = (1u << (31 - 30)) | (1u << (41 - 30));
+
+std::string slot_name(int slot);
+std::string describe_slot(int slot);
+std::string describe_slots(const std::vector<int>& slots);
+std::vector<int> slots_from_mask(std::uint32_t mask);
 
 }  // namespace sns::rendering

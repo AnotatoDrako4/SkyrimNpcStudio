@@ -39,12 +39,16 @@ TEST_CASE("the real worker over its named pipe speaks protocol 1.6 and has the f
   CHECK(hello.protocol_major == protocol::kMajor);
   CHECK(hello.protocol_minor == protocol::kMinor);
   CHECK(hello.protocol_major == 1);
-  CHECK(hello.protocol_minor == 6);
+  CHECK(hello.protocol_minor >= 6);  // the behavior endpoints arrived in 1.6; 1.7 added body.inspectNpcs / export.bodyDistribution
 
   const auto again = client->call(method::kHandshake, Json{{"clientName", "ag05"}, {"clientVersion", "0"}, {"protocolMajor", 1}, {"protocolMinor", 6}}, 10s);
   const auto capabilities = again.at("capabilities");
   for (const char* name : {method::kCreationAnalyzeVoice, method::kCreationGetBehaviorCatalog, method::kCreationApplyArchetype,
                            method::kCreationUndoArchetype, method::kCreationValidateBehavior}) {
+    INFO(name);
+    CHECK(std::find(capabilities.begin(), capabilities.end(), Json(name)) != capabilities.end());
+  }
+  for (const char* name : {method::kBodyInspectNpcs, method::kExportBodyDistribution}) {
     INFO(name);
     CHECK(std::find(capabilities.begin(), capabilities.end(), Json(name)) != capabilities.end());
   }

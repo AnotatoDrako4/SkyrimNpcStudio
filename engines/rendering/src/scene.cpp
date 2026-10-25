@@ -685,6 +685,57 @@ std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks)
 
 bool is_covered(std::uint32_t slots, std::uint32_t covered) { return (slots & covered) != 0; }
 
+std::string slot_name(int slot) {
+  switch (slot) {
+    case 30: return "Head";
+    case 31: return "Hair";
+    case 32: return "Body";
+    case 33: return "Hands";
+    case 34: return "Forearms";
+    case 35: return "Amulet";
+    case 36: return "Ring";
+    case 37: return "Feet";
+    case 38: return "Calves";
+    case 39: return "Shield";
+    case 40: return "Tail";
+    case 41: return "LongHair";
+    case 42: return "Circlet";
+    case 43: return "Ears";
+    case 44: return "FaceGenHead";
+    case 45: return "Neck";
+    case 46: return "ChestSecondary";
+    case 47: return "Cloak";
+    case 48: return "Backpack";
+    case 49: return "Pelvis";
+    case 50: return "DecapitateHead";
+    case 51: return "Decapitate";
+    case 52: return "PelvisSecondary";
+    case 61: return "FX01";
+    default: return std::to_string(slot);
+  }
+}
+
+std::string describe_slot(int slot) {
+  return std::to_string(slot) + " (" + slot_name(slot) + ")";
+}
+
+std::string describe_slots(const std::vector<int>& slots) {
+  std::string out;
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    if (i > 0) out += ", ";
+    out += describe_slot(slots[i]);
+  }
+  return out;
+}
+
+std::vector<int> slots_from_mask(std::uint32_t mask) {
+  std::vector<int> out;
+  for (int bit = 0; bit < 32; ++bit) {
+    if (mask & (1u << bit)) out.push_back(30 + bit);
+  }
+  return out;
+}
+
 std::optional<std::array<float, 3>> median_skin_color(const textures::DdsImage& image, const RenderPart& part) {
   if (image.format != textures::TextureFormat::RGBA8 || image.width == 0 || image.height == 0) return std::nullopt;
   const std::size_t texels = static_cast<std::size_t>(image.width) * image.height;
@@ -795,7 +846,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   // ---- 1. geometry --------------------------------------------------------------------------
   auto append_mesh = [&](const std::string& path, const std::string& group, const std::string& label,
                          const std::string& armor, const std::string& addon_key, std::uint32_t mask, bool slider,
-                         bool hide_hair) {
+                         bool hide_hair, const std::string& explicit_hidden_reason = "") {
     check_cancel();
     if (path.empty()) return;
     ++scene.stats.meshes_requested;
@@ -833,7 +884,9 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       check_cancel();
       if (shape.indices.empty() || shape.positions.empty()) continue;
       auto reason = hidden_reason(shape, collision);
-      if (reason.empty() && hide_hair &&
+      if (!explicit_hidden_reason.empty()) {
+        reason = explicit_hidden_reason;
+      } else if (reason.empty() && hide_hair &&
           (shape.shader_type == nif::kShaderHairTint || text::to_lower_ascii(shape.name).find("hair") != std::string::npos)) {
         reason = "hair under a headgear slot (31/41)";
       }
@@ -939,30 +992,97 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   }
   const auto equipped = resolve_equipped(outfit_masks);
   std::uint32_t covered = 0;
+
+  // Build outfit diagnostics for every requested piece
   for (std::size_t i = 0; i < outfit.size(); ++i) {
+    OutfitPieceDiagnostic diag;
+    diag.armor_form_key = outfit[i]->armor_form_key;
+    diag.name = outfit[i]->name;
+    diag.slot_mask = outfit[i]->slot_mask;
+    diag.slot_indices = slots_from_mask(diag.slot_mask);
+    diag.equipped = equipped[i];
+
+    for (const auto& addon : outfit[i]->addons) {
+      if (addon.mesh.empty()) continue;
+      diag.mesh_paths.push_back(addon.mesh);
+      const auto loc = resolver.locate(addon.mesh);
+      diag.mesh_providers.push_back(describe(loc));
+      if (!loc.has_value()) {
+        diag.meshes_exist = false;
+      }
+    }
+
     if (equipped[i]) {
       covered |= outfit[i]->slot_mask;
+      if (!diag.meshes_exist) {
+        diag.reason = "mesh missing from archives and loose files";
+      }
+    } else {
+      ++scene.stats.pieces_unequipped;
+      for (std::size_t j = i + 1; j < outfit.size(); ++j) {
+        if (equipped[j] && (outfit[j]->slot_mask & outfit[i]->slot_mask)) {
+          diag.unequipped_by = outfit[j]->name;
+          diag.unequipped_by_form_key = outfit[j]->armor_form_key;
+          const std::uint32_t conflict_mask = outfit[j]->slot_mask & outfit[i]->slot_mask;
+          diag.conflicting_slots = slots_from_mask(conflict_mask);
+          break;
+        }
+      }
+      diag.reason = "unequipped: conflicts with " + (diag.unequipped_by.empty() ? "another outfit piece" : diag.unequipped_by);
+      if (!diag.conflicting_slots.empty()) {
+        diag.reason += " on slot(s) " + describe_slots(diag.conflicting_slots);
+      }
+      issue(scene, "info", "PieceUnequipped",
+            outfit[i]->name + " is not shown: " + diag.unequipped_by + " comes later in the outfit and uses slot(s) " +
+            describe_slots(diag.conflicting_slots) + " (the game keeps only the last item equipped per slot)", outfit[i]->armor_form_key);
+    }
+    scene.outfit_diagnostics.push_back(std::move(diag));
+  }
+
+  for (std::size_t i = 0; i < outfit.size() && !options.head_only; ++i) {
+    if (!equipped[i]) {
+      const auto& diag = scene.outfit_diagnostics[i];
+      for (const auto& addon : outfit[i]->addons) {
+        append_mesh(addon.mesh, "outfit", outfit[i]->name, outfit[i]->armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false, diag.reason);
+      }
       continue;
     }
-    ++scene.stats.pieces_unequipped;
-    std::string by;
-    for (std::size_t j = i + 1; j < outfit.size(); ++j) {
-      if (equipped[j] && (outfit[j]->slot_mask & outfit[i]->slot_mask)) by = outfit[j]->name;
-    }
-    issue(scene, "info", "PieceUnequipped",
-          outfit[i]->name + " is not shown: " + by + " comes later in the outfit and uses the same slot "
-          "(the game keeps only the last item equipped per slot)", outfit[i]->armor_form_key);
-  }
-  for (std::size_t i = 0; i < outfit.size() && !options.head_only; ++i) {
-    if (!equipped[i]) continue;
     for (const auto& addon : outfit[i]->addons) {
       append_mesh(addon.mesh, "outfit", outfit[i]->name, outfit[i]->armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);
     }
   }
+
   for (const auto& piece : appearance.pieces) {
     if (piece.source != "skin" || options.head_only) continue;
     for (const auto& addon : piece.addons) {
-      if (is_covered(addon.slot_mask, covered)) continue;
+      if (is_covered(addon.slot_mask, covered)) {
+        CoveredBodyDiagnostic cbd;
+        cbd.piece_name = piece.name;
+        cbd.addon_form_key = addon.form_key;
+        cbd.slot_mask = addon.slot_mask;
+        cbd.slot_indices = slots_from_mask(addon.slot_mask);
+        cbd.mesh_path = addon.mesh;
+        if (!addon.mesh.empty()) {
+          const auto loc = resolver.locate(addon.mesh);
+          cbd.mesh_provider = describe(loc);
+          cbd.mesh_exists = loc.has_value();
+        }
+        for (std::size_t j = 0; j < outfit.size(); ++j) {
+          if (equipped[j] && (outfit[j]->slot_mask & addon.slot_mask)) {
+            cbd.covered_by_piece = outfit[j]->name;
+            cbd.covered_by_form_key = outfit[j]->armor_form_key;
+            cbd.covering_slots = slots_from_mask(outfit[j]->slot_mask & addon.slot_mask);
+            break;
+          }
+        }
+        std::string hidden_msg = "covered by outfit (" + (cbd.covered_by_piece.empty() ? "armor" : cbd.covered_by_piece) + ") on slot(s) " + describe_slots(cbd.covering_slots.empty() ? cbd.slot_indices : cbd.covering_slots);
+        scene.covered_body_diagnostics.push_back(std::move(cbd));
+        issue(scene, "info", "BodyPartCovered",
+              piece.name + " (" + describe_slots(slots_from_mask(addon.slot_mask)) + ") is covered by " + (cbd.covered_by_piece.empty() ? "outfit" : cbd.covered_by_piece),
+              addon.form_key);
+        append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false, hidden_msg);
+        continue;
+      }
       append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);
     }
   }
