@@ -3,6 +3,8 @@ add_library(sns_appearance STATIC
   src/compatibility_guardian.cpp
   src/control_map.cpp
   src/easy_mod.cpp
+  src/face_source_index.cpp
+  src/face_transfer.cpp
   src/review_case.cpp
   src/skin_match.cpp
   src/source_matrix.cpp

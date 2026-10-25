@@ -1,5 +1,7 @@
 #include "loose_resource_library.hpp"
 
+#include <QBuffer>
+#include <QImage>
 #include <QPointer>
 #include <QSet>
 #include <QThreadPool>
@@ -8,6 +10,8 @@
 #include "diagnostics/crash_diagnostics.hpp"
 #include "json_bridge.hpp"
 #include "resource_context.hpp"
+#include "sns/assets/bsa_archive.hpp"
+#include "sns/textures/dds.hpp"
 
 namespace sns::app {
 
@@ -15,7 +19,13 @@ namespace {
 
 QString kind_label(const std::string& kind) {
   if (kind == "bodyslide-project") return QStringLiteral("Proyecto BodySlide");
-  if (kind == "replacer-mesh") return QStringLiteral("Replacer");
+  if (kind == "replacer-mesh") return QStringLiteral("Replacer ARMO");
+  if (kind == "weapon-mesh") return QStringLiteral("Arma / Objeto NIF");
+  if (kind == "facegen-mesh") return QStringLiteral("Malla FaceGen");
+  if (kind == "facegen-tint") return QStringLiteral("Tinte FaceGen DDS");
+  if (kind == "texture-dds") return QStringLiteral("Textura DDS");
+  if (kind == "bsa-archive") return QStringLiteral("Archivo BSA");
+  if (kind == "unsupported-file") return QStringLiteral("Otro archivo (sin vista previa)");
   return QStringLiteral("Malla suelta (sin ESP)");
 }
 
@@ -25,6 +35,11 @@ QString category_label(const std::string& cat) {
   if (cat == "gauntlets") return QStringLiteral("Guantes / Manos");
   if (cat == "helmet") return QStringLiteral("Cabeza / Casco");
   if (cat == "accessory") return QStringLiteral("Accesorio");
+  if (cat == "weapon") return QStringLiteral("Arma");
+  if (cat == "object") return QStringLiteral("Objeto 3D");
+  if (cat == "facegen") return QStringLiteral("FaceGen");
+  if (cat == "texture") return QStringLiteral("Textura 2D");
+  if (cat == "archive") return QStringLiteral("Archivo BSA");
   return QStringLiteral("Otro");
 }
 
@@ -97,6 +112,11 @@ void LooseResourceLibrary::set_profile(
   loose_mesh_count_ = 0;
   bodyslide_project_count_ = 0;
   replacer_mesh_count_ = 0;
+  weapon_mesh_count_ = 0;
+  facegen_count_ = 0;
+  texture_dds_count_ = 0;
+  bsa_archive_count_ = 0;
+  unsupported_file_count_ = 0;
 
   if (!snapshot_) {
     state_ = "none";
@@ -111,6 +131,14 @@ void LooseResourceLibrary::set_profile(
   state_ = "indexing";
   emit stateChanged();
   start_indexing();
+}
+
+void LooseResourceLibrary::set_registered_meshes(
+    const std::unordered_map<std::string, std::string>& registered_meshes) {
+  registered_meshes_ = registered_meshes;
+  if (snapshot_) {
+    reload();
+  }
 }
 
 void LooseResourceLibrary::reload() {
@@ -186,6 +214,11 @@ void LooseResourceLibrary::start_indexing() {
       self->loose_mesh_count_ = static_cast<int>(res.loose_mesh_count);
       self->bodyslide_project_count_ = static_cast<int>(res.bodyslide_project_count);
       self->replacer_mesh_count_ = static_cast<int>(res.replacer_mesh_count);
+      self->weapon_mesh_count_ = static_cast<int>(res.weapon_object_mesh_count);
+      self->facegen_count_ = static_cast<int>(res.facegen_count);
+      self->texture_dds_count_ = static_cast<int>(res.texture_dds_count);
+      self->bsa_archive_count_ = static_cast<int>(res.bsa_archive_count);
+      self->unsupported_file_count_ = static_cast<int>(res.unsupported_file_count);
 
       self->all_resources_ = std::move(all_res);
       self->available_mods_ = std::move(avail_mods);
@@ -234,7 +267,10 @@ void LooseResourceLibrary::apply_filters() {
       }
     }
     if (!filter_kind_.isEmpty() && filter_kind_ != "all") {
-      if (m.value("kind").toString().compare(filter_kind_, Qt::CaseInsensitive) != 0) {
+      const QString item_kind = m.value("kind").toString();
+      if (filter_kind_ == "facegen") {
+        if (item_kind != "facegen-mesh" && item_kind != "facegen-tint") continue;
+      } else if (item_kind.compare(filter_kind_, Qt::CaseInsensitive) != 0) {
         continue;
       }
     }
@@ -263,6 +299,99 @@ void LooseResourceLibrary::clearSelection() {
     selected_resource_.clear();
     emit selectedResourceChanged();
   }
+}
+
+QVariantMap LooseResourceLibrary::inspectTexture(const QString& dataRelativePath) const {
+  QVariantMap out{{"found", false}, {"path", dataRelativePath}};
+  if (!snapshot_ || dataRelativePath.trimmed().isEmpty()) {
+    out["error"] = tr("No hay un perfil activo o la ruta está vacía.");
+    return out;
+  }
+  const auto ctx = ResourceContext::for_snapshot(snapshot_);
+  if (!ctx || !ctx->resolver) {
+    out["error"] = tr("El resolvedor de recursos no está disponible.");
+    return out;
+  }
+  QString norm = dataRelativePath.trimmed();
+  norm.replace('/', '\\');
+  const auto std_path = ss(norm);
+  if (auto loc = ctx->resolver->locate(std_path)) {
+    out["provider"] = qs(loc->provider);
+    out["sourceKind"] = loc->kind == assets::AssetLocation::Kind::Loose ? QStringLiteral("loose") : QStringLiteral("bsa");
+  }
+  const auto bytes = ctx->resolver->read(std_path);
+  if (!bytes || bytes->empty()) {
+    out["error"] = tr("No se encontró el archivo DDS en el VFS ni en archivos BSA: %1").arg(norm);
+    return out;
+  }
+  try {
+    const auto parsed = textures::parse_dds(*bytes, 512);
+    out["format"] = qs(std::string(textures::to_string(parsed.format)));
+    out["sourceWidth"] = static_cast<int>(parsed.source_width);
+    out["sourceHeight"] = static_cast<int>(parsed.source_height);
+    out["mipCount"] = static_cast<int>(parsed.mip_count);
+    out["srgb"] = parsed.srgb;
+    out["cubemap"] = parsed.cubemap;
+
+    const bool is_normal = norm.endsWith(QStringLiteral("_n.dds"), Qt::CaseInsensitive) ||
+                           norm.endsWith(QStringLiteral("_msn.dds"), Qt::CaseInsensitive);
+    auto rgba = textures::decode_rgba(parsed, is_normal);
+    if (rgba.width > 512 || rgba.height > 512) {
+      rgba = textures::downscale_rgba(rgba, 512);
+    }
+    const auto alpha = textures::measure_alpha(rgba);
+    out["width"] = static_cast<int>(rgba.width);
+    out["height"] = static_cast<int>(rgba.height);
+    out["hasAlpha"] = parsed.has_alpha || alpha.uses_alpha;
+    out["usesAlpha"] = alpha.uses_alpha;
+    out["translucentFraction"] = alpha.translucent_fraction;
+
+    QImage img(reinterpret_cast<const uchar*>(rgba.data.data()),
+               static_cast<int>(rgba.width),
+               static_cast<int>(rgba.height),
+               static_cast<qsizetype>(rgba.width) * 4,
+               QImage::Format_RGBA8888);
+    QByteArray png_bytes;
+    QBuffer buffer(&png_bytes);
+    buffer.open(QIODevice::WriteOnly);
+    img.save(&buffer, "PNG");
+    out["dataUrl"] = QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png_bytes.toBase64());
+    out["found"] = true;
+  } catch (const std::exception& e) {
+    out["error"] = qs(e.what());
+  }
+  return out;
+}
+
+QVariantMap LooseResourceLibrary::inspectBsaArchive(const QString& dataRelativePath) const {
+  QVariantMap out{{"found", false}, {"path", dataRelativePath}};
+  if (!snapshot_ || dataRelativePath.trimmed().isEmpty()) {
+    out["error"] = tr("No hay un perfil activo o la ruta está vacía.");
+    return out;
+  }
+  const auto resolved = snapshot_->vfs.resolve(ss(dataRelativePath.trimmed()));
+  if (!resolved) {
+    out["error"] = tr("No se encontró el archivo BSA en el VFS: %1").arg(dataRelativePath);
+    return out;
+  }
+  if (resolved->provider < snapshot_->vfs.providers().size()) {
+    out["provider"] = qs(snapshot_->vfs.providers()[resolved->provider].name);
+  }
+  try {
+    auto bsa = assets::BsaArchive::open(resolved->absolute);
+    out["found"] = true;
+    out["version"] = static_cast<int>(bsa->version());
+    out["entryCount"] = static_cast<int>(bsa->file_count());
+    auto list = bsa->list();
+    std::sort(list.begin(), list.end());
+    QStringList sample;
+    const std::size_t cap = std::min<std::size_t>(list.size(), 100);
+    for (std::size_t i = 0; i < cap; ++i) sample << qs(list[i]);
+    out["sampleEntries"] = sample;
+  } catch (const std::exception& e) {
+    out["error"] = qs(e.what());
+  }
+  return out;
 }
 
 }  // namespace sns::app

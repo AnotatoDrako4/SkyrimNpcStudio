@@ -86,6 +86,9 @@ void message_handler(QtMsgType type, const QMessageLogContext& context, const QS
 
 // Deliberate failures with an operation in progress, as a FaceGen build would have, so the test can
 // check every part of the report. No Windows error dialog: the test runs unattended.
+#ifdef _WIN32
+__declspec(noinline)
+#endif
 int crash_selftest(const QString& kind) {
 #ifdef _WIN32
   SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);

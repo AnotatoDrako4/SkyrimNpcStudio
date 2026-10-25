@@ -4745,6 +4745,327 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->step();
         });
       });
+    } else if (name == "face-studio") {
+      // Face Source Studio (CLAUDE-FACE-01/02): the profile-wide face index (loose + BSA), the gallery of every source of
+      // an NPC drawn by the studio, and the guided transfer. Real mouse clicks open the studio from «Origen», pick the NPC
+      // in the index, select cards and save the choice; the plan of each card is checked against the matrix, switching
+      // NPC never shows the previous NPC's pictures, coming back reuses the cache, and the profile's FaceGen files are
+      // byte for byte what they were. Not in "all": it needs SNS_SOURCE_DRAFT_DIR isolated and an NPC with alternatives
+      // (SNS_STRESS_NPCS=a,b: a = NPC with several FaceGen sources, b = another NPC).
+      const auto npcs = qEnvironmentVariable("SNS_STRESS_NPCS", QStringLiteral("013364:Skyrim.esm,0A2C8E:Skyrim.esm")).split(',', Qt::SkipEmptyParts);
+      const QString target = npcs.value(0).trimmed(), other = npcs.value(1).trimmed();
+      struct FaceRun {
+        QByteArray before_hash;
+        QVariantMap first_metrics;
+        QStringList log;
+        QHash<QString, QString> image_sha;  // candidate id -> sha of the picture file
+        int cache_hits_before_return = 0;
+      };
+      auto run = std::make_shared<FaceRun>();
+      auto wait_for = [self](std::function<bool()> done, int ms, std::function<void(bool)> next) {
+        auto timer = std::make_shared<QElapsedTimer>();
+        timer->start();
+        auto tick = std::make_shared<std::function<void()>>();
+        *tick = [self, done, ms, next, timer, tick] {
+          if (done()) { next(true); return; }
+          if (timer->elapsed() > ms) { next(false); return; }
+          self->after(150, *tick);
+        };
+        (*tick)();
+      };
+      // Popup content lives under the overlay: walk the whole visual tree; names compare case-insensitively (FormKeys).
+      auto find_named = [self](const QString& object_name) -> QQuickItem* {
+        QQuickItem* found = nullptr;
+        std::function<void(QQuickItem*)> walk = [&](QQuickItem* item) {
+          for (auto* child : item->childItems()) {
+            if (!found && child->isVisible() && child->objectName().compare(object_name, Qt::CaseInsensitive) == 0) found = child;
+            walk(child);
+          }
+        };
+        walk(self->window->contentItem());
+        return found;
+      };
+      auto click_item = [self](QQuickItem* item) {
+        QTest::mouseClick(self->window, Qt::LeftButton, Qt::NoModifier, item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+      };
+      auto sources = [self] { return self->studio->sources(); };
+      auto profile_hash = [sources] {
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        for (const auto& c : sources()->matrix().value("candidates").toList()) {
+          for (const auto& o : c.toMap().value("overlay").toList()) {
+            const auto file = o.toMap().value("file").toString();
+            if (file.contains(QLatin1String("/variants/bsa/")) || file.contains(QLatin1String("\\variants\\bsa\\"))) continue;  // studio cache
+            QFile f(file);
+            hash.addData(file.toUtf8());
+            if (f.open(QIODevice::ReadOnly)) hash.addData(f.readAll());
+          }
+        }
+        return hash.result();
+      };
+      auto images_settled = [sources] {
+        for (const auto& c : sources()->matrix().value("candidates").toList()) {
+          const auto id = c.toMap().value("id").toString();
+          const auto s = sources()->imageOf(id).value("state").toString();
+          if (s != QLatin1String("ready") && s != QLatin1String("error") && s != QLatin1String("unavailable")) return false;
+        }
+        return true;
+      };
+      // 1. The index of the whole profile.
+      steps.push_back([self, wait_for, sources, target] {
+        wait_for([sources] { const auto s = sources()->face_index().value("state").toString(); return s == "ready" || s == "error"; }, 240000,
+                 [self, sources, target](bool ok) {
+          const auto index = sources()->face_index();
+          self->check(ok && index.value("state").toString() == QLatin1String("ready"), "face index ready: " + index.value("error").toString());
+          self->log(QStringLiteral("face index: %1 NPCs, %2 with alternatives, %3 loose + %4 archived files in %5 archives, %6 ms, issues: %7")
+                        .arg(index.value("npcs").toInt()).arg(index.value("withAlternatives").toInt()).arg(index.value("looseFiles").toInt())
+                        .arg(index.value("archivedFiles").toInt()).arg(index.value("archives").toInt()).arg(index.value("scanMs").toLongLong())
+                        .arg(index.value("issues").toStringList().join(" | ")));
+          self->check(index.value("npcs").toInt() > 0 && index.value("archivedFiles").toInt() > 0, "the index sees loose FaceGen and FaceGen inside BSA");
+          const auto rows = sources()->queryFaceIndex(target.section(':', 0, 0), {}, false, {}, 50, {}).value("rows").toList();
+          bool found = false;
+          for (const auto& r : rows) found = found || r.toMap().value("formKey").toString().compare(target, Qt::CaseInsensitive) == 0;
+          self->check(found, "the index lists " + target);
+          const auto alternatives = sources()->queryFaceIndex({}, {}, true, {}, 5000, {});
+          self->check(alternatives.value("total").toInt() == index.value("withAlternatives").toInt(), "«solo alternativas» counts every NPC with alternatives");
+          QFile out(QDir(self->work_dir).filePath("face-index-alternatives.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(alternatives)).toJson());
+          self->step();
+        });
+      });
+      // 2. Open the studio from «Origen» with a real click.
+      steps.push_back([self, wait_for, find_named, click_item] {
+        if (auto* tabs = [&]() -> QObject* { for (auto* o : self->window->findChildren<QObject*>()) if (o->objectName() == QLatin1String("creatorRightTabs")) return o; return nullptr; }())
+          tabs->setProperty("currentIndex", 5);
+        wait_for([find_named] { auto* b = find_named("faceStudioOpen"); return b && b->isEnabled(); }, 60000, [self, find_named, click_item, wait_for](bool ok) {
+          auto* button = find_named("faceStudioOpen");
+          self->check(ok && button, "«Estudio de rostros…» button visible and enabled in «Origen»");
+          if (!button) { self->step(); return; }
+          // Bring it into the panel's view before clicking.
+          for (auto* p = button->parentItem(); p; p = p->parentItem()) {
+            if (p->inherits("QQuickFlickable")) {
+              auto* content = qvariant_cast<QQuickItem*>(p->property("contentItem"));
+              if (content) p->setProperty("contentY", std::max(0.0, button->mapToItem(content, QPointF(0, 0)).y() - 60.0));
+              break;
+            }
+          }
+          self->after(300, [self, find_named, click_item, wait_for] {
+            click_item(find_named("faceStudioOpen"));
+            wait_for([find_named] { return find_named("faceIndexList") != nullptr; }, 10000, [self](bool shown) {
+              self->check(shown, "the studio opened with a real click");
+              self->step();
+            });
+          });
+        });
+      });
+      // 3. Pick the NPC in the index by search + real click on its row.
+      steps.push_back([self, wait_for, find_named, click_item, sources, target, run, profile_hash, images_settled] {
+        if (auto* search = find_named("faceIndexSearch")) search->setProperty("text", target.section(':', 0, 0));
+        // The row is there and its name arrived from the catalog (names come in batches of 200).
+        wait_for([find_named, target] { auto* r = find_named("faceIndexRow_" + target); return r && !r->property("name").toString().isEmpty(); }, 30000,
+                 [self, wait_for, find_named, click_item, sources, target, run, profile_hash, images_settled](bool ok) {
+          auto* row = find_named("faceIndexRow_" + target);
+          self->check(ok && row, "row of " + target + " in the index list");
+          if (!row) { self->step(); return; }
+          self->check(!row->property("name").toString().isEmpty(), "the row shows the NPC's name: " + row->property("name").toString());
+          click_item(row);
+          wait_for([sources, target] { const auto m = sources()->matrix(); return m.value("state").toString() == "ready" && m.value("formKey").toString().compare(target, Qt::CaseInsensitive) == 0; }, 120000,
+                   [self, wait_for, sources, target, run, profile_hash, images_settled](bool ready) {
+            self->check(ready, "a real click on the row loads " + target + " and its sources");
+            run->before_hash = profile_hash();
+            sources()->resetMetrics();
+            wait_for(images_settled, 240000, [self, sources, run](bool settled) {
+              self->check(settled, "every source of the gallery reached a final picture state");
+              const auto candidates = sources()->matrix().value("candidates").toList();
+              int ready_count = 0, drawable = 0;
+              bool archived = false;
+              QSet<QString> distinct;
+              for (const auto& c : candidates) {
+                const auto m = c.toMap();
+                const auto id = m.value("id").toString();
+                const auto image = sources()->imageOf(id);
+                archived = archived || !m.value("archive").toString().isEmpty();
+                if (m.value("renderable").toBool()) ++drawable;
+                if (image.value("state").toString() == QLatin1String("ready")) {
+                  ++ready_count;
+                  QFile f(QUrl(image.value("url").toString()).toLocalFile());
+                  if (f.open(QIODevice::ReadOnly)) {
+                    const auto sha = QString::fromLatin1(QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex());
+                    run->image_sha.insert(id, sha);
+                    distinct.insert(sha);
+                  }
+                }
+                self->log(QStringLiteral("card %1 [%2] «%3» geometry %4 picture %5 (%6) %7")
+                              .arg(id, m.value("status").toString(), m.value("facegenMod").toString(), m.value("geometrySha256").toString().left(12),
+                                   image.value("state").toString(), image.value("origin").toString(), image.value("reason").toString()));
+              }
+              self->check(drawable >= 2, QStringLiteral("%1 drawable sources (needs 2+)").arg(drawable));
+              self->check(ready_count == drawable, QStringLiteral("%1 of %2 drawable sources have a picture").arg(ready_count).arg(drawable));
+              self->check(distinct.size() == ready_count, QStringLiteral("%1 different pictures for %2 sources with different files").arg(distinct.size()).arg(ready_count));
+              if (archived) self->check(true, "a FaceGen copy inside a BSA is offered as a source");
+              else self->skip("no shadowed BSA copy for this NPC");
+              run->first_metrics = sources()->metrics();
+              self->after(800, [self] {
+                self->window->grabWindow().save(QDir(self->work_dir).filePath("face-studio-gallery.png"));
+                self->step();
+              });
+            });
+          });
+        });
+      });
+      // 4. Cards: plan per source, real clicks, choice saved only in the isolated draft folder.
+      steps.push_back([self, wait_for, find_named, click_item, sources] {
+        const auto candidates = sources()->matrix().value("candidates").toList();
+        QString alternative;
+        bool effective_resolution = false;
+        for (const auto& c : candidates) {
+          const auto m = c.toMap();
+          if (m.value("effective").toBool()) effective_resolution = m.value("resolutionAvailable").toBool();
+          else if (alternative.isEmpty() && m.value("renderable").toBool()) alternative = m.value("id").toString();
+        }
+        // Every plan follows the matrix: never a patch for a FaceGen that does not win, never «compatible» without FaceGen.
+        bool coherent = true;
+        for (const auto& c : candidates) {
+          const auto m = c.toMap();
+          const auto plan = sources()->transferPlan(m.value("id").toString());
+          const auto verdict = plan.value("verdict").toString();
+          if (!m.value("effective").toBool() && m.value("renderable").toBool()) coherent = coherent && verdict == QLatin1String("NEEDS_LOAD_ORDER");
+          if (!m.value("effective").toBool() && !m.value("renderable").toBool()) coherent = coherent && verdict == QLatin1String("BLOCKED");
+          if (m.value("effective").toBool() && effective_resolution) coherent = coherent && (verdict == "PATCH_READY" || verdict == "NEEDS_REVIEW");
+          coherent = coherent && (verdict == "PATCH_READY" || verdict == "NEEDS_REVIEW" || !plan.value("canCreatePatch").toBool());
+          self->log(QStringLiteral("plan %1: %2 chosen=%3 patch=%4 %5 | %6").arg(m.value("id").toString(), verdict).arg(plan.value("chosen").toBool())
+                        .arg(plan.value("canCreatePatch").toBool()).arg(plan.value("requirement").toString(), plan.value("actions").toStringList().join(" / ")));
+        }
+        self->check(coherent, "every card's plan follows the matrix (no patch for a shadowed FaceGen, blocked when it cannot be drawn)");
+        if (alternative.isEmpty()) { self->skip("no drawable alternative source"); self->step(); return; }
+        auto* card = find_named("faceCard_" + alternative);
+        self->check(card != nullptr, "card of " + alternative);
+        if (!card) { self->step(); return; }
+        click_item(card);
+        self->after(300, [self, wait_for, find_named, click_item, sources, alternative] {
+          auto* verdict = find_named("faceTransferVerdict");
+          self->check(verdict && verdict->property("verdict").toString() == QLatin1String("NEEDS_LOAD_ORDER"),
+                      "a real click on the card shows its plan: requires an MO2 change, not a plugin");
+          auto* patch = find_named("faceCreatePatchButton");
+          self->check(patch && !patch->isEnabled(), "«Crear parche…» stays disabled for a shadowed FaceGen");
+          if (!qEnvironmentVariableIsSet("SNS_SOURCE_DRAFT_DIR")) {
+            self->skip("choice: SNS_SOURCE_DRAFT_DIR is not isolated, the draft is not written");
+            self->step();
+            return;
+          }
+          click_item(find_named("faceChooseButton"));
+          wait_for([sources, alternative] { const auto d = sources()->draft(); return d.value("state").toString() == "fresh" && d.value("chosen").toString() == alternative; }, 5000,
+                   [self, sources, alternative, find_named](bool saved) {
+            const auto draft = sources()->draft();
+            self->check(saved, "«Elegir este rostro» saved the choice: " + draft.value("path").toString());
+            self->check(draft.value("path").toString().startsWith(qEnvironmentVariable("SNS_SOURCE_DRAFT_DIR").replace('\\', '/'), Qt::CaseInsensitive) ||
+                            QDir::fromNativeSeparators(draft.value("path").toString()).startsWith(QDir::fromNativeSeparators(qEnvironmentVariable("SNS_SOURCE_DRAFT_DIR")), Qt::CaseInsensitive),
+                        "the draft lives in the isolated folder");
+            self->check(sources()->transferPlan(alternative).value("chosen").toBool(), "the plan sees the saved choice");
+            QObject* studio_popup = nullptr;
+            for (auto* o : self->window->findChildren<QObject*>()) if (o->objectName() == QLatin1String("faceSourceStudio")) studio_popup = o;
+            const auto steps_list = studio_popup ? studio_popup->property("steps").toList() : QVariantList{};
+            self->check(steps_list.size() == 6 && steps_list[3].toMap().value("done").toBool() && steps_list[4].toMap().value("done").toBool(),
+                        "steps «4 Seleccionar» and «5 Validar» marked done after choosing");
+            self->after(400, [self] {
+              self->window->grabWindow().save(QDir(self->work_dir).filePath("face-studio-plan.png"));
+              self->step();
+            });
+          });
+        });
+      });
+      // 5. Effective card: its plan and the «Crear parche» button agree.
+      steps.push_back([self, find_named, click_item, sources] {
+        auto* card = find_named("faceCard_effective");
+        self->check(card != nullptr, "card of the effective source");
+        if (!card) { self->step(); return; }
+        click_item(card);
+        self->after(300, [self, find_named, sources] {
+          const auto plan = sources()->transferPlan(QStringLiteral("effective"));
+          auto* patch = find_named("faceCreatePatchButton");
+          self->check(patch && patch->isEnabled() == plan.value("canCreatePatch").toBool(),
+                      QStringLiteral("effective: %1, «Crear parche» enabled=%2 as the plan says").arg(plan.value("verdict").toString()).arg(patch && patch->isEnabled()));
+          self->step();
+        });
+      });
+      // 6. Switch NPC from the index, then come back: no stale pictures, cache reused.
+      steps.push_back([self, wait_for, find_named, click_item, sources, other, target, run, images_settled] {
+        if (other.isEmpty()) { self->skip("switch: no second NPC"); self->step(); return; }
+        if (auto* only = find_named("faceIndexOnlyAlternatives")) only->setProperty("checked", false);
+        if (auto* search = find_named("faceIndexSearch")) search->setProperty("text", other.section(':', 0, 0));
+        wait_for([find_named, other] { return find_named("faceIndexRow_" + other) != nullptr; }, 15000,
+                 [self, wait_for, find_named, click_item, sources, other, target, run, images_settled](bool ok) {
+          auto* row = find_named("faceIndexRow_" + other);
+          self->check(ok && row, "row of " + other);
+          if (!row) { self->step(); return; }
+          const auto old_ids = sources()->matrix().value("candidates").toList();
+          click_item(row);
+          // While the other NPC loads, no picture of the previous one is offered.
+          const auto fk = sources()->matrix().value("formKey").toString();
+          bool stale = false;
+          if (fk.compare(target, Qt::CaseInsensitive) != 0) {
+            for (const auto& c : old_ids) {
+              const auto id = c.toMap().value("id").toString();
+              if (id != QLatin1String("effective") && sources()->imageOf(id).value("state").toString() == QLatin1String("ready")) stale = true;
+            }
+          }
+          self->check(!stale, "switching NPC drops the previous NPC's pictures at once");
+          wait_for([sources, other] { const auto m = sources()->matrix(); return m.value("state").toString() == "ready" && m.value("formKey").toString().compare(other, Qt::CaseInsensitive) == 0; }, 120000,
+                   [self, wait_for, find_named, click_item, sources, target, run, images_settled](bool loaded) {
+            self->check(loaded, "the second NPC loaded from the index");
+            wait_for(images_settled, 120000, [self, wait_for, find_named, click_item, sources, target, run, images_settled](bool) {
+              self->window->grabWindow().save(QDir(self->work_dir).filePath("face-studio-second.png"));
+              run->cache_hits_before_return = sources()->metrics().value("variantCacheHits").toInt();
+              if (auto* search = find_named("faceIndexSearch")) search->setProperty("text", target.section(':', 0, 0));
+              wait_for([find_named, target] { return find_named("faceIndexRow_" + target) != nullptr; }, 15000,
+                       [self, wait_for, find_named, click_item, sources, target, run, images_settled](bool) {
+                if (auto* back = find_named("faceIndexRow_" + target)) click_item(back);
+                wait_for([sources, target] { const auto m = sources()->matrix(); return m.value("state").toString() == "ready" && m.value("formKey").toString().compare(target, Qt::CaseInsensitive) == 0; }, 120000,
+                         [self, wait_for, sources, run, images_settled](bool) {
+                  wait_for(images_settled, 120000, [self, sources, run](bool settled) {
+                    const auto hits = sources()->metrics().value("variantCacheHits").toInt() - run->cache_hits_before_return;
+                    int same = 0, expected = 0;
+                    for (auto it = run->image_sha.cbegin(); it != run->image_sha.cend(); ++it) {
+                      if (it.key() == QLatin1String("effective")) continue;
+                      ++expected;
+                      const auto image = sources()->imageOf(it.key());
+                      QFile f(QUrl(image.value("url").toString()).toLocalFile());
+                      if (f.open(QIODevice::ReadOnly) && QString::fromLatin1(QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex()) == it.value()) ++same;
+                    }
+                    self->check(settled && hits >= expected && same == expected,
+                                QStringLiteral("coming back reuses the cache: %1 cache hits, %2/%3 identical pictures").arg(hits).arg(same).arg(expected));
+                    self->step();
+                  });
+                });
+              });
+            });
+          });
+        });
+      });
+      // 7. Nothing of the profile changed; report.
+      steps.push_back([self, sources, run, profile_hash, find_named] {
+        self->check(profile_hash() == run->before_hash, "the profile's FaceGen files are byte for byte what they were");
+        const auto bsa_dir = QDir(self->studio->portraits()->cache_directory()).filePath("variants/bsa");
+        int extracted = 0;
+        for (const auto& c : sources()->matrix().value("candidates").toList()) {
+          for (const auto& o : c.toMap().value("overlay").toList()) {
+            const auto file = QDir::fromNativeSeparators(o.toMap().value("file").toString());
+            if (!c.toMap().value("archive").toString().isEmpty()) {
+              ++extracted;
+              self->check(file.startsWith(QDir::fromNativeSeparators(bsa_dir), Qt::CaseInsensitive), "BSA copy extracted only to the studio's cache: " + file);
+            }
+          }
+        }
+        if (extracted == 0) self->skip("no BSA copy extracted for this NPC");
+        auto metrics = sources()->metrics();
+        QVariantMap report{{"faceIndex", sources()->face_index()}, {"firstGalleryMetrics", run->first_metrics}, {"finalMetrics", metrics},
+                           {"matrix", sources()->matrix()}, {"draft", sources()->draft()}};
+        report["faceIndex"] = [&] { auto m = sources()->face_index(); m.remove("sources"); return m; }();
+        QFile out(QDir(self->work_dir).filePath("face-studio-report.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson());
+        self->log(QStringLiteral("face studio metrics: %1").arg(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(metrics)).toJson(QJsonDocument::Compact))));
+        if (auto* close = find_named("faceStudioClose")) QMetaObject::invokeMethod(close, "clicked");
+        self->step();
+      });
     } else if (name == "loose-resources") {
       // RES-01..03 (RC-A Punto 4): Discovery and visual browsing of loose packs and BodySlide projects without ESP.
       auto* lib = self->studio->loose_resources();
@@ -4813,6 +5134,22 @@ struct Stress : std::enable_shared_from_this<Stress> {
           lib->search(QStringLiteral(""), QStringLiteral(""), QStringLiteral(""), QStringLiteral(""));
 
           // Test selection
+          QString sample_nif;
+          QString sample_dds;
+          QString sample_bsa;
+          for (const auto& v : lib->resources()) {
+            const auto m = v.toMap();
+            const auto kind = m.value("kind").toString();
+            const bool prev = m.value("capabilities").toMap().value("previewable").toBool();
+            if (sample_nif.isEmpty() && (kind == "loose-mesh" || kind == "replacer-mesh") && prev) {
+              sample_nif = m.value("dataRelativePath").toString();
+            } else if (sample_dds.isEmpty() && (kind == "texture-dds" || kind == "facegen-tint") && prev) {
+              sample_dds = m.value("dataRelativePath").toString();
+            } else if (sample_bsa.isEmpty() && kind == "bsa-archive" && prev) {
+              sample_bsa = m.value("dataRelativePath").toString();
+            }
+          }
+
           if (total > 0) {
             const auto first = lib->resources().first().toMap();
             const auto first_id = first.value("resourceId").toString();
@@ -4822,10 +5159,61 @@ struct Stress : std::enable_shared_from_this<Stress> {
             self->check(lib->selected_resource().isEmpty(), "clearSelection clears selectedResource");
           }
 
+          // Verify selectArmor rejects file paths and selectMesh accepts NIF paths (AG-UI-01)
+          auto* preview_vm = self->studio->armor_preview();
+          preview_vm->selectArmor(QStringLiteral("meshes\\armor\\iron\\cuirass_1.nif"));
+          self->check(preview_vm->selected_armor().isEmpty() && !preview_vm->issues().isEmpty() &&
+                          preview_vm->issues().first().toMap().value("code").toString() == QLatin1String("InvalidArmorFormKey"),
+                      "selectArmor rejects NIF file paths with InvalidArmorFormKey");
+
+          if (!sample_nif.isEmpty()) {
+            preview_vm->selectMesh(sample_nif);
+            self->check(preview_vm->selected_armor().isEmpty() && !preview_vm->selected_mesh().isEmpty(),
+                        "selectMesh stores NIF path in selectedMesh without polluting selectedArmor: " + preview_vm->selected_mesh());
+          }
+
+          // Verify real 2D DDS texture inspection (AG-UI-01)
+          if (!sample_dds.isEmpty()) {
+            const auto tex_info = lib->inspectTexture(sample_dds);
+            self->check(tex_info.value("found").toBool() &&
+                            tex_info.value("dataUrl").toString().startsWith(QLatin1String("data:image/png;base64,")),
+                        QStringLiteral("inspectTexture decoded %1 (%2x%3 %4)")
+                            .arg(sample_dds)
+                            .arg(tex_info.value("sourceWidth").toInt())
+                            .arg(tex_info.value("sourceHeight").toInt())
+                            .arg(tex_info.value("format").toString()));
+          }
+
+          // Verify BSA archive inspection (AG-UI-01)
+          if (!sample_bsa.isEmpty()) {
+            const auto bsa_info = lib->inspectBsaArchive(sample_bsa);
+            self->check(bsa_info.value("found").toBool() && bsa_info.value("entryCount").toInt() > 0,
+                        QStringLiteral("inspectBsaArchive read %1 (%2 entries)")
+                            .arg(sample_bsa)
+                            .arg(bsa_info.value("entryCount").toInt()));
+          }
+
+          // Verify NPC inventory editing + undo/redo (AG-UI-03)
+          auto* outfit = self->studio->outfit();
+          const int inv_before = outfit->inventory_items().size();
+          outfit->addInventoryItem(QVariantMap{{"formKey", "012E49:Skyrim.esm"}, {"name", "Iron Cuirass"}, {"recordType", "ARMO"}}, 2);
+          self->check(outfit->inventory_modified(), "addInventoryItem marks inventoryModified");
+          outfit->setInventoryItemCount(QStringLiteral("012E49:Skyrim.esm"), 5);
+          outfit->undo();
+          outfit->redo();
+          outfit->resetInventory();
+          self->check(!outfit->inventory_modified() && outfit->inventory_items().size() == inv_before,
+                      "inventory undo/redo and resetInventory restore original NPC inventory");
+
           (*report)["totalResources"] = total;
           (*report)["looseMeshCount"] = lib->loose_mesh_count();
           (*report)["bodyslideProjectCount"] = lib->bodyslide_project_count();
           (*report)["replacerMeshCount"] = lib->replacer_mesh_count();
+          (*report)["weaponMeshCount"] = lib->weapon_mesh_count();
+          (*report)["facegenCount"] = lib->facegen_count();
+          (*report)["textureDdsCount"] = lib->texture_dds_count();
+          (*report)["bsaArchiveCount"] = lib->bsa_archive_count();
+          (*report)["unsupportedFileCount"] = lib->unsupported_file_count();
           (*report)["res01Verified"] = res01_ok;
           (*report)["res02Verified"] = res02_ok;
           (*report)["status"] = QStringLiteral("INTEGRACION_WINDOWS_OK");

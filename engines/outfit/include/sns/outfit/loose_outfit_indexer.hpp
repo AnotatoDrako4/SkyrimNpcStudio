@@ -59,6 +59,11 @@ struct LooseOutfitIndexResult {
   std::size_t loose_mesh_count = 0;
   std::size_t bodyslide_project_count = 0;
   std::size_t replacer_mesh_count = 0;
+  std::size_t weapon_object_mesh_count = 0;
+  std::size_t facegen_count = 0;
+  std::size_t texture_dds_count = 0;
+  std::size_t bsa_archive_count = 0;
+  std::size_t unsupported_file_count = 0;
   std::vector<std::string> issues;
 };
 

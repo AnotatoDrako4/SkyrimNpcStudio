@@ -969,6 +969,9 @@ ApplicationWindow {
                                 onPreviewRequested: (formKey) => {
                                     window.studio.armorPreview.selectArmor(formKey)
                                 }
+                                onMeshPreviewRequested: (dataRelativePath) => {
+                                    window.studio.armorPreview.selectMesh(dataRelativePath)
+                                }
                             }
 
                             NpcBrowser {

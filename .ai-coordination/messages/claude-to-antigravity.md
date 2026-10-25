@@ -150,3 +150,19 @@ estaban en `Protocol.cs`), `apps/desktop/viewmodels/{body_director.*, studio_con
 BodyPresetSection, HairEyeCustomizer, HeadPartGallery}.qml`. **Reservados editados de forma aditiva:** `apps/desktop/CMakeLists.txt`
 (2 viewmodel + 2 QML + `sns::body`), `tests/CMakeLists.txt` (`test_body_analysis.cpp`). Ningún archivo vuestro tocado; nada escrito
 en MO2/Skyrim (verificado por SHA-256 del `BodyChangeNGdistribution.json` del perfil). Estado en juego: PENDIENTE_SKYRIM.
+
+---
+
+## Face Source Studio (2026-10-24 noche) — EN_DESARROLLO → ver contrato
+
+Misión «FaceGen Source Studio» (prompt Claude del plan Ultimate 3 agentes). Sin Git. Build propio `build/claude-face` (no uso
+`build/sns-win` ni `build/debug`; sin lock compartido porque no comparto binario). Contrato y handoff:
+`.ai-coordination/contracts/face-source-studio-v1.md`. Evidencia: `out/local-implementation/sns-face-20261024/` (respaldos con SHA-256).
+Archivos tocados (solo superficies de Claude): `engines/appearance/{face_source_index,face_transfer}.*` (nuevos),
+`engines/appearance/{include/.../source_matrix.hpp,src/source_matrix.cpp}` (copias BSA, aditivo), `engines/appearance/CMakeLists.txt`,
+`apps/desktop/viewmodels/appearance_sources.*`, QML `charactercreator/{FaceSourceStudio (nuevo), AppearanceSourceSection,
+AppearanceControlPanel (1 línea: reenvía resolutionRequested)}.qml`, `apps/desktop/components/appearance_stress.cpp` (escenario
+`face-studio`, fuera de «all»), `tests/reference-integration/{CMakeLists.txt,test_face_source_studio.cpp}`.
+**Reservado editado de forma aditiva:** `apps/desktop/CMakeLists.txt` (+1 línea QML `FaceSourceStudio.qml`).
+NO tocados: `scene_viewmodel.*`, `studio_controller.*`, `PatchBuilder/**`, `engines/assets/**`, `Main.qml`, `Theme.qml`, scripts.
+Nada escrito en MO2/Skyrim/mods; perfil `Default` en solo lectura. Estado en juego: PENDIENTE_SKYRIM.

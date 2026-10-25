@@ -79,6 +79,9 @@ Item {
                         onPreviewRequested: (formKey) => {
                             root.studio.armorPreview.selectArmor(formKey)
                         }
+                        onMeshPreviewRequested: (dataRelativePath) => {
+                            root.studio.armorPreview.selectMesh(dataRelativePath)
+                        }
                     }
 
                     // Panel de donantes / replacers
@@ -190,8 +193,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 studio: root.studio
-                sceneOverride: (leftTabs.currentIndex === 1 && root.studio.armorPreview.selectedArmor !== "") ? root.studio.armorPreview : null
-                previewMode: leftTabs.currentIndex === 1 && root.studio.armorPreview.selectedArmor !== ""
+                sceneOverride: (leftTabs.currentIndex === 1 && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")) ? root.studio.armorPreview : null
+                previewMode: leftTabs.currentIndex === 1 && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")
                 // The empty viewer's actions: the explorer comes back (a user action) on the right tab, search focused.
                 onNpcSearchRequested: root.searchNpc()
                 onCatalogRequested: root.showCatalog()

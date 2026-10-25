@@ -16,9 +16,27 @@ Item {
     property string activeKindFilter: ""
     property string activeFamilyFilter: ""
     property string activeModFilter: ""
+    property var inspectedTexture: ({})
+    property var inspectedBsa: ({})
 
     function search() {
         library.search(searchField.text, activeFamilyFilter, activeModFilter, activeKindFilter)
+    }
+
+    function triggerResourcePreview(item) {
+        if (!item) return
+        root.library.selectResource(item.resourceId)
+        if (item.kind === "texture-dds" || item.kind === "facegen-tint") {
+            root.inspectedTexture = root.library.inspectTexture(item.dataRelativePath)
+            texturePreviewDialog.open()
+        } else if (item.kind === "bsa-archive") {
+            root.inspectedBsa = root.library.inspectBsaArchive(item.dataRelativePath)
+            bsaPreviewDialog.open()
+        } else if (item.capabilities && item.capabilities.previewable) {
+            root.previewRequested(item.dataRelativePath)
+        } else {
+            detailsDialog.open()
+        }
     }
 
     Timer { id: debounce; interval: 220; onTriggered: root.search() }
@@ -37,13 +55,13 @@ Item {
                 Layout.fillWidth: true
                 spacing: 2
                 Text {
-                    text: qsTr("Packs de ropa sin ESP y Proyectos BodySlide")
+                    text: qsTr("Explorador universal de recursos")
                     color: Theme.accent
                     font.bold: true
                     font.pixelSize: Theme.large
                 }
                 Text {
-                    text: qsTr("Mallas sueltas, replacers y conjuntos BodySlide descubiertos en el VFS de MO2 sin plugin propio.")
+                    text: qsTr("Mallas NIF, texturas DDS, proyectos BodySlide, recursos FaceGen, replacers ARMO y archivos BSA en el VFS de MO2.")
                     color: Theme.textDim
                     font.pixelSize: Theme.small
                     wrapMode: Text.WordWrap
@@ -96,6 +114,16 @@ Item {
                     color: "#f39c12"
                     font.pixelSize: Theme.small
                 }
+                Text {
+                    text: qsTr("DDS: %1").arg(root.library.textureDdsCount)
+                    color: "#48c9b0"
+                    font.pixelSize: Theme.small
+                }
+                Text {
+                    text: qsTr("BSA: %1").arg(root.library.bsaArchiveCount)
+                    color: "#85929e"
+                    font.pixelSize: Theme.small
+                }
                 Item { Layout.fillWidth: true }
                 BusyIndicator {
                     running: root.library.indexing
@@ -120,12 +148,18 @@ Item {
 
             ComboBox {
                 id: kindBox
-                implicitWidth: Theme.px(160)
+                objectName: "looseKindFilterBox"
+                implicitWidth: Theme.px(175)
                 model: [
                     { text: qsTr("Todos los tipos"), value: "" },
-                    { text: qsTr("Mallas sueltas"), value: "loose-mesh" },
+                    { text: qsTr("Mallas sueltas (sin ESP)"), value: "loose-mesh" },
                     { text: qsTr("Proyectos BodySlide"), value: "bodyslide-project" },
-                    { text: qsTr("Replacers"), value: "replacer-mesh" }
+                    { text: qsTr("Replacers ARMO"), value: "replacer-mesh" },
+                    { text: qsTr("Armas y objetos NIF"), value: "weapon-mesh" },
+                    { text: qsTr("Recursos FaceGen"), value: "facegen" },
+                    { text: qsTr("Texturas DDS"), value: "texture-dds" },
+                    { text: qsTr("Archivos BSA"), value: "bsa-archive" },
+                    { text: qsTr("Otros (sin vista previa)"), value: "unsupported-file" }
                 ]
                 textRole: "text"
                 valueRole: "value"
@@ -189,12 +223,7 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     onClicked: root.library.selectResource(modelData.resourceId)
-                    onDoubleClicked: {
-                        root.library.selectResource(modelData.resourceId)
-                        if (modelData.capabilities && modelData.capabilities.previewable) {
-                            root.previewRequested(modelData.dataRelativePath)
-                        }
-                    }
+                    onDoubleClicked: root.triggerResourcePreview(modelData)
                 }
 
                 ColumnLayout {
@@ -321,15 +350,16 @@ Item {
                         spacing: Theme.spacingSm
 
                         Button {
-                            text: qsTr("👁️ Previsualizar")
-                            enabled: modelData.capabilities && modelData.capabilities.previewable
+                            text: (modelData.kind === "texture-dds" || modelData.kind === "facegen-tint")
+                                  ? qsTr("🖼️ Ver Textura DDS")
+                                  : (modelData.kind === "bsa-archive" ? qsTr("📦 Explorar BSA") : qsTr("👁️ Previsualizar 3D"))
+                            enabled: Boolean(modelData.capabilities && modelData.capabilities.previewable)
                             implicitHeight: Theme.controlHeight - 4
-                            onClicked: {
-                                root.library.selectResource(modelData.resourceId)
-                                root.previewRequested(modelData.dataRelativePath)
-                            }
+                            onClicked: root.triggerResourcePreview(modelData)
                             ToolTip.visible: hovered && !enabled
-                            ToolTip.text: qsTr("No previsualizable directamente (requiere construcción previa)")
+                            ToolTip.text: modelData.kind === "unsupported-file"
+                                          ? qsTr("Archivo sin motor de renderizado visual directo (UNSUPPORTED_PREVIEW)")
+                                          : qsTr("No previsualizable directamente (requiere construcción previa en BodySlide)")
                         }
 
                         Button {
@@ -343,13 +373,24 @@ Item {
 
                         Item { Layout.fillWidth: true }
 
-                        // Botón Equipar DESHABILITADO con ToolTip explicativo (DoD / RC-A)
                         Button {
-                            text: qsTr("Equipar")
-                            enabled: false
+                            readonly property bool hasConfirmedArmo: Boolean(
+                                modelData.kind === "replacer-mesh" &&
+                                modelData.association &&
+                                modelData.association.armorFormKey &&
+                                modelData.association.armorFormKey.length > 0)
+                            text: hasConfirmedArmo ? qsTr("Equipar ARMO") : qsTr("Equipar")
+                            enabled: hasConfirmedArmo
                             implicitHeight: Theme.controlHeight - 4
+                            onClicked: {
+                                if (hasConfirmedArmo) {
+                                    root.studio.equipArmorByFormKey(modelData.association.armorFormKey)
+                                }
+                            }
                             ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Recurso sin plugin. Para equipar se requiere crear un registro ARMO en una versión posterior.")
+                            ToolTip.text: hasConfirmedArmo
+                                          ? qsTr("Equipa el registro ARMO asociado (%1) en el NPC actual").arg(modelData.association.armorFormKey)
+                                          : qsTr("Recurso suelto sin registro ARMO en el orden de carga. Solo vista previa 3D hasta generar un registro válido.")
                         }
                     }
                 }
@@ -468,6 +509,118 @@ Item {
                     color: Theme.warn
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- VISOR DE TEXTURAS DDS 2D
+    Dialog {
+        id: texturePreviewDialog
+        objectName: "texturePreviewDialog"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(Theme.px(560), Overlay.overlay ? Overlay.overlay.width - 40 : Theme.px(560))
+        title: qsTr("Inspector de Textura DDS:") + " " + (root.inspectedTexture.path || "")
+        standardButtons: Dialog.Close
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.spacingSm
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Theme.px(300)
+                color: "#12141a"
+                border.color: Theme.border
+                border.width: 1
+                radius: 4
+                clip: true
+
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: Theme.spacingSm
+                    fillMode: Image.PreserveAspectFit
+                    source: root.inspectedTexture.dataUrl || ""
+                    visible: Boolean(root.inspectedTexture.found)
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: !root.inspectedTexture.found
+                    text: root.inspectedTexture.error || qsTr("No se pudo decodificar la textura DDS.")
+                    color: Theme.error
+                    font.pixelSize: Theme.small
+                    wrapMode: Text.WordWrap
+                    width: parent.width - Theme.spacingLg * 2
+                    horizontalAlignment: Text.AlignHCenter
+                }
+            }
+
+            KeyValue {
+                label: qsTr("Mod proveedor")
+                value: root.inspectedTexture.provider || "—"
+            }
+            KeyValue {
+                label: qsTr("Dimensiones reales")
+                value: root.inspectedTexture.found ? (root.inspectedTexture.sourceWidth + " × " + root.inspectedTexture.sourceHeight + " px") : "—"
+            }
+            KeyValue {
+                label: qsTr("Formato DDS / Mipmaps")
+                value: root.inspectedTexture.found ? (root.inspectedTexture.format + " · " + root.inspectedTexture.mipCount + " niveles mip") : "—"
+            }
+            KeyValue {
+                label: qsTr("Canal Alfa")
+                value: root.inspectedTexture.found ? (root.inspectedTexture.usesAlpha ? qsTr("Activo (transparencia / máscara)") : qsTr("Opaco")) : "—"
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- INSPECTOR DE ARCHIVO BSA
+    Dialog {
+        id: bsaPreviewDialog
+        objectName: "bsaPreviewDialog"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(Theme.px(560), Overlay.overlay ? Overlay.overlay.width - 40 : Theme.px(560))
+        title: qsTr("Inspector de Archivo BSA:") + " " + (root.inspectedBsa.path || "")
+        standardButtons: Dialog.Close
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.spacingSm
+
+            KeyValue {
+                label: qsTr("Mod proveedor")
+                value: root.inspectedBsa.provider || "—"
+            }
+            KeyValue {
+                label: qsTr("Versión BSA / Entradas")
+                value: root.inspectedBsa.found ? (qsTr("Versión %1 · %2 archivos empaquetados").arg(root.inspectedBsa.version).arg(root.inspectedBsa.entryCount)) : (root.inspectedBsa.error || "—")
+            }
+
+            Text {
+                visible: Boolean(root.inspectedBsa.found)
+                text: qsTr("Muestra de archivos contenidos en el BSA (primeros 100):")
+                color: Theme.accent
+                font.bold: true
+                font.pixelSize: Theme.small
+            }
+
+            ListView {
+                visible: Boolean(root.inspectedBsa.found)
+                Layout.fillWidth: true
+                Layout.preferredHeight: Theme.px(220)
+                clip: true
+                model: root.inspectedBsa.sampleEntries || []
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Text {
+                    text: modelData
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                    font.family: "Consolas"
+                    elide: Text.ElideMiddle
                     width: parent.width
                 }
             }

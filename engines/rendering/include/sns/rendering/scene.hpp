@@ -228,6 +228,18 @@ class SceneCache {
   std::uint64_t budget_;
 };
 
+struct BodySliderSetting {
+  std::string name;
+  std::optional<float> small;
+  std::optional<float> big;
+};
+
+struct BodyPresetOption {
+  std::string name;
+  std::string family;
+  std::vector<BodySliderSetting> sliders;
+};
+
 struct SceneOptions {
   std::shared_ptr<const AssetOverlay> overlay;  // consulted before MO2 loose files and BSAs
   std::shared_ptr<SceneCache> cache;            // optional; enables reuse across builds
@@ -242,6 +254,7 @@ struct SceneOptions {
   std::uint32_t diffuse_max_dimension = 2048;
   std::uint32_t normal_max_dimension = 1024;
   std::uint64_t texture_budget_bytes = 512ull * 1024 * 1024;  // decoded RGBA8 for the whole scene
+  std::optional<BodyPresetOption> body_preset;
 };
 
 struct OutfitPieceDiagnostic {
@@ -301,6 +314,10 @@ std::string weight_variant(std::string_view mesh_path, int variant);
 // The game blends the _0 (thin) and _1 (heavy) meshes by NPC weight 0..100.
 // Returns false when the meshes do not match vertex for vertex (heavy is kept as is).
 bool blend_by_weight(nif::Shape& heavy, const nif::Shape& thin, float weight);
+
+// Deforms body/skin vertices according to BodySlide slider settings (small/big interpolated with NPC weight)
+// along bone influences (breasts, butt, belly, waist, thighs) or spatial fallback, rebuilding normals and tangents.
+void apply_body_preset_morphs(nif::Shape& shape, const std::vector<BodySliderSetting>& sliders, float weight);
 
 // Moves skinned vertices to the skeleton's pose: v' = sum_i w_i * boneToGlobal_i(skinToBone_i(globalToSkin(v))).
 // Bones the race skeleton lacks but the NIF defines itself (SMP/physics "A-S-..." bones) use the

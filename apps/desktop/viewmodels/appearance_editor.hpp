@@ -43,6 +43,7 @@ struct FacePreview {
   std::optional<face::Rgb8> hair_color;
   face::Rgb8 skin_tone{255, 255, 255};
   bool active = false;  // the draft has face/body edits
+  std::string assigned_body_preset;
 };
 
 // Face editing for the selected NPC on top of the FaceGen regenerator (engines/face):

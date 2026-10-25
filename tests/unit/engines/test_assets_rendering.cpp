@@ -748,4 +748,104 @@ TEST_CASE("Outfit visibility diagnostics track unequipped pieces and covered ski
   CHECK(hands_part->shown_by_default);
 }
 
+TEST_CASE("apply_body_preset_morphs deforms vertices based on bone influences and sliders", "[scene][bodymorph]") {
+  sns::nif::Shape shape;
+  shape.name = "FemaleBody";
+  shape.positions = {
+      {0.0f, 10.0f, 110.0f},   // breast area
+      {0.0f, -12.0f, 95.0f},   // butt area
+      {0.0f, 0.0f, 60.0f}      // thigh/leg area
+  };
+  shape.normals = {
+      {0.0f, 1.0f, 0.0f},
+      {0.0f, -1.0f, 0.0f},
+      {0.0f, 0.0f, -1.0f}
+  };
+  shape.indices = {0, 1, 2};
+  shape.uvs = {{0, 0}, {1, 0}, {0.5f, 1}};
+  shape.skinned = true;
+  shape.bones = {"NPC L Breast", "NPC Butt", "NPC L Thigh"};
+  shape.influences = {
+      {{{0, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}},
+      {{{1, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}},
+      {{{2, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}}
+  };
+
+  std::vector<sns::rendering::BodySliderSetting> sliders = {
+      {"Breasts", 20.0f, 100.0f},
+      {"Butt", 50.0f, 80.0f}
+  };
+
+  const auto initial_positions = shape.positions;
+
+  // Apply at weight 100 (big slider values)
+  sns::rendering::apply_body_preset_morphs(shape, sliders, 100.0f);
+
+  // Breast vertex displaced forward in +Y
+  CHECK(shape.positions[0].y > initial_positions[0].y);
+  // Butt vertex displaced backward in -Y
+  CHECK(shape.positions[1].y < initial_positions[1].y);
+
+  // Normals should be updated and tangents ensured
+  CHECK(shape.normals.size() == shape.positions.size());
+  CHECK(shape.tangents.size() == shape.positions.size());
+  CHECK(shape.bitangents.size() == shape.positions.size());
+
+  // Test weight interpolation: at weight 0, deformation is smaller than at weight 100
+  auto shape_weight0 = shape;
+  shape_weight0.positions = initial_positions;
+  sns::rendering::apply_body_preset_morphs(shape_weight0, sliders, 0.0f);
+
+  const float disp_y_w100 = shape.positions[0].y - initial_positions[0].y;
+  const float disp_y_w0 = shape_weight0.positions[0].y - initial_positions[0].y;
+  CHECK(disp_y_w100 > disp_y_w0);
+  CHECK(disp_y_w0 > 0.0f);
+}
+
+TEST_CASE("build_character_scene applies body preset options to skin parts", "[scene][bodymorph]") {
+  sns::test::TempDir dir;
+  sns::rendering::Appearance a;
+  a.npc_form_key = "000A2C8E:Skyrim.esm";
+  a.female = true;
+  a.weight = 75.0f;
+
+  NifBuilder skin;
+  skin.quad("BaseBody");
+  dir.write("Mod/meshes/actors/character/character assets/femalebody.nif", skin.bytes());
+
+  sns::rendering::AppearancePiece skin_piece;
+  skin_piece.source = "skin";
+  skin_piece.name = "Skin Body";
+  sns::rendering::AddonModel addon;
+  addon.mesh = "meshes\\actors\\character\\character assets\\femalebody.nif";
+  addon.slot_mask = 1u << 2;  // 32 body
+  skin_piece.addons.push_back(addon);
+  a.pieces.push_back(skin_piece);
+
+  const auto vfs = sns::mo2::VirtualFileSystem::build_from({{"Mod", dir.path() / "Mod"}});
+  sns::assets::AssetResolver resolver(vfs, {});
+
+  sns::rendering::SceneOptions options;
+  options.body_preset = sns::rendering::BodyPresetOption{
+      "Curvy Beauty",
+      "CBBE 3BA",
+      {{"Breasts", 80.0f, 100.0f}, {"Butt", 50.0f, 90.0f}}
+  };
+
+  const auto scene = sns::rendering::build_character_scene(a, resolver, options);
+  REQUIRE_FALSE(scene.parts.empty());
+
+  const auto skin_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) {
+    return p.group == "skin";
+  });
+  REQUIRE(skin_part != scene.parts.end());
+  CHECK(skin_part->label == "Skin Body (Curvy Beauty)");
+
+  const bool has_issue = std::any_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) {
+    return i.code == "BodyPresetApplied" && i.subject == "Curvy Beauty";
+  });
+  CHECK(has_issue);
+}
+
+
 

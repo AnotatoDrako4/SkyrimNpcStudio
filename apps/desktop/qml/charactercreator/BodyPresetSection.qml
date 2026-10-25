@@ -296,6 +296,11 @@ ColumnLayout {
                 }
                 StatusBadge { text: modelData.familyLabel; tone: Theme.textDim }
                 StatusBadge {
+                    visible: modelData.assigned
+                    text: qsTr("En 3D ✓")
+                    tone: Theme.ok
+                }
+                StatusBadge {
                     visible: modelData.verdict !== ""
                     text: modelData.verdictLabel
                     tone: root.verdictTone(modelData.verdict)
@@ -345,15 +350,33 @@ ColumnLayout {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("El resultado solo se sabrá dentro del juego; lo probaré en un perfil de prueba")
             }
-            Button {
-                objectName: "bodyAssignButton"
-                text: qsTr("Asignar al NPC")
-                enabled: root.selected !== null && root.npc.state === "ready"
-                         && (root.selected.verdict === "compatible" || (root.selected.verdict === "experimental" && acceptExperimental.checked))
-                Accessible.name: root.npc.state === "ready" ? qsTr("Asignar el preset a %1").arg(root.npc.name || root.npc.editorId) : text
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: root.assignMessage = root.director.assign(root.selectedUid, acceptExperimental.checked)
+            RowLayout {
+                spacing: 8
+                Button {
+                    objectName: "bodyAssignButton"
+                    text: (root.selected && root.selected.assigned) ? qsTr("Reaplicar en 3D") : qsTr("Asignar y visualizar en 3D")
+                    enabled: root.selected !== null && root.npc.state === "ready"
+                             && (root.selected.verdict === "compatible" || (root.selected.verdict === "experimental" && acceptExperimental.checked))
+                    Accessible.name: root.npc.state === "ready" ? qsTr("Asignar el preset a %1").arg(root.npc.name || root.npc.editorId) : text
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Aplica los morphs de este preset en la malla corporal del visor 3D y crea la regla BCNG para el NPC")
+                    onClicked: root.assignMessage = root.director.assign(root.selectedUid, acceptExperimental.checked)
+                }
+                Button {
+                    visible: root.selected !== null && root.selected.assigned
+                    text: qsTr("Desasignar")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Quita la regla y restaura el cuerpo base en el visor 3D")
+                    onClicked: {
+                        root.director.unassign()
+                        root.assignMessage = ""
+                    }
+                }
+                StatusBadge {
+                    visible: root.selected !== null && root.selected.assigned
+                    text: qsTr("Activo en 3D ✓")
+                    tone: Theme.ok
+                }
             }
             Text {
                 Layout.fillWidth: true

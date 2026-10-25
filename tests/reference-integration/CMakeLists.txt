@@ -8,7 +8,8 @@ add_executable(sns_reference_tests
   test_source_draft.cpp
   test_confined_file.cpp
   test_export_head_match.cpp
-  test_skin_match.cpp)
+  test_skin_match.cpp
+  test_face_source_studio.cpp)
 target_include_directories(sns_reference_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(sns_reference_tests PRIVATE
   sns::core sns::mo2 sns::appearance sns::presets nlohmann_json::nlohmann_json sns::compile_options Catch2::Catch2WithMain)

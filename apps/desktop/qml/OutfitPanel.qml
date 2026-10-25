@@ -508,6 +508,16 @@ ScrollView {
                             }
 
                             ToolButton {
+                                text: "+Inv"
+                                Accessible.name: qsTr("Añadir %1 al inventario del NPC").arg(modelData.name)
+                                implicitHeight: 26
+                                implicitWidth: Math.max(34, implicitContentWidth + leftPadding + rightPadding)
+                                onClicked: root.outfit.addInventoryItem(modelData, 1)
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Añadir una copia de esta prenda al inventario del NPC")
+                            }
+
+                            ToolButton {
                                 text: "✕"
                                 Accessible.name: qsTr("Quitar %1 del atuendo").arg(modelData.name)
                                 implicitHeight: 26
@@ -556,6 +566,112 @@ ScrollView {
                     color: Theme.textDim
                     font.pixelSize: Theme.small
                     horizontalAlignment: Text.AlignHCenter
+                }
+            }
+
+            // ========================================================= INVENTARIO DEL NPC (AG-UI-03)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Inventario del NPC")
+                    detail: String((root.outfit.inventoryItems ?? []).length) + (root.outfit.inventoryModified ? qsTr(" · modificado") : "")
+                }
+                Button {
+                    visible: root.outfit.inventoryModified
+                    text: qsTr("Restaurar")
+                    implicitHeight: 22
+                    font.pixelSize: Theme.micro
+                    onClicked: root.outfit.resetInventory()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Restaurar el inventario original del registro del NPC")
+                }
+            }
+
+            Repeater {
+                model: root.outfit.inventoryItems ?? []
+                delegate: Rectangle {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    implicitHeight: invRow.implicitHeight + 8
+                    radius: Theme.radiusSmall
+                    color: Theme.panelAlt
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+
+                    RowLayout {
+                        id: invRow
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 4
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            Text {
+                                text: modelData.name || modelData.editorId || modelData.formKey
+                                color: Theme.text
+                                font.bold: true
+                                font.pixelSize: Theme.small
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: (modelData.recordType || "ITEM") + " · " + modelData.formKey
+                                color: Theme.textDim
+                                font.pixelSize: Theme.micro
+                                font.family: Theme.monoFont
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        ToolButton {
+                            text: "−"
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            Accessible.name: qsTr("Reducir cantidad de %1").arg(modelData.name || modelData.formKey)
+                            onClicked: root.outfit.setInventoryItemCount(modelData.formKey, (modelData.count ?? 1) - 1)
+                        }
+                        Text {
+                            text: "×" + (modelData.count ?? 1)
+                            color: Theme.accent
+                            font.bold: true
+                            font.pixelSize: Theme.small
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.minimumWidth: 28
+                        }
+                        ToolButton {
+                            text: "+"
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            Accessible.name: qsTr("Aumentar cantidad de %1").arg(modelData.name || modelData.formKey)
+                            onClicked: root.outfit.setInventoryItemCount(modelData.formKey, (modelData.count ?? 1) + 1)
+                        }
+                        ToolButton {
+                            text: "✕"
+                            implicitWidth: 24
+                            implicitHeight: 24
+                            Accessible.name: qsTr("Quitar %1 del inventario").arg(modelData.name || modelData.formKey)
+                            onClicked: root.outfit.removeInventoryItem(modelData.formKey)
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: (root.outfit.inventoryItems ?? []).length === 0
+                Layout.fillWidth: true
+                implicitHeight: 36
+                radius: Theme.radiusSmall
+                color: Theme.panelAlt
+                border.color: Theme.borderSubtle
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("Sin objetos en el inventario del NPC (usa '+Inv' en una pieza para añadir).")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.micro
                 }
             }
 

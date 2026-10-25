@@ -46,6 +46,21 @@ bool custom_preset_id(const QString& id) {
 
 std::filesystem::path preset_file(const QString& id) { return preset_directory() / (ss(id) + ".json"); }
 
+class InventoryCommand final : public projects::Command {
+ public:
+  InventoryCommand(QVariantList& target, QVariantList before, QVariantList after, std::string desc)
+      : target_(target), before_(std::move(before)), after_(std::move(after)), desc_(std::move(desc)) {}
+  void apply() override { target_ = after_; }
+  void revert() override { target_ = before_; }
+  [[nodiscard]] std::string description() const override { return desc_; }
+
+ private:
+  QVariantList& target_;
+  QVariantList before_;
+  QVariantList after_;
+  std::string desc_;
+};
+
 }  // namespace
 
 OutfitEditor::OutfitEditor(WorkerClient* worker, ConsoleModel* console, SnapshotProvider snapshot,
@@ -152,6 +167,8 @@ void OutfitEditor::setTarget(const QVariantMap& npc) {
              summary.value("overrideCount").toInt()};
   current_.clear();
   for (const auto& a : npc.value("defaultOutfit").toMap().value("armors").toList()) current_.push_back(piece_from(a.toMap()));
+  initial_inventory_ = npc.value("inventory").toList();
+  inventory_ = initial_inventory_;
 
   // The studio has already reset the shared draft for this NPC (face, body, history).
   draft_.set_initial_outfit(current_);
@@ -241,6 +258,87 @@ void OutfitEditor::removePiece(const QString& form_key) {
 void OutfitEditor::resetToCurrent() { push(outfit::make_set_pieces(draft_.outfit(), current_, "Restaurar atuendo actual")); }
 
 void OutfitEditor::clearPieces() { push(outfit::make_set_pieces(draft_.outfit(), {}, "Quitar todas las piezas")); }
+
+void OutfitEditor::addInventoryItem(const QVariantMap& item, int count) {
+  const QString fk = item.value("formKey").toString().trimmed();
+  if (fk.isEmpty() || count <= 0) return;
+  QVariantList next = inventory_;
+  bool found = false;
+  for (int i = 0; i < next.size(); ++i) {
+    auto row = next[i].toMap();
+    if (row.value("formKey").toString().compare(fk, Qt::CaseInsensitive) == 0) {
+      row["count"] = std::max(1, row.value("count", 1).toInt() + count);
+      next[i] = row;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    const QString name = item.value("name").toString().isEmpty() ? item.value("editorId").toString() : item.value("name").toString();
+    next.push_back(QVariantMap{
+        {"formKey", fk},
+        {"name", name},
+        {"editorId", item.value("editorId").toString()},
+        {"recordType", item.value("recordType", "ARMO").toString()},
+        {"count", count},
+    });
+  }
+  const QString label = item.value("name").toString().isEmpty() ? fk : item.value("name").toString();
+  push(std::make_unique<InventoryCommand>(inventory_, inventory_, std::move(next),
+                                          ss(tr("Añadir a inventario: %1 (×%2)").arg(label).arg(count))));
+}
+
+void OutfitEditor::setInventoryItemCount(const QString& form_key, int count) {
+  const QString fk = form_key.trimmed();
+  if (fk.isEmpty()) return;
+  if (count <= 0) {
+    removeInventoryItem(fk);
+    return;
+  }
+  QVariantList next = inventory_;
+  bool changed = false;
+  QString label = fk;
+  for (int i = 0; i < next.size(); ++i) {
+    auto row = next[i].toMap();
+    if (row.value("formKey").toString().compare(fk, Qt::CaseInsensitive) == 0) {
+      if (row.value("count").toInt() == count) return;
+      label = row.value("name").toString().isEmpty() ? fk : row.value("name").toString();
+      row["count"] = count;
+      next[i] = row;
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return;
+  push(std::make_unique<InventoryCommand>(inventory_, inventory_, std::move(next),
+                                          ss(tr("Cantidad en inventario: %1 → ×%2").arg(label).arg(count))));
+}
+
+void OutfitEditor::removeInventoryItem(const QString& form_key) {
+  const QString fk = form_key.trimmed();
+  if (fk.isEmpty()) return;
+  QVariantList next;
+  QString label = fk;
+  bool removed = false;
+  for (const auto& v : inventory_) {
+    const auto row = v.toMap();
+    if (row.value("formKey").toString().compare(fk, Qt::CaseInsensitive) == 0) {
+      label = row.value("name").toString().isEmpty() ? fk : row.value("name").toString();
+      removed = true;
+      continue;
+    }
+    next.push_back(row);
+  }
+  if (!removed) return;
+  push(std::make_unique<InventoryCommand>(inventory_, inventory_, std::move(next),
+                                          ss(tr("Quitar del inventario: %1").arg(label))));
+}
+
+void OutfitEditor::resetInventory() {
+  if (inventory_ == initial_inventory_) return;
+  push(std::make_unique<InventoryCommand>(inventory_, inventory_, initial_inventory_,
+                                          ss(tr("Restaurar inventario original del NPC"))));
+}
 
 void OutfitEditor::undo() { history_->undo(); }
 

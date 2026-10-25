@@ -10,6 +10,7 @@
 
 #include "mo2_snapshot.hpp"
 #include "sns/body/bcng_rules.hpp"
+#include "sns/body/bodyslide_presets.hpp"
 #include "worker_client.hpp"
 
 namespace sns::app {
@@ -48,6 +49,14 @@ class BodyDirector : public QObject {
   Q_PROPERTY(QString defaultExportDirectory READ default_export_directory CONSTANT)
 
  public:
+  struct AssignedPresetInfo {
+    QString uid;
+    QString name;
+    QString family;
+    QString provider;
+    std::vector<body::SliderSetting> sliders;
+  };
+
   explicit BodyDirector(WorkerClient* worker, QObject* parent = nullptr);
   ~BodyDirector() override;
 
@@ -69,6 +78,11 @@ class BodyDirector : public QObject {
   // Adds (or replaces) the current NPC's rule with this preset. Experimental verdicts need `accept_experimental`; blocked and
   // needs-resources verdicts are refused. Returns "" on success, else the reason.
   Q_INVOKABLE QString assign(const QString& uid, bool accept_experimental);
+  // Removes assignment for a specific formKey or the currently inspected NPC. Returns empty on success.
+  Q_INVOKABLE QString unassign(const QString& form_key = {});
+  // Returns details of the preset assigned to form_key (or currently inspected NPC)
+  Q_INVOKABLE QVariantMap assignedPreset(const QString& form_key = {}) const;
+  std::optional<AssignedPresetInfo> assigned_preset_for(const QString& form_key) const;
   Q_INVOKABLE void removeRule(const QString& id);
   Q_INVOKABLE void clearDraft();
   // Exports the merged distribution as a new mod "<modName>" (and ZIP) inside `outputDir` (a folder outside MO2 and the game).
@@ -81,6 +95,7 @@ class BodyDirector : public QObject {
   void presetsChanged();
   void draftChanged();
   void exportResultChanged();
+  void bodyAssigned(const QString& form_key, const QString& preset_uid);
 
  private:
   struct Library;

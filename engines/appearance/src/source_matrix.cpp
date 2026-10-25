@@ -74,7 +74,8 @@ SourceStatus judge(const ControlReport& report, const ControlInputs& ctl, const 
 }
 
 const ProviderFaceGen* provider_of(const std::vector<ProviderFaceGen>& providers, const std::string& mod) {
-  const auto it = std::find_if(providers.begin(), providers.end(), [&](const ProviderFaceGen& p) { return p.mod == mod; });
+  // Loose copies only: an archived copy of the same mod is a candidate of its own, never the winner's evidence.
+  const auto it = std::find_if(providers.begin(), providers.end(), [&](const ProviderFaceGen& p) { return p.mod == mod && p.archive.empty(); });
   return it == providers.end() ? nullptr : &*it;
 }
 
@@ -134,7 +135,8 @@ std::string source_identity(const SourceInputs& in) {
   for (const auto& p : in.providers) {
     out += "provider=" + p.mod + "|geometry:" + (p.has_geometry ? lower(p.geometry_file) : "-") + ":" + std::to_string(p.geometry_bytes) + ":" +
            p.geometry_sha256 + "|tint:" + (p.has_tint ? lower(p.tint_file) : "-") + ":" + std::to_string(p.tint_bytes) + ":" + p.tint_sha256 +
-           "|readable=" + tri(p.readable) + "|headparts=" + tri(p.has_record_head_parts) + "\n";
+           "|readable=" + tri(p.readable) + "|headparts=" + tri(p.has_record_head_parts) +
+           (p.archive.empty() ? std::string() : "|archive=" + lower(p.archive)) + "\n";
   }
   return out;
 }
@@ -179,6 +181,7 @@ SourceMatrix build_source_matrix(const SourceInputs& in) {
   const bool can_offer = base.facegen.found && !base.facegen.path.empty();
   for (auto it = in.providers.rbegin(); can_offer && it != in.providers.rend(); ++it) {
     const auto& p = *it;
+    if (!p.archive.empty()) continue;  // archived copies come after the loose ones
     if (!p.has_geometry || p.mod == base.facegen.winner_mod) continue;
     ControlInputs ctl = base;
     ctl.facegen = loose_source(base.facegen.path, p.mod);
@@ -211,6 +214,55 @@ SourceMatrix build_source_matrix(const SourceInputs& in) {
       if (p.has_tint && !p.tint_file.empty()) c.overlay.push_back({ctl.facetint.path, p.tint_file});
       c.render_note = p.has_tint ? "Aproximación del editor: geometría y tinte de este mod sobre el resto del perfil."
                                  : "Aproximación del editor: geometría de este mod; el tinte sigue siendo el que carga el juego.";
+    }
+    m.candidates.push_back(std::move(c));
+  }
+
+  // ---- copies inside BSA archives the game does not load (shadowed by a loose file or a later archive)
+  for (auto it = in.providers.rbegin(); can_offer && it != in.providers.rend(); ++it) {
+    const auto& p = *it;
+    if (p.archive.empty() || !p.has_geometry) continue;
+    ControlInputs ctl = base;
+    ctl.facegen = {};
+    ctl.facegen.path = base.facegen.path;
+    ctl.facegen.found = true;
+    ctl.facegen.kind = "bsa";
+    ctl.facegen.winner_mod = p.mod;
+    if (p.has_tint) {
+      ctl.facetint = {};
+      ctl.facetint.path = base.facetint.path;
+      ctl.facetint.found = true;
+      ctl.facetint.kind = "bsa";
+      ctl.facetint.winner_mod = p.mod;
+    }
+    ctl.regeneration_deviation.reset();
+    ctl.facegen_readable = p.readable;
+    ctl.facegen_has_record_head_parts = p.has_record_head_parts;
+    const auto report = analyze_appearance_control(ctl);
+    SourceCandidate c;
+    c.id = "bsa:" + lower(p.archive);
+    c.archive = p.archive;
+    c.record_plugin = report.face_plugin;
+    c.record_mod = report.face_mod;
+    c.geometry_path = ctl.facegen.path;
+    c.tint_path = ctl.facetint.path;
+    c.facegen_mod = p.mod;
+    c.facetint_mod = ctl.facetint.found ? ctl.facetint.winner_mod : std::string();
+    c.loose_mods = base.facegen.loose_mods;
+    c.label = "FaceGen de " + quoted(p.mod) + " (BSA " + quoted(p.archive) + ")";
+    c.status = judge(report, ctl, p.readable);
+    fill_findings(c, report);
+    copy_evidence(c, p);
+    c.renderable = !p.geometry_file.empty() && p.readable != false;
+    if (p.geometry_file.empty()) {
+      c.render_note = "No se pudo extraer la copia del BSA para leerla.";
+    } else if (p.readable == false) {
+      c.render_note = "El FaceGen de este BSA está dañado: no se dibuja.";
+    } else {
+      c.overlay.push_back({ctl.facegen.path, p.geometry_file});
+      if (p.has_tint && !p.tint_file.empty()) c.overlay.push_back({ctl.facetint.path, p.tint_file});
+      c.render_note = p.has_tint ? "Aproximación del editor: geometría y tinte de este BSA sobre el resto del perfil."
+                                 : "Aproximación del editor: geometría de este BSA; el tinte sigue siendo el que carga el juego.";
     }
     m.candidates.push_back(std::move(c));
   }

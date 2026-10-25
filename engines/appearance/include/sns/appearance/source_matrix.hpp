@@ -31,9 +31,11 @@ enum class SourceStatus {
 [[nodiscard]] std::string_view to_string(SourceStatus status);
 [[nodiscard]] std::optional<SourceStatus> source_status_from(std::string_view text);
 
-// The FaceGen files ONE MO2 mod ships for the NPC (loose files only: a BSA copy cannot be told apart per mod).
+// The FaceGen files ONE MO2 mod ships for the NPC: its loose copy or, when `archive` is set, the copy inside that
+// BSA archive (the studio extracts it to its own cache folder to read and draw it; `geometry_file` is that copy).
 struct ProviderFaceGen {
   std::string mod;
+  std::string archive;  // "" = loose files of `mod`; else the BSA (provided by `mod`) that holds the copy
   bool has_geometry = false;
   bool has_tint = false;
   std::string geometry_file;  // absolute path of this mod's copy (what the game would load from this mod)
@@ -55,7 +57,9 @@ struct SourceInputs {
   // makes every candidate and every draft made on it stale.
   std::string profile_digest;
   ControlInputs control;                  // the effective inputs, exactly as the control map gets them
-  std::vector<ProviderFaceGen> providers;  // loose FaceGen providers, ascending MO2 priority (winner last)
+  // Loose FaceGen providers, ascending MO2 priority (winner last), then the archived copies the game does NOT load
+  // (a copy shadowed by a loose file, or by a later archive), ascending load order.
+  std::vector<ProviderFaceGen> providers;
 };
 
 // A Data path the candidate replaces for one render, and the file whose bytes replace it.
@@ -65,7 +69,8 @@ struct OverlayFile {
 };
 
 struct SourceCandidate {
-  std::string id;  // "effective", "facegen:<mod>" or "record:<plugin>" (lower case; stable across runs)
+  std::string id;  // "effective", "facegen:<mod>", "bsa:<archive>" or "record:<plugin>" (lower case; stable across runs)
+  std::string archive;  // the BSA of a "bsa:" candidate
   std::string label;  // Spanish, for the card
   bool effective = false;
   SourceStatus status = SourceStatus::Unverified;

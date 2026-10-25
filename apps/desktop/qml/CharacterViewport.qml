@@ -588,6 +588,106 @@ Rectangle {
                                 }
                             }
                         }
+
+                        // Diagnóstico de Piezas Equipadas y Conflictos de Slots (AG-UI-02)
+                        SectionHeader {
+                            visible: (root.scene.outfitDiagnostics ?? []).length > 0
+                            title: qsTr("Piezas y Slots en Escena")
+                            detail: String((root.scene.outfitDiagnostics ?? []).length)
+                        }
+                        Repeater {
+                            model: root.scene.outfitDiagnostics ?? []
+                            delegate: Rectangle {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                implicitHeight: diagCol.implicitHeight + 10
+                                radius: 3
+                                color: modelData.equipped ? Theme.surface : Qt.rgba(0.35, 0.18, 0.12, 0.45)
+                                border.color: modelData.equipped ? Theme.borderSubtle : Theme.warn
+                                border.width: 1
+
+                                ColumnLayout {
+                                    id: diagCol
+                                    anchors.fill: parent
+                                    anchors.margins: 5
+                                    spacing: 2
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        Text {
+                                            text: modelData.name || modelData.armorFormKey || qsTr("Malla NIF")
+                                            color: modelData.equipped ? Theme.text : Theme.warn
+                                            font.bold: true
+                                            font.pixelSize: Theme.small
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                        Button {
+                                            readonly property string pieceKey: modelData.armorFormKey || ((modelData.meshPaths && modelData.meshPaths.length > 0) ? modelData.meshPaths[0] : "")
+                                            text: root.scene.isPieceVisible(pieceKey) ? qsTr("Ocultar") : qsTr("Mostrar")
+                                            visible: pieceKey.length > 0 && modelData.equipped
+                                            implicitHeight: 20
+                                            font.pixelSize: 10
+                                            onClicked: root.scene.setPieceVisible(pieceKey, !root.scene.isPieceVisible(pieceKey))
+                                        }
+                                    }
+
+                                    Text {
+                                        visible: (modelData.slots ?? []).length > 0
+                                        text: qsTr("Slots: %1").arg((modelData.slots ?? []).join(", "))
+                                        color: Theme.textDim
+                                        font.pixelSize: 10
+                                    }
+                                    Text {
+                                        visible: (modelData.meshPaths ?? []).length > 0
+                                        text: (modelData.meshPaths ?? []).join(", ")
+                                        color: Theme.textDim
+                                        font.pixelSize: 10
+                                        font.family: "Consolas"
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        visible: (modelData.meshProviders ?? []).length > 0
+                                        text: qsTr("Proveedor MO2: %1").arg((modelData.meshProviders ?? []).join(", "))
+                                        color: Theme.accent
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        visible: !modelData.equipped && Boolean(modelData.reason)
+                                        text: "⚠️ " + modelData.reason
+                                        color: Theme.warn
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+                        }
+
+                        // Partes del cuerpo cubiertas por ropa
+                        SectionHeader {
+                            visible: (root.scene.coveredBodyDiagnostics ?? []).length > 0
+                            title: qsTr("Cuerpo Cubierto por Slots")
+                            detail: String((root.scene.coveredBodyDiagnostics ?? []).length)
+                        }
+                        Repeater {
+                            model: root.scene.coveredBodyDiagnostics ?? []
+                            delegate: Text {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                color: Theme.textDim
+                                font.pixelSize: 10
+                                text: qsTr("• %1 oculto por %2 (slots %3)")
+                                      .arg(modelData.pieceName || modelData.addonFormKey)
+                                      .arg(modelData.coveredByPiece || modelData.coveredByFormKey)
+                                      .arg((modelData.coveringSlots ?? []).join(", "))
+                            }
+                        }
                     }
                 }
             }

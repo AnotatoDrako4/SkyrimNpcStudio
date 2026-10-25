@@ -11,6 +11,7 @@ Item {
     id: root
     required property StudioController studio
     signal previewRequested(string formKey)
+    signal meshPreviewRequested(string dataRelativePath)
 
     property bool isGrid: false
     property bool showAdvancedFilters: false
@@ -137,9 +138,16 @@ Item {
 
         TabBar {
             id: catalogModeTabs
+            objectName: "catalogModeTabs"
             Layout.fillWidth: true
-            TabButton { text: qsTr("Prendas (ARMO)") }
-            TabButton { text: qsTr("Packs sin ESP (%1)").arg(root.studio.looseResources.totalResources) }
+            TabButton {
+                objectName: "armorCatalogTab"
+                text: qsTr("Prendas (ARMO)")
+            }
+            TabButton {
+                objectName: "resourceExplorerTab"
+                text: qsTr("Explorador de recursos (%1)").arg(root.studio.looseResources.totalResources)
+            }
         }
 
         StackLayout {
@@ -645,14 +653,15 @@ Item {
         }
     }
 
-    // Modo 2: Biblioteca de packs sin ESP y proyectos BodySlide (Épica C / RC-A Punto 4)
+    // Modo 2: Explorador universal de recursos (mallas NIF, DDS, BodySlide, FaceGen, replacers, BSA)
     LooseResourceSection {
         id: looseResourceSection
+        objectName: "universalResourceExplorer"
         studio: root.studio
         Layout.fillWidth: true
         Layout.fillHeight: true
         onPreviewRequested: (path) => {
-            root.previewRequested(path)
+            root.meshPreviewRequested(path)
         }
     }
 }

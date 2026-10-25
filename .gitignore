@@ -37,3 +37,4 @@ tests/claude-animation-intelligence/fixtures/perf/
 !tests/fixtures/**/*.README
 /dist/
 .claude/
+.serena/

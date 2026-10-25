@@ -442,7 +442,7 @@ LooseOutfitIndexResult LooseOutfitIndexer::index(
   // --------------------------------------------------------------------------
   const auto mesh_files = vfs.list_directory("meshes", true);
 
-  // Group _0 and _1 meshes by base key to represent single logical pieces
+    // Group _0 and _1 meshes by base key to represent single logical pieces
   struct MeshPairGroup {
     std::string base_display;
     std::string path_0;
@@ -450,6 +450,8 @@ LooseOutfitIndexResult LooseOutfitIndexer::index(
     std::string single_path;
   };
   std::unordered_map<std::string, MeshPairGroup> mesh_groups;
+  std::vector<std::string> extra_nif_files;
+  std::vector<std::string> unsupported_mod_files;
 
   for (const auto& file_rel : mesh_files) {
     if (options.cancelled && options.cancelled()) return result;
@@ -460,8 +462,19 @@ LooseOutfitIndexResult LooseOutfitIndexer::index(
     }
 
     const auto lower = normalize_path_key(file_rel);
+    if (lower.ends_with(".hkx") || lower.ends_with(".txt")) {
+      if (unsupported_mod_files.size() < 120) unsupported_mod_files.push_back(file_rel);
+      continue;
+    }
     if (!lower.ends_with(".nif")) continue;
-    if (!is_clothing_mesh_candidate(lower)) continue;
+    if (!is_clothing_mesh_candidate(lower)) {
+      if (lower.starts_with("meshes\\weapons\\") ||
+          lower.starts_with("meshes\\actors\\character\\facegendata\\facegeom\\") ||
+          lower.starts_with("meshes\\clutter\\")) {
+        if (extra_nif_files.size() < 350) extra_nif_files.push_back(file_rel);
+      }
+      continue;
+    }
 
     if (lower.ends_with("_0.nif")) {
       std::string base = lower.substr(0, lower.size() - 6);
@@ -550,6 +563,21 @@ LooseOutfitIndexResult LooseOutfitIndexer::index(
     if (it_match == options.registered_mesh_to_armo.end() && !grp.path_0.empty()) {
       it_match = options.registered_mesh_to_armo.find(normalize_path_key(grp.path_0));
     }
+    if (it_match == options.registered_mesh_to_armo.end() && !grp.path_1.empty()) {
+      it_match = options.registered_mesh_to_armo.find(normalize_path_key(grp.path_1));
+    }
+    if (it_match == options.registered_mesh_to_armo.end() && !grp.single_path.empty()) {
+      it_match = options.registered_mesh_to_armo.find(normalize_path_key(grp.single_path));
+    }
+    if (it_match == options.registered_mesh_to_armo.end() && (norm_key.ends_with("_0.nif") || norm_key.ends_with("_1.nif"))) {
+      std::string alt_weight = norm_key;
+      alt_weight[alt_weight.size() - 5] = (norm_key[norm_key.size() - 5] == '0') ? '1' : '0';
+      it_match = options.registered_mesh_to_armo.find(alt_weight);
+      if (it_match == options.registered_mesh_to_armo.end()) {
+        std::string base_nif = norm_key.substr(0, norm_key.size() - 6) + ".nif";
+        it_match = options.registered_mesh_to_armo.find(base_nif);
+      }
+    }
 
     if (it_match != options.registered_mesh_to_armo.end()) {
       // RES-02: Replacer of an existing registered ARMO
@@ -600,6 +628,197 @@ LooseOutfitIndexResult LooseOutfitIndexer::index(
     res.capabilities.exportable = false;
 
     result.resources.push_back(std::move(res));
+  }
+
+  // --------------------------------------------------------------------------
+  // 3. Index weapon, object, and FaceGen NIFs
+  // --------------------------------------------------------------------------
+  for (const auto& file_rel : extra_nif_files) {
+    if (options.cancelled && options.cancelled()) return result;
+    const auto provider_chain = vfs.providers_of(file_rel);
+    if (provider_chain.empty()) continue;
+    const auto winning_idx = provider_chain.back();
+    const auto& winning_prov = vfs.providers()[winning_idx];
+
+    std::vector<std::string> overridden;
+    for (std::size_t i = 0; i + 1 < provider_chain.size(); ++i) {
+      overridden.push_back(vfs.providers()[provider_chain[i]].name);
+    }
+
+    const auto lower = normalize_path_key(file_rel);
+    const bool is_facegen = lower.find("facegeom") != std::string::npos;
+
+    LooseResource res;
+    res.resource_id = winning_prov.name + ":" + file_rel;
+    res.display_name = derive_display_name_from_path(file_rel);
+    res.kind = is_facegen ? "facegen-mesh" : "weapon-mesh";
+    res.data_relative_path = file_rel;
+    res.winning_provider = winning_prov.name;
+    res.overridden_providers = std::move(overridden);
+    res.category = is_facegen ? "facegen" : (lower.starts_with("meshes\\weapons\\") ? "weapon" : "object");
+    res.body_family = "unknown";
+    res.associated_files.push_back(file_rel);
+
+    char header_buf[64] = {};
+    std::size_t header_len = 0;
+    if (auto resolved = vfs.resolve(file_rel)) {
+      std::ifstream in(resolved->absolute, std::ios::binary);
+      if (in) {
+        in.seekg(0, std::ios::end);
+        res.size_bytes = static_cast<std::uint64_t>(in.tellg());
+        in.seekg(0, std::ios::beg);
+        in.read(header_buf, sizeof(header_buf));
+        header_len = static_cast<std::size_t>(in.gcount());
+      }
+    }
+    std::string_view header_view(header_buf, header_len);
+    res.capabilities.discovered = true;
+    res.capabilities.previewable = (res.size_bytes >= 40 && header_view.starts_with("Gamebryo File Format"));
+    res.capabilities.equippable = false;
+    res.capabilities.convertible = is_facegen ? "facegen-asset" : "weapon-or-object";
+    res.capabilities.exportable = false;
+    if (!res.capabilities.previewable) {
+      res.issues.push_back("Archivo NIF dañado o formato incompatible");
+    }
+    result.resources.push_back(std::move(res));
+    if (is_facegen) ++result.facegen_count;
+    else ++result.weapon_object_mesh_count;
+  }
+
+  // --------------------------------------------------------------------------
+  // 4. Scan loose DDS textures under textures/
+  // --------------------------------------------------------------------------
+  const auto tex_files = vfs.list_directory("textures", true);
+  std::size_t indexed_textures = 0;
+  for (const auto& file_rel : tex_files) {
+    if (options.cancelled && options.cancelled()) return result;
+    if (indexed_textures >= 400) break;
+    if (!is_safe_data_path(file_rel)) continue;
+
+    const auto lower = normalize_path_key(file_rel);
+    if (!lower.ends_with(".dds")) continue;
+
+    const auto provider_chain = vfs.providers_of(file_rel);
+    if (provider_chain.empty()) continue;
+    const auto winning_idx = provider_chain.back();
+    const auto& winning_prov = vfs.providers()[winning_idx];
+
+    std::vector<std::string> overridden;
+    for (std::size_t i = 0; i + 1 < provider_chain.size(); ++i) {
+      overridden.push_back(vfs.providers()[provider_chain[i]].name);
+    }
+
+    const bool is_facetint = lower.find("facetint") != std::string::npos;
+
+    LooseResource res;
+    res.resource_id = winning_prov.name + ":" + file_rel;
+    res.display_name = derive_display_name_from_path(file_rel);
+    res.kind = is_facetint ? "facegen-tint" : "texture-dds";
+    res.data_relative_path = file_rel;
+    res.winning_provider = winning_prov.name;
+    res.overridden_providers = std::move(overridden);
+    res.category = is_facetint ? "facegen" : "texture";
+    res.body_family = infer_body_family(file_rel + " " + winning_prov.name);
+    res.associated_files.push_back(file_rel);
+
+    if (auto resolved = vfs.resolve(file_rel)) {
+      std::error_code ec;
+      res.size_bytes = std::filesystem::file_size(resolved->absolute, ec);
+    }
+    res.capabilities.discovered = true;
+    res.capabilities.previewable = res.size_bytes >= 128;
+    res.capabilities.equippable = false;
+    res.capabilities.convertible = "texture-asset";
+    res.capabilities.exportable = false;
+    if (!res.capabilities.previewable) {
+      res.issues.push_back("Textura DDS vacía o truncada (< 128 bytes)");
+    }
+
+    result.resources.push_back(std::move(res));
+    ++indexed_textures;
+    if (is_facetint) ++result.facegen_count;
+    else ++result.texture_dds_count;
+  }
+
+  // --------------------------------------------------------------------------
+  // 5. Scan root BSA archives and non-renderable mod files (HKX, PEX, SEQ, FUZ)
+  // --------------------------------------------------------------------------
+  const auto root_files = vfs.list_directory("", false);
+  for (const auto& file_rel : root_files) {
+    if (options.cancelled && options.cancelled()) return result;
+    if (!is_safe_data_path(file_rel)) continue;
+    const auto lower = normalize_path_key(file_rel);
+    if (lower.ends_with(".bsa")) {
+      const auto provider_chain = vfs.providers_of(file_rel);
+      if (provider_chain.empty()) continue;
+      const auto winning_idx = provider_chain.back();
+      const auto& winning_prov = vfs.providers()[winning_idx];
+
+      LooseResource res;
+      res.resource_id = winning_prov.name + ":" + file_rel;
+      res.display_name = file_rel;
+      res.kind = "bsa-archive";
+      res.data_relative_path = file_rel;
+      res.winning_provider = winning_prov.name;
+      res.category = "archive";
+      res.associated_files.push_back(file_rel);
+      if (auto resolved = vfs.resolve(file_rel)) {
+        std::error_code ec;
+        res.size_bytes = std::filesystem::file_size(resolved->absolute, ec);
+      }
+      res.capabilities.discovered = true;
+      res.capabilities.previewable = true;
+      res.capabilities.equippable = false;
+      res.capabilities.convertible = "bsa-archive";
+      res.capabilities.exportable = false;
+      result.resources.push_back(std::move(res));
+      ++result.bsa_archive_count;
+    } else if (lower.ends_with(".seq")) {
+      unsupported_mod_files.push_back(file_rel);
+    }
+  }
+
+  const auto script_files = vfs.list_directory("scripts", false);
+  for (const auto& file_rel : script_files) {
+    if (unsupported_mod_files.size() >= 150) break;
+    const auto lower = normalize_path_key(file_rel);
+    if (lower.ends_with(".pex")) unsupported_mod_files.push_back(file_rel);
+  }
+
+  for (const auto& file_rel : unsupported_mod_files) {
+    if (options.cancelled && options.cancelled()) return result;
+    if (!is_safe_data_path(file_rel)) continue;
+    const auto provider_chain = vfs.providers_of(file_rel);
+    if (provider_chain.empty()) continue;
+    const auto winning_idx = provider_chain.back();
+    const auto& winning_prov = vfs.providers()[winning_idx];
+
+    std::vector<std::string> overridden;
+    for (std::size_t i = 0; i + 1 < provider_chain.size(); ++i) {
+      overridden.push_back(vfs.providers()[provider_chain[i]].name);
+    }
+
+    LooseResource res;
+    res.resource_id = winning_prov.name + ":" + file_rel;
+    res.display_name = std::filesystem::path(file_rel).filename().string();
+    res.kind = "unsupported-file";
+    res.data_relative_path = file_rel;
+    res.winning_provider = winning_prov.name;
+    res.overridden_providers = std::move(overridden);
+    res.category = "other";
+    res.associated_files.push_back(file_rel);
+    if (auto resolved = vfs.resolve(file_rel)) {
+      std::error_code ec;
+      res.size_bytes = std::filesystem::file_size(resolved->absolute, ec);
+    }
+    res.capabilities.discovered = true;
+    res.capabilities.previewable = false;
+    res.capabilities.equippable = false;
+    res.capabilities.convertible = "UNSUPPORTED_PREVIEW";
+    res.capabilities.exportable = false;
+    res.issues.push_back("Vista previa visual no disponible (UNSUPPORTED_PREVIEW): archivo binario de animación, comportamiento o script sin motor gráfico directo.");
+    result.resources.push_back(std::move(res));
+    ++result.unsupported_file_count;
   }
 
   // Sort resources deterministically by display name and resource id

@@ -20,9 +20,13 @@
 
 #include "diagnostics/crash_diagnostics.hpp"
 #include "json_bridge.hpp"
+#include "sns/appearance/face_transfer.hpp"
+#include "sns/assets/asset_resolver.hpp"
+#include "sns/assets/bsa_archive.hpp"
 #include "sns/core/text.hpp"
 #include "sns/mo2/confined_file.hpp"
 #include "sns/face/facegen.hpp"
+#include <unordered_map>
 
 namespace sns::app {
 namespace fs = std::filesystem;
@@ -95,6 +99,7 @@ QVariantMap candidate_map(const appearance::SourceCandidate& c) {
   for (const auto& o : c.overlay) overlay << QVariantMap{{"dataPath", qs(o.data_path)}, {"file", qs(o.file)}};
   return {{"id", qs(c.id)},
           {"label", qs(c.label)},
+          {"archive", qs(c.archive)},
           {"effective", c.effective},
           {"status", qs(std::string(appearance::to_string(c.status)))},
           {"recordPlugin", qs(c.record_plugin)},
@@ -124,7 +129,46 @@ QVariantMap image_map(const QString& state, const QString& url, const QString& r
   return m;
 }
 
+constexpr auto kGeometryDir = "meshes\\actors\\character\\facegendata\\facegeom";
+constexpr auto kTintDir = "textures\\actors\\character\\facegendata\\facetint";
+
+// Writes `bytes` once into the studio's own extraction folder, named by their SHA-256 (the same copy is shared by every
+// NPC and run). Returns the file, or "" with `why`. Never writes anywhere else.
+QString extract_copy(const QString& dir, const QString& sha, const QString& extension, const std::string& bytes, QString* why) {
+  if (dir.isEmpty()) {
+    *why = QStringLiteral("no hay carpeta de caché para extraer");
+    return {};
+  }
+  const auto path = QDir(dir).filePath(sha + extension);
+  if (QFileInfo(path).size() == static_cast<qint64>(bytes.size())) return path;
+  QDir().mkpath(dir);
+  QSaveFile file(path);
+  if (!file.open(QIODevice::WriteOnly) || file.write(bytes.data(), static_cast<qint64>(bytes.size())) != static_cast<qint64>(bytes.size()) || !file.commit()) {
+    *why = file.errorString();
+    return {};
+  }
+  return path;
+}
+
 }  // namespace
+
+// Every FaceGen copy found inside the profile's BSA archives, by Data path key (ascending archive load order).
+struct AppearanceSources::FaceArchives {
+  struct Copy {
+    std::string archive, mod;
+    std::shared_ptr<const assets::BsaArchive> bsa;
+  };
+  std::unordered_map<std::string, std::vector<Copy>> by_key;
+};
+
+struct AppearanceSources::FaceScan {
+  appearance::FaceIndex index;
+  std::shared_ptr<FaceArchives> archives = std::make_shared<FaceArchives>();
+  int loose_files = 0, archived_files = 0, archives_opened = 0;
+  qint64 ms = 0;
+  QStringList issues;
+  QString error;
+};
 
 struct AppearanceSources::Gathered {
   appearance::SourceMatrix matrix;
@@ -147,6 +191,7 @@ AppearanceSources::AppearanceSources(PortraitRenderer* portraits, QObject* paren
 
 AppearanceSources::~AppearanceSources() {
   if (cancel_) *cancel_ = true;
+  if (face_cancel_) *face_cancel_ = true;
 }
 
 QString AppearanceSources::variants_directory() const {
@@ -179,6 +224,14 @@ void AppearanceSources::set_profile(SnapshotPtr snapshot, const QString& profile
   emit matrixChanged();
   emit selectionChanged();
   emit imagesChanged();
+  // The index of another profile is never shown: drop it, then scan this one.
+  ++face_serial_;
+  if (face_cancel_) *face_cancel_ = true;
+  face_index_ = {};
+  face_archives_.reset();
+  face_index_map_ = {{"state", "none"}};
+  emit faceIndexChanged();
+  if (snapshot_) scanFaceIndex();
 }
 
 void AppearanceSources::set_npc(const QString& form_key, const QString& name, const appearance::ControlInputs& control, const QVariantMap& details) {
@@ -232,8 +285,9 @@ void AppearanceSources::start_gather() {
   matrix_map_ = head;
   emit matrixChanged();
   const int serial = serial_;
+  const auto extract_dir = variants_directory().isEmpty() ? QString() : QDir(variants_directory()).filePath(QStringLiteral("bsa"));
   QThreadPool::globalInstance()->start([self = QPointer<AppearanceSources>(this), snapshot = snapshot_, form_key = form_key_, digest, control = control_,
-                                        details = details_, cancel = cancel_, serial] {
+                                        details = details_, cancel = cancel_, serial, archives = face_archives_, extract_dir] {
     QElapsedTimer clock;
     clock.start();
     auto result = std::make_shared<Gathered>();
@@ -307,6 +361,67 @@ void AppearanceSources::start_gather() {
       }
       in.providers.push_back(std::move(p));
     }
+    // Copies inside BSA archives that the game does not load: every archived copy when a loose file wins, every
+    // archived copy but the last one otherwise. Read from the archive and extracted to the studio's own folder.
+    if (archives && !geometry.isEmpty()) {
+      const auto g = archives->by_key.find(text::data_path_key(ss(geometry)));
+      const auto t = tint.isEmpty() ? archives->by_key.end() : archives->by_key.find(text::data_path_key(ss(tint)));
+      if (g != archives->by_key.end()) {
+        auto copies = g->second;
+        if (control.facegen.kind != "loose" && !copies.empty()) copies.pop_back();  // the archive the game loads
+        for (const auto& copy : copies) {
+          if (cancel->load()) return;
+          appearance::ProviderFaceGen p;
+          p.mod = copy.mod;
+          p.archive = copy.archive;
+          QString why;
+          if (auto bytes = copy.bsa->read(text::data_path_key(ss(geometry)))) {
+            if (static_cast<qint64>(bytes->size()) > kMaxGeometryBytes) {
+              why = QStringLiteral("pesa más de %1 MB").arg(kMaxGeometryBytes / (1024 * 1024));
+            } else {
+              const auto sha = sha256_hex(QByteArray::fromRawData(bytes->data(), static_cast<qsizetype>(bytes->size())));
+              p.has_geometry = true;
+              p.geometry_bytes = static_cast<std::int64_t>(bytes->size());
+              p.geometry_sha256 = ss(sha);
+              p.geometry_file = ss(extract_copy(extract_dir, sha, QStringLiteral(".nif"), *bytes, &why));
+              result->bytes += static_cast<qint64>(bytes->size());
+              const auto info = face::inspect_facegen(*bytes);
+              p.readable = info.readable;
+              if (info.readable && !editor_ids.empty()) {
+                bool all = true;
+                for (const auto& id : editor_ids) {
+                  all = all && !id.empty() &&
+                        std::any_of(info.shapes.begin(), info.shapes.end(), [&](const auto& s) { return text::iequals_ascii(s.first, id); });
+                }
+                p.has_record_head_parts = all;
+              }
+            }
+          } else {
+            why = QStringLiteral("no se pudo leer del archivo");
+          }
+          if (!why.isEmpty()) result->skipped << QStringLiteral("BSA «%1» %2: %3").arg(qs(copy.archive), geometry, why);
+          // The tint of the same archive, when it has one.
+          if (t != archives->by_key.end()) {
+            for (const auto& tc : t->second) {
+              if (tc.archive != copy.archive) continue;
+              QString tint_why;
+              if (auto bytes = tc.bsa->read(text::data_path_key(ss(tint))); bytes && static_cast<qint64>(bytes->size()) <= kMaxTintBytes) {
+                const auto sha = sha256_hex(QByteArray::fromRawData(bytes->data(), static_cast<qsizetype>(bytes->size())));
+                p.tint_file = ss(extract_copy(extract_dir, sha, QStringLiteral(".dds"), *bytes, &tint_why));
+                p.has_tint = !p.tint_file.empty();
+                p.tint_bytes = static_cast<std::int64_t>(bytes->size());
+                p.tint_sha256 = ss(sha);
+                result->bytes += static_cast<qint64>(bytes->size());
+              } else {
+                tint_why = QStringLiteral("no se pudo leer del archivo");
+              }
+              if (!tint_why.isEmpty()) result->skipped << QStringLiteral("BSA «%1» %2: %3").arg(qs(copy.archive), tint, tint_why);
+            }
+          }
+          in.providers.push_back(std::move(p));
+        }
+      }
+    }
     result->matrix = appearance::build_source_matrix(in);
     result->ms = clock.elapsed();
     QMetaObject::invokeMethod(
@@ -352,8 +467,211 @@ void AppearanceSources::apply_matrix(appearance::SourceMatrix matrix, const QStr
   choose_default_selection();
   emit matrixChanged();
   emit selectionChanged();
-  // The two sources on view are drawn only while the A/B dialog is open.
+  // The two sources on view are drawn only while the A/B dialog is open; every source while the gallery is.
   if (compare_open_) request_compare_images();
+  if (gallery_open_) request_gallery_images();
+}
+
+void AppearanceSources::request_gallery_images() {
+  if (matrix_map_.value("state").toString() != QLatin1String("ready")) return;
+  // The renderer draws one variant at a time (its own queue); the cache answers the rest without rendering.
+  for (const auto& c : matrix_.candidates) {
+    if (c.renderable || !c.effective) requestImage(qs(c.id));
+  }
+}
+
+void AppearanceSources::set_gallery_open(bool open) {
+  if (gallery_open_ == open) return;
+  gallery_open_ = open;
+  emit galleryOpenChanged();
+  if (open) request_gallery_images();
+}
+
+// ------------------------------------------------------------------ face source index
+
+void AppearanceSources::scanFaceIndex() {
+  if (!snapshot_) return;
+  ++face_serial_;
+  if (face_cancel_) *face_cancel_ = true;
+  face_cancel_ = std::make_shared<std::atomic<bool>>(false);
+  face_index_map_ = {{"state", "scanning"}};
+  emit faceIndexChanged();
+  const int serial = face_serial_;
+  QThreadPool::globalInstance()->start([self = QPointer<AppearanceSources>(this), snapshot = snapshot_, cancel = face_cancel_, serial] {
+    QElapsedTimer clock;
+    clock.start();
+    auto scan = std::make_shared<FaceScan>();
+    try {
+      std::unordered_map<std::string, appearance::FaceFileObservation> files;  // by Data path key
+      // The plugin folder takes the spelling of the plugin file in the virtual Data folder (a mod may ship "skyrim.esm\..."
+      // and archive keys are lower case), so the FormKeys match the rest of the studio.
+      std::unordered_map<std::string, std::string> plugin_case;
+      for (const auto& plugin : snapshot->vfs.root_plugins()) plugin_case[text::to_lower_ascii(plugin)] = plugin;
+      const auto geometry_prefix = std::string(kGeometryDir) + "\\";
+      const auto tint_prefix = std::string(kTintDir) + "\\";
+      const auto spelled = [&](std::string path) {
+        std::replace(path.begin(), path.end(), '/', '\\');
+        const auto key = text::data_path_key(path);
+        const bool geometry = key.rfind(geometry_prefix, 0) == 0;
+        if (!geometry && key.rfind(tint_prefix, 0) != 0) return path;
+        const auto start = path.size() - key.size() + (geometry ? geometry_prefix : tint_prefix).size();
+        const auto slash = path.find('\\', start);
+        if (slash == std::string::npos) return path;
+        if (const auto it = plugin_case.find(text::to_lower_ascii(path.substr(start, slash - start))); it != plugin_case.end()) {
+          path.replace(start, slash - start, it->second);
+        }
+        return path;
+      };
+      // Loose copies: every provider of every FaceGen file of the virtual Data folder (ascending priority).
+      for (const auto* dir : {kGeometryDir, kTintDir}) {
+        for (const auto& path : snapshot->vfs.list_directory(dir, true)) {
+          if (cancel->load()) return;
+          if (!appearance::facegen_file_identity(path)) continue;
+          auto& f = files[text::data_path_key(path)];
+          f.data_path = spelled(path);
+          for (const auto index : snapshot->vfs.providers_of(path)) f.loose_mods.push_back(snapshot->vfs.providers()[index].name);
+          ++scan->loose_files;
+        }
+      }
+      // Archived copies, in the order the game loads the archives.
+      for (const auto& ref : assets::archive_load_order(snapshot->profile, snapshot->load_order, snapshot->vfs)) {
+        if (cancel->load()) return;
+        std::shared_ptr<const assets::BsaArchive> bsa;
+        try {
+          bsa = assets::BsaArchive::open(ref.path);
+        } catch (const std::exception& e) {
+          scan->issues << QStringLiteral("«%1»: %2").arg(qs(ref.name), qs(e.what()));
+          continue;
+        }
+        ++scan->archives_opened;
+        for (const auto& key : bsa->list()) {
+          const bool geometry = key.rfind(geometry_prefix, 0) == 0;
+          if (!geometry && key.rfind(tint_prefix, 0) != 0) continue;
+          const auto display = spelled(key);
+          if (!appearance::facegen_file_identity(display)) continue;
+          auto& f = files[key];
+          if (f.data_path.empty()) f.data_path = display;
+          f.archives.push_back({ref.name, ref.provider});
+          scan->archives->by_key[key].push_back({ref.name, ref.provider, bsa});
+          ++scan->archived_files;
+        }
+      }
+      std::vector<appearance::FaceFileObservation> list;
+      list.reserve(files.size());
+      for (auto& [key, f] : files) list.push_back(std::move(f));
+      scan->index = appearance::build_face_index(list);
+    } catch (const std::exception& e) {
+      scan->error = qs(e.what());
+    }
+    scan->ms = clock.elapsed();
+    QMetaObject::invokeMethod(
+        self.data(), [self, serial, scan] { if (self) self->on_face_scanned(serial, scan); }, Qt::QueuedConnection);
+  });
+}
+
+void AppearanceSources::on_face_scanned(int serial, const std::shared_ptr<FaceScan>& scan) {
+  if (serial != face_serial_) return;
+  if (!scan->error.isEmpty()) {
+    face_index_map_ = {{"state", "error"}, {"error", scan->error}, {"scanMs", scan->ms}};
+    emit faceIndexChanged();
+    return;
+  }
+  face_index_ = std::move(scan->index);
+  face_archives_ = scan->archives;
+  QStringList sources;
+  for (const auto& s : face_index_.sources) sources << qs(s);
+  face_index_map_ = {{"state", "ready"},
+                     {"npcs", static_cast<int>(face_index_.entries.size())},
+                     {"withAlternatives", face_index_.with_alternatives},
+                     {"looseFiles", scan->loose_files},
+                     {"archivedFiles", scan->archived_files},
+                     {"archives", scan->archives_opened},
+                     {"scanMs", scan->ms},
+                     {"sources", sources},
+                     {"issues", scan->issues}};
+  diag::record("sources", QStringLiteral("face index: %1 NPCs, %2 with alternatives, %3 loose + %4 archived files, %5 archives, %6 ms")
+                              .arg(face_index_.entries.size()).arg(face_index_.with_alternatives).arg(scan->loose_files).arg(scan->archived_files)
+                              .arg(scan->archives_opened).arg(scan->ms).toStdString());
+  emit faceIndexChanged();
+  // The NPC on view gets its archived copies now: a gather in flight (built without them) is dropped, and so are its
+  // pictures in flight (their answers carry the old serial).
+  if (!form_key_.isEmpty()) {
+    ++serial_;
+    if (cancel_) *cancel_ = true;
+    images_.clear();
+    ++image_revision_;
+    emit imagesChanged();
+    start_gather();
+  }
+}
+
+QVariantMap AppearanceSources::queryFaceIndex(const QString& text, const QString& source, bool onlyAlternatives, const QString& flag, int limit,
+                                              const QVariantMap& names) const {
+  appearance::FaceIndexQuery query;
+  query.text = ss(text.trimmed());
+  query.source = ss(source);
+  query.only_alternatives = onlyAlternatives;
+  query.flag = ss(flag);
+  query.limit = static_cast<std::size_t>(std::clamp(limit, 1, 5000));
+  // `names` comes from studio.npcNames, keyed like StudioController::npcKey ("a2c8e:skyrim.esm"): look every entry up
+  // by that key and hand the engine a map by the index's own FormKeys.
+  const auto npc_key = [](const QString& form_key) {
+    const auto colon = form_key.indexOf(':');
+    bool ok = false;
+    const auto id = form_key.left(colon).toUInt(&ok, 16);
+    return colon < 0 || !ok ? form_key.toLower() : QString::number(id, 16) + ':' + form_key.mid(colon + 1).toLower();
+  };
+  std::map<std::string, std::string> name_map;
+  QHash<QString, QString> display;
+  if (!names.isEmpty()) {
+    for (const auto& e : face_index_.entries) {
+      const auto key = qs(e.form_key);
+      const auto name = names.value(npc_key(key)).toString();
+      if (name.isEmpty()) continue;
+      name_map[e.form_key] = ss(name);
+      display.insert(key, name);
+    }
+  }
+  std::size_t total = 0;
+  QVariantList rows;
+  for (const auto* e : appearance::query_face_index(face_index_, query, &name_map, &total)) {
+    QStringList archives;
+    for (const auto& a : e->geometry_archives) archives << qs(a.archive);
+    QStringList flags, sources, loose;
+    for (const auto& f : e->flags) flags << qs(f);
+    for (const auto& s : e->sources) sources << qs(s);
+    for (const auto& m : e->geometry_loose) loose << qs(m);
+    rows << QVariantMap{{"formKey", qs(e->form_key)},
+                        {"plugin", qs(e->plugin)},
+                        {"formId", qs(e->form_id)},
+                        {"name", display.value(qs(e->form_key))},
+                        {"geometryWinner", qs(e->geometry_winner)},
+                        {"geometryArchived", e->geometry_winner_archived},
+                        {"tintWinner", qs(e->tint_winner)},
+                        {"alternatives", e->alternatives},
+                        {"flags", flags},
+                        {"sources", sources},
+                        {"geometryPath", qs(e->geometry_path)},
+                        {"tintPath", qs(e->tint_path)},
+                        {"looseMods", loose},
+                        {"archives", archives}};
+  }
+  return {{"total", static_cast<int>(total)}, {"rows", rows}};
+}
+
+QVariantMap AppearanceSources::transferPlan(const QString& id) const {
+  if (matrix_map_.value("state").toString() != QLatin1String("ready")) return {{"candidate", id}, {"verdict", "WAITING"}};
+  const auto state = appearance::evaluate_draft(book_, matrix_, ss(input_digest_));
+  std::string chosen;
+  if (const auto it = book_.entries.find(matrix_.npc_form_key); it != book_.entries.end()) chosen = it->second.chosen;
+  const auto plan = appearance::plan_face_transfer(matrix_, ss(id), state, chosen);
+  return {{"candidate", qs(plan.candidate_id)},
+          {"verdict", qs(std::string(appearance::to_string(plan.verdict)))},
+          {"chosen", plan.chosen},
+          {"canCreatePatch", plan.can_create_patch},
+          {"requirement", qs(plan.requirement)},
+          {"reasons", list_of(plan.reasons)},
+          {"actions", list_of(plan.actions)}};
 }
 
 void AppearanceSources::request_compare_images() {

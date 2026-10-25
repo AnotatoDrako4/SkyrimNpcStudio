@@ -61,6 +61,14 @@ QString rule_id_for(const QString& form_key) {
   return id;
 }
 
+bool same_form_key(const QString& a, const QString& b) {
+  const auto ia = a.indexOf(':'), ib = b.indexOf(':');
+  if (ia < 0 || ib < 0) return a.compare(b, Qt::CaseInsensitive) == 0;
+  bool oka = false, okb = false;
+  const auto ida = a.left(ia).toUInt(&oka, 16), idb = b.left(ib).toUInt(&okb, 16);
+  return oka && okb && ida == idb && a.mid(ia + 1).compare(b.mid(ib + 1), Qt::CaseInsensitive) == 0;
+}
+
 }  // namespace
 
 struct BodyDirector::Library {
@@ -416,13 +424,71 @@ QString BodyDirector::assign(const QString& uid, bool accept_experimental) {
   // A name shared by several winning files is ambiguous for BCNG: name the file (BOD-04).
   if (library_->presets.duplicate_of(p->name)) ref.file = p->source;
   d.file = qs(ref.file);
-  rule.presets = {ref};
+  const QString target_fk = d.form_key;
   rules_.erase(std::remove_if(rules_.begin(), rules_.end(), [&](const auto& r) { return r.id == d.id; }), rules_.end());
   rules_.push_back(std::move(d));
   diag::record("body", ("assign " + ss(uid)).c_str());
   rebuild_draft();
   rebuild_presets();
+  emit bodyAssigned(target_fk, uid);
   return {};
+}
+
+QString BodyDirector::unassign(const QString& form_key) {
+  QString fk = form_key;
+  if (fk.isEmpty() && analysis_) fk = qs(analysis_->info.form_key);
+  if (fk.isEmpty()) return tr("No hay ningún NPC seleccionado.");
+
+  const auto prev_count = rules_.size();
+  rules_.erase(std::remove_if(rules_.begin(), rules_.end(), [&](const auto& r) {
+    return same_form_key(r.form_key, fk);
+  }), rules_.end());
+
+  if (rules_.size() != prev_count) {
+    diag::record("body", ("unassign " + ss(fk)).c_str());
+    rebuild_draft();
+    rebuild_presets();
+    emit bodyAssigned(fk, QString());
+  }
+  return {};
+}
+
+std::optional<BodyDirector::AssignedPresetInfo> BodyDirector::assigned_preset_for(const QString& form_key) const {
+  if (form_key.isEmpty() || !library_) return std::nullopt;
+  for (const auto& r : rules_) {
+    if (same_form_key(r.form_key, form_key)) {
+      const auto* p = library_->presets.find(ss(r.uid));
+      if (!p) {
+        const auto matches = library_->presets.by_name(ss(r.preset));
+        if (!matches.empty()) p = matches.front();
+      }
+      if (p) {
+        AssignedPresetInfo info;
+        info.uid = qs(p->uid);
+        info.name = qs(p->name);
+        info.family = p->family.family == body::BodyFamily::Other ? qs(p->family.other_name)
+                                                                  : qs(std::string(body::family_label(p->family.family)));
+        info.provider = qs(p->provider);
+        info.sliders = p->sliders;
+        return info;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+QVariantMap BodyDirector::assignedPreset(const QString& form_key) const {
+  QString fk = form_key;
+  if (fk.isEmpty() && analysis_) fk = qs(analysis_->info.form_key);
+  const auto info = assigned_preset_for(fk);
+  if (!info) return QVariantMap{{"assigned", false}};
+  return QVariantMap{
+      {"assigned", true},
+      {"uid", info->uid},
+      {"name", info->name},
+      {"family", info->family},
+      {"provider", info->provider},
+      {"sliders", static_cast<int>(info->sliders.size())}};
 }
 
 void BodyDirector::removeRule(const QString& id) {

@@ -296,6 +296,131 @@ void ensure_uv_tangents(nif::Shape& shape) {
   }
 }
 
+void apply_body_preset_morphs(nif::Shape& shape, const std::vector<BodySliderSetting>& sliders, float weight) {
+  if (shape.positions.empty() || sliders.empty()) return;
+
+  const float w_frac = std::clamp(weight / 100.0f, 0.0f, 1.0f);
+
+  float breast_val = 0.0f, butt_val = 0.0f, belly_val = 0.0f, waist_val = 0.0f, thigh_val = 0.0f;
+  int breast_cnt = 0, butt_cnt = 0, belly_cnt = 0, waist_cnt = 0, thigh_cnt = 0;
+
+  for (const auto& s : sliders) {
+    const float sm = s.small.value_or(s.big.value_or(0.0f));
+    const float bg = s.big.value_or(s.small.value_or(0.0f));
+    float val = sm + w_frac * (bg - sm);
+    if (std::abs(val) > 2.0f) val /= 100.0f;
+
+    const auto lname = text::to_lower_ascii(s.name);
+    if (lname.find("breast") != std::string::npos || lname.find("boob") != std::string::npos ||
+        lname.find("cleavage") != std::string::npos || lname.find("doublemelon") != std::string::npos ||
+        lname.find("7b upper") != std::string::npos) {
+      breast_val += val;
+      ++breast_cnt;
+    } else if (lname.find("butt") != std::string::npos || lname.find("glute") != std::string::npos ||
+               lname.find("7b lower") != std::string::npos) {
+      butt_val += val;
+      ++butt_cnt;
+    } else if (lname.find("belly") != std::string::npos || lname.find("pregnancy") != std::string::npos) {
+      belly_val += val;
+      ++belly_cnt;
+    } else if (lname.find("waist") != std::string::npos) {
+      waist_val += val;
+      ++waist_cnt;
+    } else if (lname.find("thigh") != std::string::npos || lname.find("leg") != std::string::npos ||
+               lname.find("hip") != std::string::npos || lname.find("calf") != std::string::npos) {
+      thigh_val += val;
+      ++thigh_cnt;
+    }
+  }
+
+  const float breast_delta = breast_cnt > 0 ? (breast_val / breast_cnt) * 3.0f : 0.0f;
+  const float butt_delta = butt_cnt > 0 ? (butt_val / butt_cnt) * 2.5f : 0.0f;
+  const float belly_delta = belly_cnt > 0 ? (belly_val / belly_cnt) * 2.0f : 0.0f;
+  const float waist_delta = waist_cnt > 0 ? (waist_val / waist_cnt) * 1.5f : 0.0f;
+  const float thigh_delta = thigh_cnt > 0 ? (thigh_val / thigh_cnt) * 1.5f : 0.0f;
+
+  if (std::abs(breast_delta) < 1e-4f && std::abs(butt_delta) < 1e-4f && std::abs(belly_delta) < 1e-4f &&
+      std::abs(waist_delta) < 1e-4f && std::abs(thigh_delta) < 1e-4f) {
+    return;
+  }
+
+  std::vector<std::string> bone_lower;
+  bone_lower.reserve(shape.bones.size());
+  for (const auto& b : shape.bones) bone_lower.push_back(text::to_lower_ascii(b));
+
+  const bool has_skinning = shape.skinned && !shape.influences.empty() && !shape.bones.empty();
+  const bool has_normals = shape.normals.size() == shape.positions.size();
+
+  for (std::size_t i = 0; i < shape.positions.size(); ++i) {
+    auto& pos = shape.positions[i];
+    float bw = 0.0f, buw = 0.0f, bew = 0.0f, ww = 0.0f, tw = 0.0f;
+
+    if (has_skinning && i < shape.influences.size()) {
+      const auto& inf = shape.influences[i];
+      for (int k = 0; k < 4; ++k) {
+        if (inf.weight[k] <= 0.0f || inf.bone[k] >= bone_lower.size()) continue;
+        const auto& b = bone_lower[inf.bone[k]];
+        const float w = inf.weight[k];
+        if (b.find("breast") != std::string::npos || b.find("boob") != std::string::npos) bw += w;
+        else if (b.find("butt") != std::string::npos || b.find("glute") != std::string::npos) buw += w;
+        else if (b.find("belly") != std::string::npos) bew += w;
+        else if (b.find("pelvis") != std::string::npos || b.find("waist") != std::string::npos || b.find("spine") != std::string::npos) ww += w;
+        else if (b.find("thigh") != std::string::npos || b.find("calf") != std::string::npos || b.find("leg") != std::string::npos) tw += w;
+      }
+    } else {
+      if (pos.z >= 95.0f && pos.z <= 125.0f && pos.y > 0.0f) {
+        const float z_factor = 1.0f - std::abs(pos.z - 110.0f) / 15.0f;
+        bw = std::max(0.0f, z_factor * std::clamp(pos.y / 10.0f, 0.0f, 1.0f));
+      }
+      if (pos.z >= 80.0f && pos.z <= 110.0f && pos.y < 0.0f) {
+        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 15.0f;
+        buw = std::max(0.0f, z_factor * std::clamp(-pos.y / 10.0f, 0.0f, 1.0f));
+      }
+      if (pos.z >= 85.0f && pos.z <= 105.0f && pos.y > 0.0f) {
+        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 10.0f;
+        bew = std::max(0.0f, z_factor * std::clamp(pos.y / 10.0f, 0.0f, 1.0f));
+      }
+      if (pos.z >= 85.0f && pos.z <= 105.0f) {
+        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 10.0f;
+        ww = std::max(0.0f, z_factor);
+      }
+      if (pos.z >= 45.0f && pos.z <= 85.0f) {
+        const float z_factor = 1.0f - std::abs(pos.z - 65.0f) / 20.0f;
+        tw = std::max(0.0f, z_factor);
+      }
+    }
+
+    const float disp = bw * breast_delta + buw * butt_delta + bew * belly_delta + ww * waist_delta + tw * thigh_delta;
+    if (std::abs(disp) < 1e-5f) continue;
+
+    Vec3 norm = has_normals ? shape.normals[i] : Vec3{0, 0, 1};
+    Vec3 dir = norm;
+    if (bw > 0.1f) {
+      dir = normalized({pos.x * 0.3f, 0.9f, 0.2f});
+    } else if (buw > 0.1f) {
+      dir = normalized({pos.x * 0.3f, -0.9f, 0.1f});
+    } else if (bew > 0.1f) {
+      dir = normalized({pos.x * 0.2f, 0.9f, -0.1f});
+    } else if (ww > 0.1f) {
+      dir = normalized({pos.x, pos.y, 0.0f});
+    } else if (tw > 0.1f) {
+      dir = normalized({pos.x, 0.2f, 0.0f});
+    }
+
+    const Vec3 effective_dir = has_normals ? normalized({norm.x * 0.7f + dir.x * 0.3f, norm.y * 0.7f + dir.y * 0.3f, norm.z * 0.7f + dir.z * 0.3f}) : dir;
+
+    pos.x += effective_dir.x * disp;
+    pos.y += effective_dir.y * disp;
+    pos.z += effective_dir.z * disp;
+  }
+
+  recompute_smooth_normals(shape);
+  shape.tangents.clear();
+  shape.bitangents.clear();
+  shape.tangents_swapped = false;
+  ensure_uv_tangents(shape);
+}
+
 std::vector<float> bind_frames(const nif::Shape& shape) {
   const auto n = shape.positions.size();
   std::vector<float> frames(n * 9);
@@ -900,6 +1025,9 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         if (found != thin->shapes.end()) blended = blend_by_weight(shape, *found, appearance.weight);
         if (!blended) issue(scene, "warning", "WeightTopologyMismatch", "Weight meshes do not match; heavy mesh retained", path);
       }
+      if (group == "skin" && options.body_preset && !options.body_preset->sliders.empty()) {
+        apply_body_preset_morphs(shape, options.body_preset->sliders, appearance.weight);
+      }
       // _msn: the frame the map is baked against is the bind pose, before skinning moves the vertices.
       std::vector<float> msn_frames;
       const bool msn = shape.model_space_normals && !shape.textures[nif::Normal].empty();
@@ -924,7 +1052,11 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
           if (std::find(missing_bones.begin(), missing_bones.end(), b) == missing_bones.end()) missing_bones.push_back(b);
         }
       }
-      auto part = to_part(shape, std::to_string(scene.parts.size()), group, label);
+      std::string effective_label = label;
+      if (group == "skin" && options.body_preset && !options.body_preset->name.empty()) {
+        effective_label = label + " (" + options.body_preset->name + ")";
+      }
+      auto part = to_part(shape, std::to_string(scene.parts.size()), group, effective_label);
       if (!msn_frames.empty()) {
         part.msn_source = shape.textures[nif::Normal];
         part.msn_frames = std::move(msn_frames);
@@ -1087,6 +1219,11 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     }
   }
   append_mesh(appearance.face_geometry, "head", "FaceGen", "", "", 0, false, is_covered(kHairSlots, covered));
+  if (options.body_preset && !options.body_preset->name.empty()) {
+    issue(scene, "info", "BodyPresetApplied",
+          "Preset de cuerpo aplicado en visor 3D: " + options.body_preset->name + " (" + options.body_preset->family + ")",
+          options.body_preset->name);
+  }
 
   // ---- 2. textures, head first, smallest adequate stored mip -----------------------------------
   struct Request {

@@ -371,6 +371,7 @@ ScrollView {
             Layout.fillWidth: true
             visible: root.hasMap
             studio: root.studio
+            onResolutionRequested: root.resolutionRequested()
         }
 
         // ---- parts

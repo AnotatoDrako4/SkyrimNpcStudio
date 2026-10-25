@@ -91,6 +91,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/SourceImagePane.qml
     qml/charactercreator/AppearanceSourceCompareDialog.qml
     qml/charactercreator/AppearanceSourceSection.qml
+    qml/charactercreator/FaceSourceStudio.qml
     qml/charactercreator/SkinMatchCard.qml
     qml/charactercreator/PresetHeadDialog.qml
     qml/charactercreator/CharacterCreator.qml

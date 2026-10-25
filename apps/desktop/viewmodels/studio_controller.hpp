@@ -184,6 +184,7 @@ class StudioController : public QObject {
   Q_PROPERTY(QString reviewBookPath READ review_book_path NOTIFY appearanceControlChanged)
   [[nodiscard]] QString review_book_path() const { return review_book_path_; }
   Q_INVOKABLE void searchArmors(const QString& text, int slot, const QString& plugin, const QString& armor_type = {}, bool smp_only = false);
+  Q_INVOKABLE void equipArmorByFormKey(const QString& form_key);
   Q_INVOKABLE void filterMods(const QString& text, bool enabled_only);
   Q_INVOKABLE QVariantMap modDetails(const QString& mod_name) const;
   Q_INVOKABLE QString providerOf(const QString& plugin) const;

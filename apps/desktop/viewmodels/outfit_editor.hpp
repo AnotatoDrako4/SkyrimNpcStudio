@@ -31,6 +31,8 @@ class OutfitEditor : public QObject {
   Q_PROPERTY(QString npcLabel READ npc_label NOTIFY targetChanged)
   Q_PROPERTY(QString suggestedPluginName READ suggested_plugin_name NOTIFY targetChanged)
   Q_PROPERTY(QVariantList pieces READ pieces NOTIFY changed)
+  Q_PROPERTY(QVariantList inventoryItems READ inventory_items NOTIFY changed)
+  Q_PROPERTY(bool inventoryModified READ inventory_modified NOTIFY changed)
   Q_PROPERTY(QVariantList localConflicts READ local_conflicts NOTIFY changed)
   Q_PROPERTY(bool canUndo READ can_undo NOTIFY changed)
   Q_PROPERTY(bool canRedo READ can_redo NOTIFY changed)
@@ -64,6 +66,8 @@ class OutfitEditor : public QObject {
   [[nodiscard]] QString npc_label() const;
   [[nodiscard]] QString suggested_plugin_name() const;
   [[nodiscard]] QVariantList pieces() const;
+  [[nodiscard]] QVariantList inventory_items() const { return inventory_; }
+  [[nodiscard]] bool inventory_modified() const { return inventory_ != initial_inventory_; }
   [[nodiscard]] QVariantList local_conflicts() const;
   [[nodiscard]] bool can_undo() const { return history_->can_undo(); }
   [[nodiscard]] bool can_redo() const { return history_->can_redo(); }
@@ -91,6 +95,10 @@ class OutfitEditor : public QObject {
   Q_INVOKABLE void removePiece(const QString& form_key);
   Q_INVOKABLE void resetToCurrent();
   Q_INVOKABLE void clearPieces();
+  Q_INVOKABLE void addInventoryItem(const QVariantMap& item, int count = 1);
+  Q_INVOKABLE void setInventoryItemCount(const QString& form_key, int count);
+  Q_INVOKABLE void removeInventoryItem(const QString& form_key);
+  Q_INVOKABLE void resetInventory();
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
   Q_INVOKABLE void validate();
@@ -140,6 +148,8 @@ class OutfitEditor : public QObject {
   SnapshotProvider snapshot_;
   projects::NpcTarget target_;
   std::vector<outfit::Piece> current_;  // the NPC's outfit in the active load order
+  QVariantList initial_inventory_;
+  QVariantList inventory_;
   appearance::AppearanceDraft& draft_;
   EditHistory* history_;
   std::vector<outfit::Piece> last_pieces_;  // to re-validate only when the outfit itself changed

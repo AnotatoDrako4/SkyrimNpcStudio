@@ -12,6 +12,8 @@ ColumnLayout {
     readonly property var matrix: studio.sources.matrix
     readonly property var candidates: matrix.candidates || []
     readonly property bool ready: matrix.state === "ready"
+    // The Face Source Studio asked for the assisted resolution («Crear parche»): the panel opens the export wizard.
+    signal resolutionRequested()
     spacing: Theme.spacingXs
 
     Text {
@@ -110,8 +112,23 @@ ColumnLayout {
         Accessible.name: qsTr("Abrir la comparación A/B de las fuentes de apariencia")
         onClicked: compare.open()
     }
+    Button {
+        objectName: "faceStudioOpen"
+        Layout.leftMargin: 8
+        text: qsTr("Estudio de rostros…")
+        enabled: section.studio.sources.faceIndex.state === "ready" || section.ready
+        Accessible.name: qsTr("Abrir el estudio de rostros: elegir, comparar y validar rostros de tus mods")
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("Todos los NPC del perfil con rostros de varios mods o BSA, con miniaturas del estudio")
+        onClicked: faceStudio.open()
+    }
     AppearanceSourceCompareDialog {
         id: compare
         studio: section.studio
+    }
+    FaceSourceStudio {
+        id: faceStudio
+        studio: section.studio
+        onPatchRequested: section.resolutionRequested()
     }
 }

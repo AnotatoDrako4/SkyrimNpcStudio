@@ -34,6 +34,11 @@ class LooseResourceLibrary : public QObject {
   Q_PROPERTY(int looseMeshCount READ loose_mesh_count NOTIFY countsChanged)
   Q_PROPERTY(int bodyslideProjectCount READ bodyslide_project_count NOTIFY countsChanged)
   Q_PROPERTY(int replacerMeshCount READ replacer_mesh_count NOTIFY countsChanged)
+  Q_PROPERTY(int weaponMeshCount READ weapon_mesh_count NOTIFY countsChanged)
+  Q_PROPERTY(int facegenCount READ facegen_count NOTIFY countsChanged)
+  Q_PROPERTY(int textureDdsCount READ texture_dds_count NOTIFY countsChanged)
+  Q_PROPERTY(int bsaArchiveCount READ bsa_archive_count NOTIFY countsChanged)
+  Q_PROPERTY(int unsupportedFileCount READ unsupported_file_count NOTIFY countsChanged)
   Q_PROPERTY(QVariantMap selectedResource READ selected_resource NOTIFY selectedResourceChanged)
   Q_PROPERTY(QVariantList availableMods READ available_mods NOTIFY filtersChanged)
   Q_PROPERTY(QVariantList availableFamilies READ available_families NOTIFY filtersChanged)
@@ -49,16 +54,24 @@ class LooseResourceLibrary : public QObject {
   [[nodiscard]] int loose_mesh_count() const { return loose_mesh_count_; }
   [[nodiscard]] int bodyslide_project_count() const { return bodyslide_project_count_; }
   [[nodiscard]] int replacer_mesh_count() const { return replacer_mesh_count_; }
+  [[nodiscard]] int weapon_mesh_count() const { return weapon_mesh_count_; }
+  [[nodiscard]] int facegen_count() const { return facegen_count_; }
+  [[nodiscard]] int texture_dds_count() const { return texture_dds_count_; }
+  [[nodiscard]] int bsa_archive_count() const { return bsa_archive_count_; }
+  [[nodiscard]] int unsupported_file_count() const { return unsupported_file_count_; }
   [[nodiscard]] QVariantMap selected_resource() const { return selected_resource_; }
   [[nodiscard]] QVariantList available_mods() const { return available_mods_; }
   [[nodiscard]] QVariantList available_families() const { return available_families_; }
 
   void set_profile(SnapshotPtr snapshot, const std::unordered_map<std::string, std::string>& registered_meshes = {});
+  void set_registered_meshes(const std::unordered_map<std::string, std::string>& registered_meshes);
 
   Q_INVOKABLE void search(const QString& text, const QString& family, const QString& mod, const QString& kind);
   Q_INVOKABLE void selectResource(const QString& resourceId);
   Q_INVOKABLE void clearSelection();
   Q_INVOKABLE void reload();
+  Q_INVOKABLE QVariantMap inspectTexture(const QString& dataRelativePath) const;
+  Q_INVOKABLE QVariantMap inspectBsaArchive(const QString& dataRelativePath) const;
 
  signals:
   void stateChanged();
@@ -88,6 +101,11 @@ class LooseResourceLibrary : public QObject {
   int loose_mesh_count_ = 0;
   int bodyslide_project_count_ = 0;
   int replacer_mesh_count_ = 0;
+  int weapon_mesh_count_ = 0;
+  int facegen_count_ = 0;
+  int texture_dds_count_ = 0;
+  int bsa_archive_count_ = 0;
+  int unsupported_file_count_ = 0;
 
   QString filter_text_;
   QString filter_family_;

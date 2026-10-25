@@ -194,3 +194,37 @@ TEST_CASE("Loose Outfit Indexer: BodySlide project with pre-built mesh in VFS is
   CHECK(it->capabilities.previewable);
   CHECK(it->data_relative_path.find("boots_1.nif") != std::string::npos);
 }
+
+TEST_CASE("Universal Resource Explorer: weight-variant ARMO replacers, DDS textures, weapons, FaceGen, and unsupported files", "[outfit][loose][universal]") {
+  LooseTestFixture f;
+  f.dir.write("mods/Crimson Outfit/meshes/weapons/crimson/sword.nif", make_test_nif("CrimsonSword"));
+  f.dir.write("mods/Crimson Outfit/meshes/actors/character/facegendata/facegeom/Skyrim.esm/00013478.nif", make_test_nif("FaceHead"));
+  f.dir.write("mods/Crimson Outfit/textures/actors/character/facegendata/facetint/Skyrim.esm/00013478.dds", std::string(256, 'D'));
+  f.dir.write("mods/Crimson Outfit/scripts/crimson_quest.pex", "PEX_BINARY_DATA");
+  const auto vfs = VirtualFileSystem::build(f.config, f.profile, f.game);
+
+  LooseOutfitIndexOptions options;
+  // Register _0.nif only; indexer should still match primary _1.nif as a confirmed replacer-mesh!
+  options.registered_mesh_to_armo["meshes\\armor\\iron\\cuirass_0.nif"] = "012E49:Skyrim.esm";
+
+  const auto result = LooseOutfitIndexer::index(vfs, nullptr, options);
+
+  CHECK(result.replacer_mesh_count >= 1);
+  CHECK(result.weapon_object_mesh_count >= 1);
+  CHECK(result.facegen_count >= 2);
+  CHECK(result.texture_dds_count >= 1);
+  CHECK(result.unsupported_file_count >= 1);
+
+  auto it_weap = std::find_if(result.resources.begin(), result.resources.end(), [](const LooseResource& r) {
+    return r.kind == "weapon-mesh";
+  });
+  REQUIRE(it_weap != result.resources.end());
+  CHECK(it_weap->capabilities.previewable);
+
+  auto it_unsup = std::find_if(result.resources.begin(), result.resources.end(), [](const LooseResource& r) {
+    return r.kind == "unsupported-file";
+  });
+  REQUIRE(it_unsup != result.resources.end());
+  CHECK_FALSE(it_unsup->capabilities.previewable);
+  CHECK(it_unsup->capabilities.convertible == "UNSUPPORTED_PREVIEW");
+}

@@ -103,6 +103,49 @@ ScrollView {
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }
+
+                Rectangle {
+                    visible: (root.studio.body.assignedPreset().assigned ?? false)
+                    Layout.fillWidth: true
+                    height: 1
+                    color: Theme.border
+                }
+
+                RowLayout {
+                    visible: (root.studio.body.assignedPreset().assigned ?? false)
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Text {
+                        text: qsTr("Preset BodySlide:")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.micro
+                    }
+                    Text {
+                        text: root.studio.body.assignedPreset().name ?? ""
+                        color: Theme.text
+                        font.bold: true
+                        font.pixelSize: Theme.small
+                        elide: Text.ElideRight
+                    }
+                    StatusBadge {
+                        text: qsTr("Visualizado en 3D ✓")
+                        tone: Theme.ok
+                    }
+                    StatusBadge {
+                        text: qsTr("%1 sliders").arg(root.studio.body.assignedPreset().sliders ?? 0)
+                        tone: Theme.textDim
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: qsTr("Desasignar")
+                        flat: true
+                        font.pixelSize: Theme.micro
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Restaurar la morfología base original del NPC")
+                        onClicked: root.studio.body.unassign()
+                    }
+                }
             }
         }
 

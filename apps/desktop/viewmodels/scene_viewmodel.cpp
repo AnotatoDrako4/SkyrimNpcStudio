@@ -8,6 +8,7 @@
 #include <cmath>
 #include <QSettings>
 #include "appearance_editor.hpp"
+#include "body_director.hpp"
 #include "diagnostics/crash_diagnostics.hpp"
 #include "resource_context.hpp"
 #include "sns/appearance/skin_match.hpp"
@@ -203,7 +204,7 @@ QColor rgb_color(const face::Rgb8& c) { return QColor(c.r, c.g, c.b); }
 bool same_scene_inputs(const FacePreview& a, const FacePreview& b) {
   return a.npc_form_key == b.npc_form_key && a.geometry_revision == b.geometry_revision &&
          (a.overlay == nullptr) == (b.overlay == nullptr) && a.weight == b.weight && a.height == b.height &&
-         a.skin_tone == b.skin_tone;
+         a.skin_tone == b.skin_tone && a.assigned_body_preset == b.assigned_body_preset;
 }
 
 QString content_key(const rendering::RenderPart& part) {
@@ -231,6 +232,7 @@ struct SceneViewModel::Prepared {
   qint64 elapsed = 0;
   FacePreview preview;
   QString npc;
+  QString assigned_body_name;
   QColor record_hair;
 };
 
@@ -328,10 +330,29 @@ QString SceneViewModel::effective_npc() const {
   return npc;
 }
 
+void SceneViewModel::set_body_director(BodyDirector* body) {
+  if (body_ == body) return;
+  body_ = body;
+  if (body_) {
+    connect(body_, &BodyDirector::bodyAssigned, this, [this](const QString& form_key, const QString&) {
+      if (same_form_key(form_key, effective_npc())) {
+        schedule(30);
+      }
+    });
+    connect(body_, &BodyDirector::draftChanged, this, [this] {
+      schedule(30);
+    });
+  }
+}
+
 FacePreview SceneViewModel::current_preview() const {
   if (original_ || !appearance_) return {};
   auto p = appearance_->preview();
   if (p.npc_form_key.empty() || !same_form_key(qs(p.npc_form_key), effective_npc())) return {};
+  if (body_) {
+    const auto assigned = body_->assigned_preset_for(effective_npc());
+    if (assigned) p.assigned_body_preset = assigned->uid.toStdString();
+  }
   return p;
 }
 
@@ -386,10 +407,11 @@ void SceneViewModel::reload() {
   stale_ = false;
   const auto snapshot = snapshot_();
   const QString effective = effective_npc();
-  if (!snapshot || effective.isEmpty() || (armor_preview_ && selected_armor_.isEmpty())) {
+  const bool has_armor_selection = !selected_armor_.isEmpty() || !selected_mesh_.isEmpty();
+  if (!snapshot || effective.isEmpty() || (armor_preview_ && !has_armor_selection)) {
     if (armor_preview_) {
-      status_ = selected_armor_.isEmpty() ? tr("Selecciona una prenda del catálogo para inspeccionarla")
-                                          : tr("Selecciona un NPC como referencia de cuerpo, raza y esqueleto");
+      status_ = !has_armor_selection ? tr("Selecciona una prenda o malla NIF del catálogo para inspeccionarla")
+                                     : tr("Selecciona un NPC como referencia de cuerpo, raza y esqueleto");
       emit loadingChanged();
     }
     return;
@@ -398,8 +420,8 @@ void SceneViewModel::reload() {
   cancel_ = std::make_shared<std::atomic<bool>>(false);
   loading_ = true; status_ = tr("Cargando recursos 3D..."); emit loadingChanged();
   Json params{{"npcFormKey", ss(effective)}};
-  const bool is_mesh = selected_armor_.endsWith(QStringLiteral(".nif"), Qt::CaseInsensitive);
-  const QString selected_mesh = (armor_preview_ && is_mesh) ? selected_armor_ : QString();
+  const QString selected_mesh = armor_preview_ ? selected_mesh_ : QString();
+  const bool is_mesh = !selected_mesh.isEmpty();
 
   if (armor_preview_ && is_mesh) {
     params["armorFormKeys"] = Json::array();
@@ -431,13 +453,18 @@ void SceneViewModel::reload() {
   const QString display_mode = armor_preview_ ? preview_mode_ : QString();
   const QString current_pose = pose_;
   const auto task = diag::next_task_id();
-  diag::record("scene", QStringLiteral("reload #%1 npc=%2 %3 face=%4 geometryRevision=%5")
+  std::optional<BodyDirector::AssignedPresetInfo> assigned_preset;
+  if (body_ && !original_) {
+    assigned_preset = body_->assigned_preset_for(effective);
+  }
+  diag::record("scene", QStringLiteral("reload #%1 npc=%2 %3 face=%4 geometryRevision=%5 body=%6")
                             .arg(task).arg(effective, armor_preview_ ? "armor-preview" : "main",
                                            preview.npc_form_key.empty() ? "record" : "draft")
-                            .arg(preview.geometry_revision).toStdString());
-  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, selected_mesh, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_, portrait_overlay = portrait_overlay_](const Json& data) {
+                            .arg(preview.geometry_revision)
+                            .arg(assigned_preset ? assigned_preset->name : QStringLiteral("none")).toStdString());
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_, portrait_overlay = portrait_overlay_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, selected_mesh, own_cache, portrait, portrait_overlay] {
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, own_cache, portrait, portrait_overlay] {
       auto prepared = std::make_shared<Prepared>();
       prepared->task = task;
       prepared->preview = preview;
@@ -448,9 +475,15 @@ void SceneViewModel::reload() {
       try {
         op.stage("appearance");
         auto appearance = rendering::appearance_from_json(data);
+        const auto cancelled = [cancel] { return cancel->load(); };
+        const auto context = ResourceContext::for_snapshot(snapshot);
         if (!selected_mesh.isEmpty()) {
+          if (appearance.skeleton.empty() &&
+              context->resolver->locate("meshes\\actors\\character\\character assets female\\skeleton_female.nif").has_value()) {
+            appearance.skeleton = "meshes\\actors\\character\\character assets female\\skeleton_female.nif";
+          }
           rendering::AppearancePiece piece;
-          piece.armor_form_key = selected_mesh.toStdString();
+          piece.armor_form_key = "";
           piece.name = selected_mesh.toStdString();
           piece.source = "outfit";
           piece.slot_mask = 0;
@@ -476,8 +509,6 @@ void SceneViewModel::reload() {
           else appearance.hair_color.reset();
           appearance.skin_tone = rendering::Rgb{preview.skin_tone.r / 255.0f, preview.skin_tone.g / 255.0f, preview.skin_tone.b / 255.0f};
         }
-        const auto cancelled = [cancel] { return cancel->load(); };
-        const auto context = ResourceContext::for_snapshot(snapshot);
         rendering::SceneOptions options;
         options.apply_skinning = true;
         options.pose_name = current_pose.toStdString();
@@ -489,6 +520,16 @@ void SceneViewModel::reload() {
           options.normal_max_dimension = 512;
         }
         options.overlay = preview.overlay ? preview.overlay : portrait_overlay;
+        if (assigned_preset) {
+          rendering::BodyPresetOption bpo;
+          bpo.name = assigned_preset->name.toStdString();
+          bpo.family = assigned_preset->family.toStdString();
+          for (const auto& s : assigned_preset->sliders) {
+            bpo.sliders.push_back({s.name, s.small, s.big});
+          }
+          options.body_preset = std::move(bpo);
+          prepared->assigned_body_name = assigned_preset->name;
+        }
         op.stage("build_character_scene");
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
         if (display_mode == "piece" || display_mode == "mannequin") {
@@ -523,7 +564,7 @@ void SceneViewModel::reload() {
       }
       if (cancel->load()) return;
       prepared->elapsed = timer.elapsed();
-      QMetaObject::invokeMethod(self, [self, prepared, serial] {
+      QMetaObject::invokeMethod(self, [self, prepared, serial, selected_mesh] {
         if (!self || serial != self->serial_) return;
         self->loading_ = false;
         if (prepared->error.isEmpty()) {
@@ -531,9 +572,21 @@ void SceneViewModel::reload() {
           self->stats_["elapsedMs"] = prepared->elapsed;
           self->stats_["generatedFaceGen"] = prepared->preview.overlay != nullptr;
           const auto& s = prepared->scene.stats;
-          self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5").arg(s.meshes_loaded).arg(s.shapes)
-                              .arg(s.textures_loaded).arg(prepared->elapsed)
-                              .arg(prepared->preview.overlay ? tr(" · cabeza regenerada del borrador") : QString());
+          if (!selected_mesh.isEmpty() && s.meshes_loaded == 0) {
+            QString diag_msg = tr("No se pudo cargar la malla NIF: %1").arg(selected_mesh);
+            for (const auto& iss : prepared->scene.issues) {
+              if (iss.code == "MeshUnreadable" || iss.code == "MeshNotFound") {
+                diag_msg = qs(iss.message);
+                break;
+              }
+            }
+            self->status_ = diag_msg;
+          } else {
+            self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5%6").arg(s.meshes_loaded).arg(s.shapes)
+                                .arg(s.textures_loaded).arg(prepared->elapsed)
+                                .arg(prepared->preview.overlay ? tr(" · cabeza regenerada del borrador") : QString())
+                                .arg(!prepared->assigned_body_name.isEmpty() ? tr(" · cuerpo: %1").arg(prepared->assigned_body_name) : QString());
+          }
         } else {
           self->clear();
           self->issues_ = {QVariantMap{{"severity", "error"}, {"code", "SceneFailed"}, {"message", prepared->error}}};
@@ -544,7 +597,11 @@ void SceneViewModel::reload() {
       }, Qt::QueuedConnection);
     });
   };
-  const auto key = qs(params.dump());
+  if (armor_preview_ && is_mesh && preview_mode_ == "piece") {
+    build(Json::object({{"npcFormKey", ss(effective)}, {"sex", "female"}, {"weight", 50.0f}, {"height", 1.0f}, {"raceHeight", 1.0f}}));
+    return;
+  }
+  const auto key = qs(params.dump()) + (assigned_preset ? QStringLiteral("|body:") + assigned_preset->uid : QString());
   if (key == last_request_key_ && !last_appearance_.is_null()) {
     build(last_appearance_);
     return;
@@ -555,8 +612,12 @@ void SceneViewModel::reload() {
       last_request_key_ = key;
       last_appearance_ = data;
       build(data);
-    }, [this, serial](int, const QString& error, const Json&) {
+    }, [this, serial, is_mesh, build, effective](int, const QString& error, const Json&) {
       if (serial != serial_) return;
+      if (is_mesh) {
+        build(Json::object({{"npcFormKey", ss(effective)}, {"sex", "female"}, {"weight", 50.0f}, {"height", 1.0f}, {"raceHeight", 1.0f}}));
+        return;
+      }
       clear(); status_ = error;
       issues_ = {QVariantMap{{"severity", "error"}, {"code", "AppearanceUnavailable"}, {"message", error}}};
       emit changed(); emit loadingChanged(); emit ready();
@@ -707,6 +768,46 @@ void SceneViewModel::setVisible(const QString& id, bool visible) {
   visibility_[id] = visible;
   emit visibilityChanged();
 }
+void SceneViewModel::setPieceVisible(const QString& keyOrPath, bool visible) {
+  if (keyOrPath.isEmpty()) return;
+  QString norm = keyOrPath;
+  norm.replace('/', '\\');
+  bool any_changed = false;
+  for (const auto& p : parts_) {
+    const auto row = p.toMap();
+    const QString id = row.value("id").toString();
+    const QString fk = row.value("armorFormKey").toString();
+    QString path = row.value("path").toString();
+    path.replace('/', '\\');
+    if (id.compare(keyOrPath, Qt::CaseInsensitive) == 0 ||
+        (!fk.isEmpty() && fk.compare(keyOrPath, Qt::CaseInsensitive) == 0) ||
+        (!path.isEmpty() && path.compare(norm, Qt::CaseInsensitive) == 0)) {
+      if (visibility_.value(id).toBool() != visible) {
+        visibility_[id] = visible;
+        any_changed = true;
+      }
+    }
+  }
+  if (any_changed) emit visibilityChanged();
+}
+bool SceneViewModel::isPieceVisible(const QString& keyOrPath) const {
+  if (keyOrPath.isEmpty()) return false;
+  QString norm = keyOrPath;
+  norm.replace('/', '\\');
+  for (const auto& p : parts_) {
+    const auto row = p.toMap();
+    const QString id = row.value("id").toString();
+    const QString fk = row.value("armorFormKey").toString();
+    QString path = row.value("path").toString();
+    path.replace('/', '\\');
+    if (id.compare(keyOrPath, Qt::CaseInsensitive) == 0 ||
+        (!fk.isEmpty() && fk.compare(keyOrPath, Qt::CaseInsensitive) == 0) ||
+        (!path.isEmpty() && path.compare(norm, Qt::CaseInsensitive) == 0)) {
+      if (visibility_.value(id, row.value("shownByDefault", true)).toBool()) return true;
+    }
+  }
+  return false;
+}
 void SceneViewModel::restoreVisibility() {
   for (const auto& p : parts_) { const auto row = p.toMap(); visibility_[row.value("id").toString()] = row.value("shownByDefault", true); }
   emit visibilityChanged();
@@ -717,14 +818,59 @@ void SceneViewModel::setPreviewArmor(const QVariant& formKeys) {
   reload();
 }
 void SceneViewModel::selectMesh(const QString& dataRelativePath) {
-  selectArmor(dataRelativePath);
+  if (!armor_preview_) return;
+  QString norm = dataRelativePath.trimmed();
+  norm.replace('/', '\\');
+  while (norm.startsWith('\\')) norm.remove(0, 1);
+  if (norm.startsWith(QStringLiteral("data\\"), Qt::CaseInsensitive)) norm.remove(0, 5);
+  while (norm.startsWith('\\')) norm.remove(0, 1);
+  if (norm.isEmpty()) {
+    selected_mesh_.clear();
+    emit previewModeChanged();
+    return;
+  }
+  if (!norm.endsWith(QStringLiteral(".nif"), Qt::CaseInsensitive)) {
+    cancel();
+    selected_armor_.clear();
+    selected_mesh_.clear();
+    clear();
+    loading_ = false;
+    status_ = tr("El archivo '%1' no es una malla NIF compatible con el visor 3D.").arg(norm);
+    issues_ = {QVariantMap{{"severity", "warning"}, {"code", "UnsupportedMeshFormat"}, {"message", status_}, {"subject", norm}}};
+    emit previewModeChanged();
+    emit changed();
+    emit loadingChanged();
+    emit ready();
+    return;
+  }
+  selected_armor_.clear();
+  selected_mesh_ = norm;
+  emit previewModeChanged();
+  reload();
 }
 void SceneViewModel::selectArmor(const QString& formKey) {
   if (!armor_preview_ || formKey.isEmpty()) return;
-  QString key = formKey;
-  if (key.endsWith(".nif", Qt::CaseInsensitive)) {
-    key.replace('/', '\\');
+  const QString key = formKey.trimmed();
+  const bool looks_like_path = key.contains('/') || key.contains('\\') ||
+                               key.endsWith(QStringLiteral(".nif"), Qt::CaseInsensitive) ||
+                               key.endsWith(QStringLiteral(".dds"), Qt::CaseInsensitive) ||
+                               key.endsWith(QStringLiteral(".osp"), Qt::CaseInsensitive) ||
+                               key.endsWith(QStringLiteral(".bsa"), Qt::CaseInsensitive);
+  if (looks_like_path) {
+    cancel();
+    selected_armor_.clear();
+    selected_mesh_.clear();
+    clear();
+    loading_ = false;
+    status_ = tr("Ruta de archivo inválida para selectArmor ('%1'). Usa selectMesh(dataRelativePath) para mallas NIF sueltas.").arg(key);
+    issues_ = {QVariantMap{{"severity", "error"}, {"code", "InvalidArmorFormKey"}, {"message", status_}, {"subject", key}}};
+    emit previewModeChanged();
+    emit changed();
+    emit loadingChanged();
+    emit ready();
+    return;
   }
+  selected_mesh_.clear();
   selected_armor_ = key;
   emit previewModeChanged();
   reload();

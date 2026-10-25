@@ -24,6 +24,7 @@ namespace sns::app {
 
 class OutfitEditor;
 class AppearanceEditor;
+class BodyDirector;
 
 class SceneViewModel : public QObject {
   Q_OBJECT
@@ -48,6 +49,7 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(bool original READ original WRITE setOriginal NOTIFY originalChanged)
   Q_PROPERTY(QString previewMode READ preview_mode NOTIFY previewModeChanged)
   Q_PROPERTY(QString selectedArmor READ selected_armor NOTIFY previewModeChanged)
+  Q_PROPERTY(QString selectedMesh READ selected_mesh NOTIFY previewModeChanged)
   Q_PROPERTY(QString pose READ pose WRITE setPose NOTIFY poseChanged)
   // Color of the HairTint parts (hair, brows, beards). A hair color edit changes only this: the
   // materials recolor at once, without rebuilding the scene or touching GPU buffers.
@@ -74,6 +76,7 @@ class SceneViewModel : public QObject {
   bool original() const { return original_; }
   QString preview_mode() const { return preview_mode_; }
   QString selected_armor() const { return selected_armor_; }
+  QString selected_mesh() const { return selected_mesh_; }
   QString pose() const { return pose_; }
   QColor hair_tint() const { return hair_tint_; }
   bool active() const { return active_; }
@@ -84,6 +87,8 @@ class SceneViewModel : public QObject {
   Q_INVOKABLE void cancel();
   Q_INVOKABLE void select(const QString& id);
   Q_INVOKABLE void setVisible(const QString& id, bool visible);
+  Q_INVOKABLE void setPieceVisible(const QString& keyOrPath, bool visible);
+  Q_INVOKABLE bool isPieceVisible(const QString& keyOrPath) const;
   Q_INVOKABLE void clear();
   Q_INVOKABLE QVariantMap selectedBounds() const;
   // Inspector data of the selected part (empty when nothing is selected).
@@ -102,6 +107,7 @@ class SceneViewModel : public QObject {
   // outfit editor again), and builds with a resource cache of its own, so rendering many NPCs neither
   // grows nor evicts the main viewer's cache.
   void set_npc_override(const QString& form_key);
+  void set_body_director(BodyDirector* body);
   void set_scene_cache(std::shared_ptr<rendering::SceneCache> cache) { own_cache_ = std::move(cache); }
   // Portraits: only the head is built, with textures no larger than a portrait needs.
   void set_portrait_mode(bool on) { portrait_mode_ = on; }
@@ -139,6 +145,7 @@ class SceneViewModel : public QObject {
   WorkerClient* worker_;
   OutfitEditor* outfit_;
   AppearanceEditor* appearance_ = nullptr;
+  BodyDirector* body_ = nullptr;
   std::function<SnapshotPtr()> snapshot_;
   QTimer debounce_;
   QThreadPool pool_;
@@ -153,6 +160,7 @@ class SceneViewModel : public QObject {
   bool stale_ = false;
   QString preview_mode_ = "piece";
   QString selected_armor_;
+  QString selected_mesh_;
   QString pose_ = "reference";
   QString status_;
   QString selected_;

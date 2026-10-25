@@ -137,6 +137,8 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   sources_ = new AppearanceSources(portraits_, this);
   preset_heads_ = new PresetHeadChecker(worker_, this);
   body_ = new BodyDirector(worker_, this);
+  scene_->set_body_director(body_);
+  armor_preview_->set_body_director(body_);
   loose_resources_ = new LooseResourceLibrary(worker_, this);
   forge_ =new CharacterForgeViewModel([this] {
     creation::ForgeEnvironment env;
@@ -450,6 +452,7 @@ void StudioController::start_index() {
   sources_->set_profile(snapshot_, profile_key);
   preset_heads_->set_profile(snapshot_, profile_key);
   body_->set_profile(snapshot_);
+  registered_armor_meshes_.clear();
   loose_resources_->set_profile(snapshot_, registered_armor_meshes_);
   const auto cache =QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/cache";
   QDir().mkpath(cache);
@@ -1553,6 +1556,7 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
       const auto ctx = ResourceContext::for_snapshot(snapshot_);
       if (ctx) resolver = ctx->resolver;
     }
+    const std::size_t before_reg = registered_armor_meshes_.size();
     QList<QVariantMap> rows;
     for (const auto& item : r.value("items", Json::array())) {
       auto row = to_map(item);
@@ -1565,14 +1569,26 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
       const auto female_model = row.value("femaleModel").toString();
       const auto fk = row.value("formKey").toString();
       if (!fk.isEmpty()) {
-        auto norm = [](const QString& p) {
+        auto register_model = [&](const QString& p) {
+          if (p.isEmpty()) return;
           auto s = p.toLower();
           s.replace('/', '\\');
+          while (s.startsWith('\\')) s.remove(0, 1);
           if (!s.startsWith("meshes\\")) s = "meshes\\" + s;
-          return s.toStdString();
+          const auto std_fk = fk.toStdString();
+          registered_armor_meshes_[s.toStdString()] = std_fk;
+          if (s.endsWith("_0.nif") || s.endsWith("_1.nif")) {
+            QString alt = s;
+            alt[alt.size() - 5] = (s[s.size() - 5] == QLatin1Char('0')) ? QLatin1Char('1') : QLatin1Char('0');
+            registered_armor_meshes_[alt.toStdString()] = std_fk;
+          } else if (s.endsWith(".nif")) {
+            QString base = s.left(s.size() - 4);
+            registered_armor_meshes_[(base + "_0.nif").toStdString()] = std_fk;
+            registered_armor_meshes_[(base + "_1.nif").toStdString()] = std_fk;
+          }
         };
-        if (!male_model.isEmpty()) registered_armor_meshes_[norm(male_model)] = fk.toStdString();
-        if (!female_model.isEmpty()) registered_armor_meshes_[norm(female_model)] = fk.toStdString();
+        register_model(male_model);
+        register_model(female_model);
       }
       const auto effective_model = !female_model.isEmpty() ? female_model : male_model;
       bool nif_found = false;
@@ -1604,12 +1620,38 @@ void StudioController::searchArmors(const QString& text, int slot, const QString
 
       rows.push_back(row);
     }
+    if (registered_armor_meshes_.size() != before_reg) {
+      loose_resources_->set_registered_meshes(registered_armor_meshes_);
+    }
     armor_results_->reset(rows);
     armor_total_ = r.value("total", 0);
     emit armorResultsChanged();
   }, [this](int code, const QString& message, const Json&) {
     if (code != ipc::protocol::error::kRequestCancelled) log("error", tr("Catálogo de ropa: %1").arg(message));
   });
+}
+
+void StudioController::equipArmorByFormKey(const QString& form_key) {
+  if (phase_ != Phase::Ready || form_key.trimmed().isEmpty()) return;
+  const QString key = form_key.trimmed();
+  for (int i = 0; i < armor_results_->rowCount(); ++i) {
+    const auto row = armor_results_->get(i);
+    if (row.value("formKey").toString().compare(key, Qt::CaseInsensitive) == 0) {
+      outfit_->addPiece(row, true);
+      return;
+    }
+  }
+  worker_->call(method::kSearchArmors, Json{{"text", ss(key)}, {"limit", 50}}, 15s, this, [this, key](const Json& r) {
+    for (const auto& item : r.value("items", Json::array())) {
+      auto row = to_map(item);
+      if (row.value("formKey").toString().compare(key, Qt::CaseInsensitive) == 0) {
+        row["winningMod"] = providerOf(row.value("winningPlugin").toString());
+        outfit_->addPiece(row, true);
+        return;
+      }
+    }
+    log("warning", tr("No se encontró el registro ARMO %1 en el catálogo.").arg(key));
+  }, nullptr);
 }
 
 void StudioController::copyToClipboard(const QString& text) {

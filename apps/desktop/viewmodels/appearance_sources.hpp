@@ -11,6 +11,7 @@
 #include "mo2_snapshot.hpp"
 #include "portrait_renderer.hpp"
 #include "sns/appearance/control_map.hpp"
+#include "sns/appearance/face_source_index.hpp"
 #include "sns/appearance/source_draft.hpp"
 #include "sns/appearance/source_matrix.hpp"
 
@@ -40,6 +41,12 @@ class AppearanceSources : public QObject {
   Q_PROPERTY(int imageRevision READ image_revision NOTIFY imagesChanged)
   // The A/B dialog is open. Pictures are drawn only while it is (selecting an NPC alone never renders a variant).
   Q_PROPERTY(bool compareOpen READ compare_open WRITE set_compare_open NOTIFY compareOpenChanged)
+  // The Face Source Studio gallery is open: every drawable source of the NPC on view is drawn (cache first).
+  Q_PROPERTY(bool galleryOpen READ gallery_open WRITE set_gallery_open NOTIFY galleryOpenChanged)
+  // Face Source Index of the whole profile (sns::appearance::build_face_index over the VFS and the BSA archives):
+  // {state: "none" | "scanning" | "ready" | "error", npcs, withAlternatives, looseFiles, archivedFiles, archives,
+  //  scanMs, sources: [...], issues: [...], error}
+  Q_PROPERTY(QVariantMap faceIndex READ face_index NOTIFY faceIndexChanged)
 
  public:
   explicit AppearanceSources(PortraitRenderer* portraits, QObject* parent = nullptr);
@@ -52,6 +59,9 @@ class AppearanceSources : public QObject {
   [[nodiscard]] int image_revision() const { return image_revision_; }
   [[nodiscard]] bool compare_open() const { return compare_open_; }
   void set_compare_open(bool open);
+  [[nodiscard]] bool gallery_open() const { return gallery_open_; }
+  void set_gallery_open(bool open);
+  [[nodiscard]] QVariantMap face_index() const { return face_index_map_; }
 
   // A new MO2 profile (or none): everything known is dropped and the draft book of that profile is read.
   void set_profile(SnapshotPtr snapshot, const QString& profile_key);
@@ -68,6 +78,15 @@ class AppearanceSources : public QObject {
   // Saves the current A/B (and the preferred source, or "") as the NPC's draft. Empty string, or why it was refused.
   Q_INVOKABLE QString saveDraft(const QString& chosen, const QString& notes);
   Q_INVOKABLE void clearDraft();
+  // Scans the profile's FaceGen (loose and BSA) in the background; started by set_profile, again on demand.
+  Q_INVOKABLE void scanFaceIndex();
+  // {total, rows: [{formKey, plugin, formId, name, geometryWinner, geometryArchived, tintWinner, alternatives, flags,
+  //  sources, geometryPath, tintPath, looseMods, archives}]}. `names`: FormKey -> display name (studio.npcNames).
+  Q_INVOKABLE QVariantMap queryFaceIndex(const QString& text, const QString& source, bool onlyAlternatives, const QString& flag,
+                                         int limit, const QVariantMap& names) const;
+  // What giving the NPC on view the face of candidate `id` takes (sns::appearance::plan_face_transfer):
+  // {candidate, verdict, chosen, canCreatePatch, requirement, reasons: [...], actions: [...]}.
+  Q_INVOKABLE QVariantMap transferPlan(const QString& id) const;
   // Counters of this session: gathers, variant renders, cache hits, GUI-thread time of this class.
   Q_INVOKABLE QVariantMap metrics() const;
   Q_INVOKABLE void resetMetrics();
@@ -80,9 +99,15 @@ class AppearanceSources : public QObject {
   void selectionChanged();
   void imagesChanged();
   void compareOpenChanged();
+  void galleryOpenChanged();
+  void faceIndexChanged();
 
  private:
   void request_compare_images();
+  void request_gallery_images();
+  struct FaceArchives;
+  struct FaceScan;
+  void on_face_scanned(int serial, const std::shared_ptr<FaceScan>& scan);
   struct Gathered;
   struct ImageState {
     QString state = QStringLiteral("none");
@@ -119,6 +144,13 @@ class AppearanceSources : public QObject {
   QStringList skipped_;
   QString a_, b_;
   bool compare_open_ = false;
+  bool gallery_open_ = false;
+  // Face Source Index of the profile and the archived FaceGen copies it found (shared with gather threads).
+  int face_serial_ = 0;
+  std::shared_ptr<std::atomic<bool>> face_cancel_;
+  appearance::FaceIndex face_index_;
+  std::shared_ptr<const FaceArchives> face_archives_;
+  QVariantMap face_index_map_;
   QHash<QString, ImageState> images_;  // by candidate id (the effective one is read from the gallery)
   int image_revision_ = 0;
   // The user's draft, per profile, in a file of its own. A book that exists but cannot be read is never overwritten.
