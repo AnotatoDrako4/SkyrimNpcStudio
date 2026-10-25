@@ -34,24 +34,26 @@ Item {
     component DockTabButton: TabButton {
         id: dockTab
         property string glyph: ""
+        property string shortText: ""
         implicitHeight: Theme.controlHeight + Theme.spacingXs
-        leftPadding: Theme.sp(8)
-        rightPadding: Theme.sp(8)
+        leftPadding: Theme.sp(4)
+        rightPadding: Theme.sp(4)
         Accessible.name: dockTab.text
         ToolTip.visible: hovered
         ToolTip.delay: 450
         ToolTip.text: dockTab.text
         contentItem: RowLayout {
-            spacing: Theme.sp(5)
+            spacing: Theme.sp(3)
             Icon {
-                visible: dockTab.glyph.length > 0 && dockTab.width >= Theme.px(68)
+                visible: dockTab.glyph.length > 0
                 name: dockTab.glyph
                 size: Theme.small
                 color: dockTab.checked ? Theme.accent : Theme.textDim
                 Layout.alignment: Qt.AlignVCenter
             }
             Text {
-                text: dockTab.text
+                visible: dockTab.width >= Theme.px(42)
+                text: (dockTab.width < Theme.px(74) && dockTab.shortText.length > 0) ? dockTab.shortText : dockTab.text
                 color: dockTab.checked ? Theme.text : Theme.textDim
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.small
@@ -326,6 +328,17 @@ Item {
                         onClicked: root.studio.appearance.resetFace()
                     }
 
+                    Button {
+                        visible: !creatorSplit.layout.rightVisible
+                        text: qsTr("⇤ Mostrar Personalización")
+                        Accessible.name: qsTr("Mostrar panel derecho de personalización")
+                        font.pixelSize: Theme.small
+                        highlighted: true
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Volver a mostrar el panel derecho de personalización (Ctrl+Alt+B)")
+                        onClicked: creatorSplit.layout.rightVisible = true
+                    }
+
                     Item { Layout.fillWidth: true }
 
                     // Selector Modo Fácil vs Modo Avanzado
@@ -353,16 +366,119 @@ Item {
                 anchors.fill: parent
                 spacing: 0
 
+                // Barra superior de ajuste y personalización de ancho del panel
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: Theme.px(28)
+                    color: Theme.header
+                    border.color: Theme.borderSubtle
+                    border.width: 1
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.spacingSm
+                        anchors.rightMargin: Theme.spacingXs
+                        spacing: Theme.spacingXs
+
+                        Icon {
+                            name: "settings"
+                            size: Theme.micro
+                            color: Theme.accent
+                        }
+
+                        Text {
+                            text: qsTr("Personalización")
+                            color: Theme.text
+                            font.bold: true
+                            font.pixelSize: Theme.micro
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                        }
+
+                        // Controles de Ancho / Auto-ajuste
+                        RowLayout {
+                            spacing: 2
+
+                            Button {
+                                text: qsTr("↔ Auto")
+                                Accessible.name: qsTr("Auto-ajustar ancho del panel derecho")
+                                implicitHeight: Theme.px(22)
+                                implicitWidth: Theme.px(54)
+                                font.pixelSize: Theme.micro
+                                highlighted: Math.abs((creatorSplit.layout.rightWidth || 0) - 480) < 15
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Auto-ajustar al ancho óptimo (480 px) para que todas las pestañas y controles quepan cómodamente sin recortes")
+                                onClicked: {
+                                    creatorSplit.layout.rightVisible = true
+                                    creatorSplit.layout.rightWidth = (creatorSplit.layout.rightWidth >= 480) ? 360 : 480
+                                }
+                            }
+
+                            Button {
+                                text: qsTr("⇱ 340")
+                                Accessible.name: qsTr("Ajustar panel a ancho compacto de 340 píxeles")
+                                implicitHeight: Theme.px(22)
+                                implicitWidth: Theme.px(44)
+                                font.pixelSize: Theme.micro
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Modo compacto (340 px) para dar máxima prioridad al visor 3D")
+                                onClicked: {
+                                    creatorSplit.layout.rightVisible = true
+                                    creatorSplit.layout.rightWidth = 340
+                                }
+                            }
+
+                            Button {
+                                text: qsTr("⬌ 460")
+                                Accessible.name: qsTr("Ajustar panel a ancho cómodo de 460 píxeles")
+                                implicitHeight: Theme.px(22)
+                                implicitWidth: Theme.px(44)
+                                font.pixelSize: Theme.micro
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Modo estándar cómodo (460 px) con títulos completos de pestañas")
+                                onClicked: {
+                                    creatorSplit.layout.rightVisible = true
+                                    creatorSplit.layout.rightWidth = 460
+                                }
+                            }
+
+                            Button {
+                                text: qsTr("⇲ 600")
+                                Accessible.name: qsTr("Ajustar panel a ancho amplio de 600 píxeles")
+                                implicitHeight: Theme.px(22)
+                                implicitWidth: Theme.px(44)
+                                font.pixelSize: Theme.micro
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Modo amplio extendido (600 px) para edición detallada de controles")
+                                onClicked: {
+                                    creatorSplit.layout.rightVisible = true
+                                    creatorSplit.layout.rightWidth = 600
+                                }
+                            }
+
+                            ToolButton {
+                                text: "⇥"
+                                Accessible.name: qsTr("Ocultar panel derecho")
+                                implicitHeight: Theme.px(22)
+                                implicitWidth: Theme.px(24)
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Ocultar panel derecho (Ctrl+Alt+B)")
+                                onClicked: creatorSplit.layout.rightVisible = false
+                            }
+                        }
+                    }
+                }
+
                 TabBar {
                     id: rightTabs
                     objectName: "creatorRightTabs"
                     Layout.fillWidth: true
-                    DockTabButton { text: qsTr("Presets"); glyph: "document" }
-                    DockTabButton { text: qsTr("Rostro"); glyph: "person" }
-                    DockTabButton { text: qsTr("Pelo/Ojos"); glyph: "eye" }
-                    DockTabButton { text: qsTr("Cuerpo"); glyph: "people" }
-                    DockTabButton { text: qsTr("Vestuario"); glyph: "tag" }
-                    DockTabButton { objectName: "creatorOriginTab"; text: qsTr("Origen"); glyph: "diagnostic" }
+                    DockTabButton { text: qsTr("Presets"); shortText: qsTr("Presets"); glyph: "document" }
+                    DockTabButton { text: qsTr("Rostro"); shortText: qsTr("Rostro"); glyph: "person" }
+                    DockTabButton { text: qsTr("Pelo/Ojos"); shortText: qsTr("Pelo"); glyph: "eye" }
+                    DockTabButton { text: qsTr("Cuerpo"); shortText: qsTr("Cuerpo"); glyph: "people" }
+                    DockTabButton { text: qsTr("Vestuario"); shortText: qsTr("Ropa"); glyph: "tag" }
+                    DockTabButton { objectName: "creatorOriginTab"; text: qsTr("Origen"); shortText: qsTr("Origen"); glyph: "diagnostic" }
                 }
 
                 StackLayout {
