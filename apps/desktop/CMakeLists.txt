@@ -126,7 +126,7 @@ target_include_directories(SkyrimNpcStudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} $
 target_compile_definitions(SkyrimNpcStudio PRIVATE SNS_VERSION="${PROJECT_VERSION}")
 # qmlcachegen's AOT-compiled QML inlines Qt headers that trigger C4702 (unreachable code) in the
 # compiler back end, where /external:W0 does not apply. Only this warning is relaxed, only here.
-target_compile_options(SkyrimNpcStudio PRIVATE /wd4702)
+target_compile_options(SkyrimNpcStudio PRIVATE /wd4702 /bigobj)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
   Qt6::GuiPrivate  # rhi/qrhi.h: the portrait renderer reads its off-screen texture back (QRhi, semi-public API)
