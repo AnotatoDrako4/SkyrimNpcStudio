@@ -4848,13 +4848,23 @@ struct Stress : std::enable_shared_from_this<Stress> {
               break;
             }
           }
-          self->after(300, [self, find_named, click_item, wait_for] {
-            click_item(find_named("faceStudioOpen"));
-            wait_for([find_named] { return find_named("faceIndexList") != nullptr; }, 10000, [self](bool shown) {
-              self->check(shown, "the studio opened with a real click");
+          // Up to three real clicks: the Origen panel may still be settling its scroll when the first one lands.
+          auto attempt = std::make_shared<std::function<void(int)>>();
+          *attempt = [self, find_named, click_item, wait_for, attempt](int n) {
+            auto* b = find_named("faceStudioOpen");
+            if (!b) { self->check(false, "the studio opened with a real click (button gone)"); self->step(); return; }
+            const auto at = b->mapToScene(QPointF(b->width() / 2, b->height() / 2));
+            self->log(QStringLiteral("click %1 on «Estudio de rostros…» at (%2, %3), window %4x%5").arg(n).arg(at.x()).arg(at.y())
+                          .arg(self->window->width()).arg(self->window->height()));
+            click_item(b);
+            wait_for([find_named] { return find_named("faceIndexList") != nullptr; }, 5000, [self, attempt, n](bool shown) {
+              if (!shown && n < 3) { self->after(700, [attempt, n] { (*attempt)(n + 1); }); return; }
+              if (!shown) self->window->grabWindow().save(QDir(self->work_dir).filePath("face-studio-open-failed.png"));
+              self->check(shown, QStringLiteral("the studio opened with a real click (attempt %1)").arg(n));
               self->step();
             });
-          });
+          };
+          self->after(600, [attempt] { (*attempt)(1); });
         });
       });
       // 3. Pick the NPC in the index by search + real click on its row.
