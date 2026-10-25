@@ -12,12 +12,33 @@ internal static class AppearanceQueries
         if (!queries.TryParseAnyFormKey(request.NpcFormKey, out var key)
             || !session.LinkCache.TryResolve<INpcGetter>(key, out var npc))
             throw new WorkerException(ErrorCodes.RecordNotFound, "NPC not found: " + request.NpcFormKey);
-        if (npc.Template.FormKeyNullable is not null && npc.Configuration.TemplateFlags != 0)
-            throw new WorkerException(ErrorCodes.ValidationFailed, "Template inheritance requires a dedicated appearance adapter for this NPC.");
-        if (!session.LinkCache.TryResolve<IRaceGetter>(npc.Race.FormKey, out var race))
+        var traitsNpc = npc;
+        if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
+            && npc.Template.FormKeyNullable is not null)
+        {
+            var visited = new HashSet<FormKey> { npc.FormKey };
+            var current = npc;
+            while (current.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
+                   && current.Template.FormKeyNullable is { } next)
+            {
+                if (!visited.Add(next)) break;
+                if (session.LinkCache.TryResolve<INpcGetter>(next, out var tmpl))
+                {
+                    current = tmpl;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            traitsNpc = current;
+        }
+
+        var effectiveRaceKey = traitsNpc.Race.FormKeyNullable ?? npc.Race.FormKeyNullable;
+        if (effectiveRaceKey is null || !session.LinkCache.TryResolve<IRaceGetter>(effectiveRaceKey.Value, out var race))
             throw new WorkerException(ErrorCodes.RecordNotFound, "NPC race is unresolved.");
 
-        var female = npc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
+        var female = traitsNpc.Configuration.Flags.HasFlag(NpcConfiguration.Flag.Female);
         var races = RaceAncestry.CollectRaces(session, race.FormKey);
         var pieces = new List<AppearancePiece>();
         void AddArmor(FormKey armorKey, string source)
@@ -40,7 +61,8 @@ internal static class AppearanceQueries
                 (uint)(armor.BodyTemplate?.FirstPersonFlags ?? 0), addons));
         }
 
-        if ((npc.WornArmor.FormKeyNullable ?? race.Skin.FormKeyNullable) is { } skin) AddArmor(skin, "skin");
+        var ownSkin = traitsNpc.WornArmor.FormKeyNullable ?? npc.WornArmor.FormKeyNullable;
+        if ((ownSkin ?? race.Skin.FormKeyNullable) is { } skin) AddArmor(skin, "skin");
         if (request.ArmorFormKeys is { } requested)
         {
             foreach (var armor in requested.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -50,7 +72,7 @@ internal static class AppearanceQueries
                 AddArmor(armorKey, "outfit");
             }
         }
-        else if (npc.DefaultOutfit.FormKeyNullable is { } outfitKey
+        else if ((npc.DefaultOutfit.FormKeyNullable ?? traitsNpc.DefaultOutfit.FormKeyNullable) is { } outfitKey
             && session.LinkCache.TryResolve<IOutfitGetter>(outfitKey, out var outfit))
         {
             foreach (var item in outfit.Items ?? [])
@@ -58,7 +80,8 @@ internal static class AppearanceQueries
         }
 
         var head = new List<AppearanceHeadPart>();
-        foreach (var link in npc.HeadParts)
+        var headPartsSource = traitsNpc.HeadParts.Count > 0 ? traitsNpc.HeadParts : npc.HeadParts;
+        foreach (var link in headPartsSource)
         {
             if (session.LinkCache.TryResolve<IHeadPartGetter>(link.FormKey, out var part))
             {
@@ -70,22 +93,24 @@ internal static class AppearanceQueries
             }
         }
 
-        var face = CatalogQueries.FaceGenFor(key);
+        var face = CatalogQueries.FaceGenFor(traitsNpc.FormKey);
         var faceGeomPath = face.GeometryPath;
         var faceTintPath = face.TintPath;
 
         AppearanceColor? hairColor = null;
-        if (npc.HairColor.FormKeyNullable is { } colorKey
+        var hairColorKey = traitsNpc.HairColor.FormKeyNullable ?? npc.HairColor.FormKeyNullable;
+        if (hairColorKey is { } colorKey
             && session.LinkCache.TryResolve<IColorRecordGetter>(colorKey, out var color))
             hairColor = new AppearanceColor(color.Color.R, color.Color.G, color.Color.B);
 
-        var skinTone = npc.TextureLighting is { } lighting
+        var skinTone = (traitsNpc.TextureLighting ?? npc.TextureLighting) is { } lighting
             ? new AppearanceColor(lighting.R, lighting.G, lighting.B) : null;
 
-        var weight = npc.Weight;
+        var weight = traitsNpc.Weight != 0 ? traitsNpc.Weight : npc.Weight;
+        var height = traitsNpc.Height != 0 ? traitsNpc.Height : npc.Height;
 
         FaceMorphsDto? morphs = null;
-        if (npc.FaceMorph is { } fm)
+        if ((traitsNpc.FaceMorph ?? npc.FaceMorph) is { } fm)
         {
             morphs = new FaceMorphsDto(
                 fm.NoseLongVsShort, fm.NoseUpVsDown,
@@ -99,13 +124,14 @@ internal static class AppearanceQueries
         }
 
         FacePartsDto? parts = null;
-        if (npc.FaceParts is { } fp)
+        if ((traitsNpc.FaceParts ?? npc.FaceParts) is { } fp)
         {
             parts = new FacePartsDto(fp.Nose, fp.Eyes, fp.Mouth);
         }
 
         var tints = new List<TintLayerDto>();
-        if (npc.TintLayers is { } tl)
+        var tintSource = traitsNpc.TintLayers ?? npc.TintLayers;
+        if (tintSource is { } tl)
         {
             foreach (var t in tl)
             {
@@ -115,7 +141,7 @@ internal static class AppearanceQueries
             }
         }
 
-        return new AppearanceResponse(key.ToString(), female ? "female" : "male", weight, npc.Height,
+        return new AppearanceResponse(key.ToString(), female ? "female" : "male", weight, height,
             female ? race.Height.Female : race.Height.Male,
             MeshPath((female ? race.SkeletalModel?.Female : race.SkeletalModel?.Male)?.File.GivenPath ?? ""),
             faceGeomPath, faceTintPath, head, pieces, hairColor, skinTone,

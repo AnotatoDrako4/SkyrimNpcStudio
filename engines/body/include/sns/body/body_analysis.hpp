@@ -130,6 +130,8 @@ struct MeshEvidence {
   std::string body_tri;           // BODYTRI value, "" = the mesh was not built with "Build Morphs"
   std::string body_tri_path;      // "meshes\..." key
   std::string body_tri_provider;  // "" = the TRI it names is not in the virtual Data
+  std::string body_tri_sibling_path;      // sibling .tri in same directory as the NIF
+  std::string body_tri_sibling_provider;  // provider of sibling .tri
   std::string error;              // unreadable NIF
 };
 

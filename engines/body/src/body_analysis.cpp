@@ -308,7 +308,20 @@ MeshEvidence BodyInspector::mesh(std::string_view arma_model) const {
         }
       }
       if (!m.body_tri_path.empty()) {
-        if (const auto tri = lookup_(m.body_tri_path, false)) m.body_tri_provider = tri->provider;
+        if (const auto tri = lookup_(m.body_tri_path, false)) {
+          m.body_tri_provider = tri->provider;
+        } else {
+          const auto last_slash = m.data_path.find_last_of("\\/");
+          const auto tri_last_slash = m.body_tri.find_last_of("\\/");
+          const std::string tri_filename = (tri_last_slash == std::string::npos) ? m.body_tri : m.body_tri.substr(tri_last_slash + 1);
+          if (last_slash != std::string::npos) {
+            const std::string sibling_path = m.data_path.substr(0, last_slash + 1) + tri_filename;
+            if (const auto sib = lookup_(sibling_path, false)) {
+              m.body_tri_sibling_path = sibling_path;
+              m.body_tri_sibling_provider = sib->provider;
+            }
+          }
+        }
       }
     } catch (const std::exception& e) {
       m.error = e.what();
@@ -384,7 +397,13 @@ NpcBodyAnalysis BodyInspector::analyze(const NpcBodyInfo& npc) const {
         if (a.body.body_tri.empty()) {
           issue("warning", "NoBodyTri", "La malla del cuerpo no se construyó con «Build Morphs» (sin BODYTRI): un preset no deformará este cuerpo en el juego.");
         } else if (a.body.body_tri_provider.empty()) {
-          issue("error", "BodyTriMissing", std::format("La malla pide el TRI «{}», que no está en el perfil.", a.body.body_tri_path));
+          if (!a.body.body_tri_sibling_path.empty()) {
+            issue("error", "BodyTriMissing",
+                  std::format("La malla pide el TRI «{}», que no está en el perfil (sin embargo, existe «{}» en «{}»: la ruta interna del NIF está desalineada).",
+                              a.body.body_tri_path, a.body.body_tri_sibling_path, a.body.body_tri_sibling_provider));
+          } else {
+            issue("error", "BodyTriMissing", std::format("La malla pide el TRI «{}», que no está en el perfil.", a.body.body_tri_path));
+          }
         }
       }
     }

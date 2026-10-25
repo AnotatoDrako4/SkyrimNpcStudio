@@ -71,14 +71,24 @@ ScrollView {
                         font.pixelSize: Theme.micro
                     }
                     Text {
-                        text: (root.studio.outfit.compatibilityReport.body?.name ?? qsTr("Vanilla"))
+                        text: {
+                            const n = root.studio.body.npc;
+                            if (n && n.state === "ready" && n.familyLabel) return n.familyLabel;
+                            return (root.studio.outfit.compatibilityReport.body?.name ?? qsTr("Vanilla"));
+                        }
                         color: Theme.accent
                         font.bold: true
                         font.pixelSize: Theme.small
                     }
                     Item { Layout.fillWidth: true }
                     Rectangle {
-                        visible: root.studio.outfit.compatibilityReport.body?.physicsEnabled ?? false
+                        visible: {
+                            const n = root.studio.body.npc;
+                            if (n && n.state === "ready" && n.body && n.body.physicsBones) {
+                                return n.body.physicsBones.length > 0;
+                            }
+                            return root.studio.outfit.compatibilityReport.body?.physicsEnabled ?? false;
+                        }
                         implicitWidth: physicsTxt.implicitWidth + 8
                         implicitHeight: 18
                         radius: 3
@@ -97,7 +107,13 @@ ScrollView {
                 }
 
                 Text {
-                    text: root.studio.outfit.compatibilityReport.body?.details ?? qsTr("Soporta morphs estándar de peso (0 a 100).")
+                    text: {
+                        const n = root.studio.body.npc;
+                        if (n && n.state === "ready" && n.body && n.body.path) {
+                            return n.body.path + (n.body.provider ? " (" + n.body.provider + ")" : "");
+                        }
+                        return root.studio.outfit.compatibilityReport.body?.details ?? qsTr("Soporta morphs estándar de peso (0 a 100).");
+                    }
                     color: Theme.textDim
                     font.pixelSize: Theme.micro
                     wrapMode: Text.WordWrap
