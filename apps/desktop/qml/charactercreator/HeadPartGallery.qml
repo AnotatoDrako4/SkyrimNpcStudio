@@ -14,6 +14,11 @@ ColumnLayout {
     property string category: "Hair"
     property string selectedKey: ""
     property string modFilter: ""
+    property bool showHeader: true
+    property bool showCategorySelector: true
+    function setFilterText(t) {
+        searchField.text = t
+    }
     readonly property var options: root.studio.appearance.headPartOptions
     readonly property var current: {
         const keys = {}
@@ -66,12 +71,14 @@ ColumnLayout {
     Timer { id: searchDelay; interval: 250; onTriggered: root.search() }
 
     Text {
+        visible: root.showHeader
         text: qsTr("Galería de cabello, ojos y piezas de cabeza")
         color: Theme.textDim
         font.pixelSize: Theme.small
         Accessible.role: Accessible.Heading
     }
     Flow {
+        visible: root.showCategorySelector
         Layout.fillWidth: true
         spacing: 4
         enabled: root.allowed

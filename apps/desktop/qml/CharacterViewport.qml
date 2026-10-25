@@ -1,3 +1,4 @@
+import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -23,6 +24,23 @@ Rectangle {
     property bool partsVisible: false
     property bool inspectorVisible: false
     property real ambient: 0.25
+    property bool turntableActive: false
+    property real lightAzimuth: -25
+    property real lightElevation: -30
+
+    function captureScreenshot() {
+        const timestamp = Qt.formatDateTime(new Date(), "yyyyMMdd-hhmmss")
+        const filename = "SkyrimNpcStudio-" + timestamp + ".png"
+        const dir = StandardPaths.writableLocation(StandardPaths.PicturesLocation) || StandardPaths.writableLocation(StandardPaths.TempLocation)
+        const fullPath = dir + "/" + filename
+        viewport.grabToImage(function(result) {
+            if (result.saveToFile(fullPath)) {
+                root.scene.status = qsTr("Captura guardada: %1").arg(filename)
+            } else {
+                root.scene.status = qsTr("Error al guardar la captura 3D")
+            }
+        })
+    }
 
     // Viewer-only diagnostics: none, unlit, baseColor, normals, tangents, alpha, wireframe.
     property string diagnostic: "none"
@@ -155,9 +173,18 @@ Rectangle {
             Node {
                 id: pivot
                 PerspectiveCamera { id: camera; z: 300; clipNear: 0.1; clipFar: 10000; fieldOfView: AppSettings.cameraFov }
+
+                NumberAnimation on eulerRotation.y {
+                    id: turntableAnim
+                    running: root.turntableActive
+                    from: 0
+                    to: 360
+                    duration: 16000
+                    loops: Animation.Infinite
+                }
             }
 
-            DirectionalLight { eulerRotation: Qt.vector3d(-30,-25,0); color: "#fff0dc"; brightness: 1.1 * AppSettings.lightIntensity; castsShadow: true; ambientColor: Qt.rgba(root.ambient,root.ambient,root.ambient,1) }
+            DirectionalLight { eulerRotation: Qt.vector3d(root.lightElevation, root.lightAzimuth, 0); color: "#fff0dc"; brightness: 1.1 * AppSettings.lightIntensity; castsShadow: true; ambientColor: Qt.rgba(root.ambient,root.ambient,root.ambient,1) }
             DirectionalLight { eulerRotation: Qt.vector3d(-10,125,0); color: "#d6e7ff"; brightness: 0.65 * AppSettings.lightIntensity }
             DirectionalLight { eulerRotation: Qt.vector3d(-60,190,0); brightness: 0.4 * AppSettings.lightIntensity }
 
@@ -303,6 +330,7 @@ Rectangle {
                 // Selector de Cámara
                 ComboBox {
                     id: cameraPreset
+                    Accessible.name: qsTr("Preajuste de cámara")
                     implicitWidth: 125
                     implicitHeight: 28
                     Layout.fillWidth: true
@@ -314,6 +342,7 @@ Rectangle {
                 // Modo Preview de Ropa (cuando previewMode = true)
                 ComboBox {
                     visible: root.previewMode
+                    Accessible.name: qsTr("Modo de previsualización de prenda")
                     implicitWidth: 140
                     implicitHeight: 28
                     Layout.fillWidth: true
@@ -325,6 +354,7 @@ Rectangle {
                 // Selector de Postura (Pose)
                 ComboBox {
                     id: poseBox
+                    Accessible.name: qsTr("Postura de referencia")
                     implicitWidth: 110
                     implicitHeight: 28
                     Layout.fillWidth: true
@@ -352,6 +382,33 @@ Rectangle {
                     onClicked: { const p = root.scene.selectedBounds(); root.frame(p.center, p.radius, 0) }
                 }
 
+                // Giro 360° Continuo (Turntable)
+                IconToolButton {
+                    glyph: "switch"
+                    label: qsTr("Giro 360°")
+                    showLabel: false
+                    checkable: true
+                    checked: root.turntableActive
+                    tip: qsTr("Giro continuo de 360° automático (Turntable)")
+                    onToggled: root.turntableActive = checked
+                }
+
+                // Modo de Diagnóstico / Sombreado rápido
+                ComboBox {
+                    id: topDiagnosticBox
+                    implicitWidth: 115
+                    implicitHeight: 28
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 70
+                    textRole: "text"
+                    model: root.diagnosticModes
+                    Accessible.name: qsTr("Modo de sombreado y diagnóstico")
+                    currentIndex: Math.max(0, root.diagnosticModes.findIndex(m => m.value === root.diagnostic))
+                    onActivated: root.setDiagnostic(root.diagnosticModes[currentIndex].value)
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Modo de sombreado: PBR normal, difusa, normales, alfa, alambre")
+                }
+
                 // Comparador Original / Modificado
                 IconToolButton {
                     visible: !root.previewMode
@@ -361,6 +418,15 @@ Rectangle {
                     checked: root.scene.original
                     tip: qsTr("Alternar entre la apariencia original de Skyrim y tus cambios actuales")
                     onToggled: root.scene.original = checked
+                }
+
+                // Captura limpia del Viewport
+                IconToolButton {
+                    glyph: "camera"
+                    label: qsTr("Captura")
+                    showLabel: false
+                    tip: qsTr("Tomar captura de pantalla del visor 3D")
+                    onClicked: root.captureScreenshot()
                 }
 
                 Rectangle { width: 1; height: Theme.px(18); color: Theme.borderSubtle }
@@ -507,6 +573,7 @@ Rectangle {
 
                     ComboBox {
                         id: diagnosticBox
+                        Accessible.name: qsTr("Modo de diagnóstico de shader")
                         Layout.fillWidth: true
                         textRole: "text"
                         model: root.diagnosticModes
@@ -515,12 +582,14 @@ Rectangle {
 
                     CheckBox {
                         text: "UV"
+                        Accessible.name: qsTr("Modo de visualización UV")
                         checked: root.uvMode
                         onToggled: { root.uvMode = checked; if (checked) root.frame(Qt.vector3d(0,0,0), 90, 0); else root.reset() }
                     }
 
                     CheckBox {
                         text: "Huesos"
+                        Accessible.name: qsTr("Visualizar esqueleto y huesos")
                         checked: root.skeletonVisible
                         onToggled: root.skeletonVisible = checked
                     }
@@ -693,6 +762,65 @@ Rectangle {
             }
         }
 
+        // ============================================================= BADGE TELEMETRÍA FLOTANTE (GLASS HUD)
+        Rectangle {
+            id: telemetryHud
+            objectName: "viewportTelemetryHud"
+            anchors.bottom: bottomStatusRow.top
+            anchors.left: parent.left
+            anchors.margins: 10
+            implicitHeight: telemetryRow.implicitHeight + 8
+            implicitWidth: telemetryRow.implicitWidth + 16
+            radius: Theme.radiusLarge
+            color: Qt.rgba(Theme.panel.r, Theme.panel.g, Theme.panel.b, 0.90)
+            border.color: Theme.borderSubtle
+            border.width: 1
+            visible: root.scene.parts.length > 0 && !root.scene.loading
+
+            readonly property int totalTriangles: {
+                let sum = 0
+                for (let i = 0; i < root.scene.parts.length; ++i) {
+                    sum += (root.scene.parts[i].triangles ?? 0)
+                }
+                return sum
+            }
+            readonly property bool hasPhysics: {
+                for (let i = 0; i < root.scene.parts.length; ++i) {
+                    if (root.scene.parts[i].physicsDetected) return true
+                }
+                return false
+            }
+
+            RowLayout {
+                id: telemetryRow
+                anchors.fill: parent
+                anchors.margins: 4
+                spacing: 6
+
+                Text {
+                    text: "▲ " + (telemetryHud.totalTriangles >= 1000 ? (telemetryHud.totalTriangles / 1000).toFixed(1) + "k" : telemetryHud.totalTriangles) + " " + qsTr("tris")
+                    color: Theme.text
+                    font.pixelSize: Theme.micro
+                    font.bold: true
+                }
+
+                Rectangle { width: 1; height: 10; color: Theme.borderSubtle }
+
+                Text {
+                    text: "☷ " + root.scene.parts.length + " " + qsTr("mallas")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.micro
+                }
+
+                Rectangle { width: 1; height: 10; color: Theme.borderSubtle }
+
+                StatusBadge {
+                    text: telemetryHud.hasPhysics ? qsTr("⚡ FSMP ACTIVO") : qsTr("⚡ SIN FÍSICAS")
+                    tone: telemetryHud.hasPhysics ? Theme.ok : Theme.textDim
+                }
+            }
+        }
+
         // ============================================================= BARRA INFERIOR DE AMBIENTE
         Rectangle {
             id: bottomStatusRow
@@ -722,7 +850,23 @@ Rectangle {
                     to: 0.6
                     value: root.ambient
                     onMoved: root.ambient = value
-                    Layout.preferredWidth: 80
+                    Layout.preferredWidth: 65
+                    implicitHeight: 20
+                }
+
+                Text {
+                    text: qsTr("Giro:")
+                    color: Theme.textDim
+                    font.pixelSize: Theme.small
+                }
+
+                Slider {
+                    Accessible.name: qsTr("Ángulo de la luz direccional")
+                    from: -180
+                    to: 180
+                    value: root.lightAzimuth
+                    onMoved: root.lightAzimuth = value
+                    Layout.preferredWidth: 65
                     implicitHeight: 20
                 }
 
