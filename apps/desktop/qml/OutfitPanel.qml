@@ -610,7 +610,7 @@ ScrollView {
                             Layout.fillWidth: true
                             spacing: 1
                             Text {
-                                text: modelData.name || modelData.editorId || modelData.formKey
+                                text: String(modelData.name || modelData.editorId || modelData.formKey || "")
                                 color: Theme.text
                                 font.bold: true
                                 font.pixelSize: Theme.small
@@ -618,10 +618,10 @@ ScrollView {
                                 Layout.fillWidth: true
                             }
                             Text {
-                                text: (modelData.recordType || "ITEM") + " · " + modelData.formKey
+                                text: String(modelData.recordType || "ITEM") + " · " + String(modelData.formKey || "")
                                 color: Theme.textDim
                                 font.pixelSize: Theme.micro
-                                font.family: Theme.monoFont
+                                font.family: Theme.mono
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
@@ -631,8 +631,8 @@ ScrollView {
                             text: "−"
                             implicitWidth: 24
                             implicitHeight: 24
-                            Accessible.name: qsTr("Reducir cantidad de %1").arg(modelData.name || modelData.formKey)
-                            onClicked: root.outfit.setInventoryItemCount(modelData.formKey, (modelData.count ?? 1) - 1)
+                            Accessible.name: qsTr("Reducir cantidad de %1").arg(String(modelData.name || modelData.formKey || ""))
+                            onClicked: root.outfit.setInventoryItemCount(String(modelData.formKey || ""), (modelData.count ?? 1) - 1)
                         }
                         Text {
                             text: "×" + (modelData.count ?? 1)
@@ -646,15 +646,15 @@ ScrollView {
                             text: "+"
                             implicitWidth: 24
                             implicitHeight: 24
-                            Accessible.name: qsTr("Aumentar cantidad de %1").arg(modelData.name || modelData.formKey)
-                            onClicked: root.outfit.setInventoryItemCount(modelData.formKey, (modelData.count ?? 1) + 1)
+                            Accessible.name: qsTr("Aumentar cantidad de %1").arg(String(modelData.name || modelData.formKey || ""))
+                            onClicked: root.outfit.setInventoryItemCount(String(modelData.formKey || ""), (modelData.count ?? 1) + 1)
                         }
                         ToolButton {
                             text: "✕"
                             implicitWidth: 24
                             implicitHeight: 24
-                            Accessible.name: qsTr("Quitar %1 del inventario").arg(modelData.name || modelData.formKey)
-                            onClicked: root.outfit.removeInventoryItem(modelData.formKey)
+                            Accessible.name: qsTr("Quitar %1 del inventario").arg(String(modelData.name || modelData.formKey || ""))
+                            onClicked: root.outfit.removeInventoryItem(String(modelData.formKey || ""))
                         }
                     }
                 }

@@ -110,7 +110,7 @@ ColumnLayout {
         text: qsTr("Comparar A/B…")
         enabled: section.ready && section.candidates.length >= 2
         Accessible.name: qsTr("Abrir la comparación A/B de las fuentes de apariencia")
-        onClicked: compare.open()
+        onClicked: { compareLoader.active = true; compareLoader.item.open() }
     }
     Button {
         objectName: "faceStudioOpen"
@@ -120,15 +120,21 @@ ColumnLayout {
         Accessible.name: qsTr("Abrir el estudio de rostros: elegir, comparar y validar rostros de tus mods")
         ToolTip.visible: hovered
         ToolTip.text: qsTr("Todos los NPC del perfil con rostros de varios mods o BSA, con miniaturas del estudio")
-        onClicked: faceStudio.open()
+        onClicked: { faceStudioLoader.active = true; faceStudioLoader.item.open() }
     }
-    AppearanceSourceCompareDialog {
-        id: compare
-        studio: section.studio
+    // Both dialogs are created on first use and kept: while they exist closed, every new NPC rebuilds their panes
+    // (measured: 450-900 ms of GUI per NPC in the Debug build).
+    Loader {
+        id: compareLoader
+        active: false
+        sourceComponent: AppearanceSourceCompareDialog { studio: section.studio }
     }
-    FaceSourceStudio {
-        id: faceStudio
-        studio: section.studio
-        onPatchRequested: section.resolutionRequested()
+    Loader {
+        id: faceStudioLoader
+        active: false
+        sourceComponent: FaceSourceStudio {
+            studio: section.studio
+            onPatchRequested: section.resolutionRequested()
+        }
     }
 }

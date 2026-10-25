@@ -553,7 +553,8 @@ Popup {
                                     const b = root.selectedId === "effective" ? root.sources.candidateB : root.selectedId
                                     root.sources.setCompare(a, b)
                                     root.compared = true
-                                    compare.open()
+                                    compareLoader.active = true
+                                    compareLoader.item.open()
                                 }
                             }
                             Button {
@@ -596,8 +597,10 @@ Popup {
         }
     }
 
-    AppearanceSourceCompareDialog {
-        id: compare
-        studio: root.studio
+    // Created on first use: a closed dialog still rebuilds its panes on every new matrix and every picture.
+    Loader {
+        id: compareLoader
+        active: false
+        sourceComponent: AppearanceSourceCompareDialog { studio: root.studio }
     }
 }

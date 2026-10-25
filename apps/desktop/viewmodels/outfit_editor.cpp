@@ -167,7 +167,23 @@ void OutfitEditor::setTarget(const QVariantMap& npc) {
              summary.value("overrideCount").toInt()};
   current_.clear();
   for (const auto& a : npc.value("defaultOutfit").toMap().value("armors").toList()) current_.push_back(piece_from(a.toMap()));
-  initial_inventory_ = npc.value("inventory").toList();
+  initial_inventory_.clear();
+  for (const auto& inv_entry : npc.value("inventory").toList()) {
+    const auto row = inv_entry.toMap();
+    const auto item = row.contains("item") ? row.value("item").toMap() : row;
+    const QString fk = item.value("formKey").toString();
+    if (fk.isEmpty()) continue;
+    const QString editor_id = item.value("editorId").toString();
+    const QString name = item.value("name").toString().isEmpty() ? (editor_id.isEmpty() ? fk : editor_id) : item.value("name").toString();
+    initial_inventory_.push_back(QVariantMap{
+        {"formKey", fk},
+        {"name", name},
+        {"editorId", editor_id},
+        {"recordType", item.value("recordType", "ITEM").toString()},
+        {"winningPlugin", item.value("winningPlugin").toString()},
+        {"count", std::max(1, row.value("count", 1).toInt())},
+    });
+  }
   inventory_ = initial_inventory_;
 
   // The studio has already reset the shared draft for this NPC (face, body, history).

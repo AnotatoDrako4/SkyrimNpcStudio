@@ -66,4 +66,33 @@
 | `sns_portrait_cache_tests.exe` | **PASS (100%)** | 14 casos · 1,218 aserciones |
 | `sns_export_destination_tests.exe` | **PASS (100%)** | 4 casos · 26 aserciones (protección de `Skyrim/Data` y `MO2/mods`) |
 | `sns_forge_asset_tests.exe` | **PASS (100%)** | 18 aserciones |
-| Verificación en vivo (`SkyrimNpcStudio.exe`) | **PASS** | Ejecución real contra `D:\Apps\ModOrganizer.ini` (`Serana` `002B6C:Dawnguard.esm`) |
+| Verificación en vivo (`SkyrimNpcStudio.exe`) | **PASS (0 advertencias QML)** | Ejecución real contra `D:\Apps\ModOrganizer.ini` (`Serana` `002B6C:Dawnguard.esm`) |
+
+---
+
+## 3. Métricas Reales de Ejecución y Rendimiento en Windows
+
+Mediciones obtenidas sobre el perfil real de Mod Organizer 2 (`D:\Apps\ModOrganizer.ini`, perfil `Default`, 415 plugins activos, 89,570 archivos en VFS, 8,683 NPCs, 8,303 registros `ARMO`):
+
+- **Indexación del Explorador Universal de Recursos (`LooseOutfitIndexer`):**
+  - **Total de recursos indexados:** `7,376` recursos en `~990 ms` (hilo de trabajo asíncrono `QThread::create`, `0 ms` de bloqueo en el hilo UI).
+  - **Desglose por tipo en el perfil real:**
+    - `looseMeshCount`: `4,920` mallas NIF sueltas sin ESP (`RES-01` verificado: `equippable = false`, ningún `ARMO` inventado).
+    - `bodyslideProjectCount`: `1,409` proyectos BodySlide (`.osp` / `.xml`).
+    - `facegenCount`: `539` recursos FaceGen (`facegeom` NIF + `facetint` DDS).
+    - `textureDdsCount`: `211` texturas DDS sueltas indexadas para vista previa 2D.
+    - `unsupportedFileCount`: `150` archivos de mod sin visor directo (`.hkx`, `.pex`, `.seq`) clasificados con `UNSUPPORTED_PREVIEW`.
+    - `bsaArchiveCount`: `133` archivos BSA detectados e inspeccionables sin extracción completa.
+    - `replacerMeshCount`: `14` replacers de armadura confirmados contra registros `ARMO` activos (`RES-02` verificado).
+- **Inspección de recursos en vivo (`loose-resources` scenario):**
+  - Validación `selectArmor("meshes\\armor\\test_loose.nif")`: rechazado inmediatamente con diagnóstico `InvalidArmorFormKey`.
+  - Validación `selectMesh(...)`: previsualización 3D aislada de malla NIF suelta sin contaminar `selectedArmor`.
+  - Decodificación 2D DDS (`inspectTexture`): `Textures\00Lily\Eyes\00_f_transparent.dds` (`2048×2048`, formato `BC7`) decodificado a PNG data URI en `< 440 ms`.
+  - Inspección BSA (`inspectBsaArchive`): `AMatterOfTime.bsa` (`38` entradas leídas desde cabecera en `3 ms`).
+  - Edición de inventario (`addInventoryItem`, `setInventoryItemCount`, `undo`, `redo`, `resetInventory`): verificado con restauración exacta del inventario original del NPC.
+- **Ciclo de proyecto y exportación real (`project-cycle` & `easy-mod-outfit`):**
+  - Guardado y reapertura de proyecto `.snps` multi-NPC (`002B6C:Dawnguard.esm` + `01363F:Skyrim.esm`): memoria estable entre `1,548 MB` (apertura 1) y `1,551 MB` (apertura 2) gracias al pool de geometrías y texturas con límite de caché (`kMaxPoolEntries = 64`).
+  - Exportación **Modo A (Parche de atuendo)** y **Modo C (Overhaul completo de apariencia + atuendo)** verificada por diff semántico (`DefaultOutfit`, `HairColor`) y coincidencia byte a byte de FaceGen exportado.
+  - **Resoluciones y escalado verificados:** `1920×1080` (100%), `1366×768` (100%) y `1920×1080` con escalado `150%` (`QT_SCALE_FACTOR=1.5`), con **0 advertencias QML** en todos los casos.
+  - **Estado final del contrato:** `INTEGRACION_WINDOWS_OK` (`out/antigravity-ui-verify/20261024-231333/loose-resources-report.json`).
+

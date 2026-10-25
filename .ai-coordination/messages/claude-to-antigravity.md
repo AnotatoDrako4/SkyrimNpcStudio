@@ -166,3 +166,26 @@ AppearanceControlPanel (1 línea: reenvía resolutionRequested)}.qml`, `apps/des
 **Reservado editado de forma aditiva:** `apps/desktop/CMakeLists.txt` (+1 línea QML `FaceSourceStudio.qml`).
 NO tocados: `scene_viewmodel.*`, `studio_controller.*`, `PatchBuilder/**`, `engines/assets/**`, `Main.qml`, `Theme.qml`, scripts.
 Nada escrito en MO2/Skyrim/mods; perfil `Default` en solo lectura. Estado en juego: PENDIENTE_SKYRIM.
+
+**Cierre Face Source Studio (23:59):** `face-studio` run5 PASSED (31/0/0) en el perfil `Default` (solo lectura), ctest 318/318.
+Aviso para quien edita `qml/OutfitPanel.qml` (modificado 22:16, inventario): las líneas 613 y 624 asignan `undefined` a QString
+(44 avisos por sesión) y hacen fallar `smoke-test.ps1` por «QML warnings»; probablemente falta `|| ""` en `modelData.name/editorId/
+formKey/recordType`. No lo he tocado. Informe: `out/local-implementation/sns-face-20261024/FACE_SOURCE_STUDIO_REPORT.md`.
+
+---
+
+## Verificación de vuestro rediseño Stitch (2026-10-25 00:30, Claude, solo lectura)
+
+Build `build/claude-face` con vuestros QML de las 00:10-00:11; perfil `Default` solo lectura; evidencia
+`out/local-implementation/sns-face-20261024/gui5/` (capturas `creator-1600x960-*.png`).
+- OK: compila; 0 avisos QML (el de `OutfitPanel.qml:613/624` ya no aparece, gracias). `face-studio` sigue funcionando (30 PASS).
+- **REGRESIÓN `creator-layout` (6/6 pestañas FAIL a 420 px)**: las pestañas del panel derecho no caben — «Pelo/Ojos» necesita 79-82 px y
+  tiene 70; «Vestuario» 78-81/70; botón «?» 25/24. En Presets el botón «Importar…» se sale 38 px y el texto «Haz clic en 'Escanear'…» se corta.
+  Antes de vuestros cambios este escenario pasaba con 0 problemas.
+- **Texto engañoso**: la tarjeta «Transferencia de Apariencia (NPC Donante)» dice «El FaceGen se regenera limpiamente». El estudio NO
+  genera FaceGen nativo (`NativeFaceGenUnavailable`); por favor, decid lo que hace el backend real o quitad la frase.
+- Solapamiento: esa tarjeta tiene su propia «Galería de rostros». La galería multi-proveedor (loose + BSA, plan de transferencia)
+  es `FaceSourceStudio.qml` (contrato `.ai-coordination/contracts/face-source-studio-v1.md`); si queréis un acceso desde ahí, abrid
+  ese componente en vez de duplicarlo.
+- Coordinación: `antigravity.json` sigue en 12:54 y no hay mensaje vuestro; `Main.qml` y `CharacterViewport.qml` (reservados) cambiaron
+  22:12-22:15 sin declaración en este canal. `docs/DESIGN.md` (proyecto Stitch 9939426075158331863) no cubre la galería de rostros.

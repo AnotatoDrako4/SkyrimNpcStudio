@@ -3,6 +3,7 @@
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -13,6 +14,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QThreadPool>
+#include <QTimer>
 #include <QUrl>
 #include <algorithm>
 #include <filesystem>
@@ -443,9 +445,23 @@ void AppearanceSources::on_gathered(int serial, const std::shared_ptr<Gathered>&
                               .arg(result->bytes).toStdString());
   const auto digest = sha256_hex(QByteArray::fromStdString(result->matrix.identity));
   apply_matrix(std::move(result->matrix), digest);
-  max_gui_ms_ = std::max(max_gui_ms_, gui.elapsed());
-  gui_samples_.push_back(gui.elapsed());
+  note_gui("gathered", gui.elapsed());
+}
+
+// One GUI-thread measurement of this class (including the QML reactions to the signals it emits synchronously).
+void AppearanceSources::note_gui(const char* where, qint64 ms) {
+  max_gui_ms_ = std::max(max_gui_ms_, ms);
+  if (std::string_view(where) == "matrix:emit") {
+    last_matrix_emit_ms_ = ms;
+    max_matrix_emit_ms_ = std::max(max_matrix_emit_ms_, ms);
+  }
+  gui_samples_.push_back(ms);
   if (gui_samples_.size() > kMaxGuiSamples) gui_samples_.removeFirst();
+  if (ms >= 40) {
+    const auto line = QStringLiteral("gui %1: %2 ms").arg(QLatin1String(where)).arg(ms);
+    diag::record("sources", line.toStdString());
+    qInfo().noquote() << "sources:" << line;
+  }
 }
 
 void AppearanceSources::apply_matrix(appearance::SourceMatrix matrix, const QString& input_digest) {
@@ -463,13 +479,27 @@ void AppearanceSources::apply_matrix(appearance::SourceMatrix matrix, const QStr
                  {"skipped", skipped_},
                  {"renderable", static_cast<int>(matrix_.renderable_count())},
                  {"candidates", candidates}};
+  QElapsedTimer phase;
+  phase.start();
   refresh_draft();
   choose_default_selection();
+  note_gui("matrix:draft", phase.restart());
   emit matrixChanged();
+  note_gui("matrix:emit", phase.restart());
   emit selectionChanged();
-  // The two sources on view are drawn only while the A/B dialog is open; every source while the gallery is.
-  if (compare_open_) request_compare_images();
-  if (gallery_open_) request_gallery_images();
+  note_gui("matrix:selection", phase.restart());
+  // The two sources on view are drawn only while the A/B dialog is open; every source while the gallery is. Asked on
+  // the next turn of the event loop, so the views built for the new matrix are not rebuilt again in the same pass.
+  if (compare_open_ || gallery_open_) {
+    QTimer::singleShot(0, this, [this, serial = serial_] {
+      if (serial != serial_) return;
+      QElapsedTimer t;
+      t.start();
+      if (compare_open_) request_compare_images();
+      if (gallery_open_) request_gallery_images();
+      note_gui("matrix:requests", t.elapsed());
+    });
+  }
 }
 
 void AppearanceSources::request_gallery_images() {
@@ -741,8 +771,18 @@ QString AppearanceSources::variant_key(const appearance::SourceCandidate& c) con
 
 void AppearanceSources::set_image(const QString& id, ImageState s) {
   images_.insert(id, std::move(s));
-  ++image_revision_;
-  emit imagesChanged();
+  // Coalesced: several states change in one pass (a gallery asks for every source at once), and every card re-reads
+  // imageOf() on each imagesChanged. imageOf() itself already answers the new state.
+  if (images_emit_pending_) return;
+  images_emit_pending_ = true;
+  QTimer::singleShot(0, this, [this] {
+    images_emit_pending_ = false;
+    QElapsedTimer t;
+    t.start();
+    ++image_revision_;
+    emit imagesChanged();
+    note_gui("images:emit", t.elapsed());
+  });
 }
 
 QVariantMap AppearanceSources::imageOf(const QString& id, int revision) const {
@@ -860,7 +900,7 @@ void AppearanceSources::requestImage(const QString& id) {
             s.origin = QStringLiteral("cache");
             s.missing = PortraitRenderer::missing_of(found.entry->resources);
             self->set_image(id, s);
-            self->gui_samples_.push_back(gui.elapsed());
+            self->note_gui("image:cache-hit", gui.elapsed());
             return;
           }
           ImageState rendering;
@@ -944,14 +984,13 @@ void AppearanceSources::requestImage(const QString& id) {
                         self->set_image(id, s);
                       }
                     }
-                    self->max_gui_ms_ = std::max(self->max_gui_ms_, gui.elapsed());
-                    self->gui_samples_.push_back(gui.elapsed());
+                    self->note_gui("image:rendered", gui.elapsed());
                   },
                   Qt::QueuedConnection);
             });
           };
           self->portraits_->submit_variant(key, std::move(job));
-          self->gui_samples_.push_back(gui.elapsed());
+          self->note_gui("image:submit", gui.elapsed());
         },
         Qt::QueuedConnection);
   });
@@ -1072,12 +1111,15 @@ QVariantMap AppearanceSources::metrics() const {
           {"maxVariantRenderMs", max_variant_render_ms_},
           {"guiSamples", static_cast<int>(samples.size())},
           {"guiP95Ms", p95},
-          {"guiMaxMs", max_gui_ms_}};
+          {"guiMaxMs", max_gui_ms_},
+          {"lastMatrixEmitMs", last_matrix_emit_ms_},
+          {"maxMatrixEmitMs", max_matrix_emit_ms_}};
 }
 
 void AppearanceSources::resetMetrics() {
   gathers_ = variants_requested_ = variant_cache_hits_ = variants_rendered_ = variant_errors_ = 0;
   max_gui_ms_ = total_variant_render_ms_ = max_variant_render_ms_ = max_gather_ms_ = 0;
+  last_matrix_emit_ms_ = max_matrix_emit_ms_ = 0;
   gui_samples_.clear();
 }
 

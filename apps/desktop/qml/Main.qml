@@ -224,6 +224,53 @@ ApplicationWindow {
         }
     }
 
+    component DockTab: TabButton {
+        id: dtab
+        property string glyph: ""
+        implicitHeight: Theme.controlHeight + Theme.spacingXs
+        leftPadding: Theme.sp(8)
+        rightPadding: Theme.sp(8)
+        Accessible.name: dtab.text
+        ToolTip.visible: hovered
+        ToolTip.delay: 450
+        ToolTip.text: dtab.text
+        contentItem: RowLayout {
+            spacing: Theme.sp(5)
+            Icon {
+                visible: dtab.glyph.length > 0 && dtab.width >= Theme.px(68)
+                name: dtab.glyph
+                size: Theme.small
+                color: dtab.checked ? Theme.accent : Theme.textDim
+                Layout.alignment: Qt.AlignVCenter
+            }
+            Text {
+                text: dtab.text
+                color: dtab.checked ? Theme.text : Theme.textDim
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.small
+                font.bold: dtab.checked
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                Layout.fillWidth: true
+            }
+        }
+        background: Rectangle {
+            color: dtab.checked ? Theme.panelAlt : (dtab.down ? Theme.accentDim : (dtab.hovered ? Theme.accentSubtle : Theme.header))
+            border.width: dtab.visualFocus ? Theme.focusWidth : 1
+            border.color: dtab.visualFocus ? Theme.borderFocus : Theme.borderSubtle
+            Rectangle {
+                visible: dtab.checked
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.max(Theme.px(16), parent.width - Theme.sp(12))
+                height: 2
+                radius: 1
+                color: Theme.accent
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- DIÁLOGOS
     FileDialog {
         id: instanceDialog
@@ -953,9 +1000,9 @@ ApplicationWindow {
                         TabBar {
                             id: outfitLeftTabs
                             Layout.fillWidth: true
-                            TabButton { text: qsTr("Prendas") }
-                            TabButton { text: qsTr("NPCs") }
-                            TabButton { text: qsTr("Mods") }
+                            DockTab { text: qsTr("Prendas"); glyph: "tag" }
+                            DockTab { text: qsTr("NPCs"); glyph: "person" }
+                            DockTab { text: qsTr("Mods"); glyph: "library" }
                         }
 
                         StackLayout {
@@ -1017,8 +1064,8 @@ ApplicationWindow {
                         TabBar {
                             id: rightTabs
                             Layout.fillWidth: true
-                            TabButton { text: qsTr("Outfit Activo") }
-                            TabButton { text: qsTr("Dependencias") }
+                            DockTab { text: qsTr("Outfit Activo"); glyph: "tag" }
+                            DockTab { text: qsTr("Dependencias"); glyph: "link" }
                         }
 
                         StackLayout {

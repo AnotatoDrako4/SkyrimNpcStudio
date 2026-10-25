@@ -1,16 +1,16 @@
 {
   "agent": "Claude Code",
-  "timestamp": "2026-10-24T17:55:00-03:00",
-  "status": "SNS_WIN_RCA_INCREMENT_PENDIENTE_SKYRIM",
-  "mission": "SNS-WIN-CUSTOMIZATION-MASTERPLAN v1.0 RC-A: Body Preset Director (BCNG), hair gallery, Serana outfit diagnosis",
-  "increment": "Body Preset Director + hair gallery integrated; ctest 298/298; run-final 5 scenarios PASSED; Serana not reproduced in app (both profiles)",
+  "timestamp": "2026-10-24T23:59:00-03:00",
+  "status": "FACE_SOURCE_STUDIO_INTEGRACION_WINDOWS_OK_PENDIENTE_SKYRIM",
+  "mission": "SkyrimNpcStudio Ultimate — Claude: FaceGen Source Studio (CLAUDE-FACE-01/02/03)",
+  "increment": "Face index loose+BSA (4269 NPC/1194 alternativas en Default), BSA sources, transfer plan, FaceSourceStudio.qml; ctest 318/318; face-studio run5 PASSED 31/0/0",
   "workingDirectory": "D:\\.Proyectos Games\\SkyrimNpcStudio-ui2",
-  "evidence": "out/local-implementation/sns-win-20261024-body/FINAL_REPORT.md",
+  "evidence": "out/local-implementation/sns-face-20261024/FACE_SOURCE_STUDIO_REPORT.md",
   "activeLock": null,
   "buildDirectories": [
-    "build/sns-win"
+    "build/claude-face"
   ],
-  "usesBuildSlot": true,
+  "usesBuildSlot": false,
   "exclusiveOwnedPathsTouched": [
     "apps/desktop/viewmodels/studio_controller.hpp",
     "apps/desktop/viewmodels/studio_controller.cpp",
@@ -69,5 +69,7 @@
     "apps/desktop/qml/OutfitPanel.qml (delete-preset dialog layout, accessible names)",
     "apps/desktop/qml/charactercreator/{CharacterToolbar,HairEyeCustomizer}.qml (accessible names only)",
     "apps/desktop/qml/characterforge/NativeNpcEditor.qml (scroll bar names only)"
-  ]
+  ],
+  "contract": ".ai-coordination/contracts/face-source-studio-v1.md",
+  "notes": "OutfitPanel.qml:613/624 emite 44 avisos QML (undefined -> QString) desde el cambio de otro agente a las 22:16; no tocado por Claude."
 }

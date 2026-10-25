@@ -179,6 +179,7 @@ ScrollView {
                     IconToolButton {
                         glyph: "refresh"
                         label: qsTr("Escanear")
+                        showLabel: root.width >= Theme.px(380)
                         tip: qsTr("Escanear presets en mods instalados (SKSE\\Plugins\\CharGen\\Presets)")
                         onClicked: root.studio.appearance.loadPresetsFromVfs()
                     }
@@ -198,13 +199,14 @@ ScrollView {
                 Rectangle {
                     visible: root.presetsCount === 0
                     Layout.fillWidth: true
-                    implicitHeight: Theme.px(100)
+                    implicitHeight: emptyCol.implicitHeight + Theme.sp(24)
                     color: Theme.surface
                     border.color: Theme.borderSubtle
                     border.width: 1
                     radius: Theme.radius
 
                     ColumnLayout {
+                        id: emptyCol
                         anchors.centerIn: parent
                         width: parent.width - Theme.sp(24)
                         spacing: Theme.sp(6)
@@ -222,7 +224,8 @@ ScrollView {
                             font.bold: true
                             font.pixelSize: Theme.normal
                             horizontalAlignment: Text.AlignHCenter
-                            Layout.alignment: Qt.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
                         }
 
                         Text {
@@ -230,7 +233,8 @@ ScrollView {
                             color: Theme.textDim
                             font.pixelSize: Theme.small
                             horizontalAlignment: Text.AlignHCenter
-                            Layout.alignment: Qt.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
                         }
                     }
                 }

@@ -123,6 +123,9 @@ class AppearanceSources : public QObject {
   void refresh_draft();
   void choose_default_selection();
   void set_image(const QString& id, ImageState state);
+  void note_gui(const char* where, qint64 ms);
+  bool images_emit_pending_ = false;
+  qint64 last_matrix_emit_ms_ = 0, max_matrix_emit_ms_ = 0;  // QML reaction to a new matrix (see note_gui)
   [[nodiscard]] QString variant_key(const appearance::SourceCandidate& candidate) const;
   void load_book();
   bool save_book(QString* error);

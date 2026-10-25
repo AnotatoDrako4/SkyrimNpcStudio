@@ -3546,6 +3546,10 @@ struct Stress : std::enable_shared_from_this<Stress> {
           return;
         }
         auto* dialog = find_object("sourceCompareDialog");
+        if (!dialog) {  // created on first use: the real button creates it (and opens it)
+          if (auto* opener = find_object("sourceCompareOpen")) QMetaObject::invokeMethod(opener, "clicked");
+          dialog = find_object("sourceCompareDialog");
+        }
         self->check(dialog != nullptr, "A/B dialog found");
         if (!dialog) { self->step(); return; }
         QMetaObject::invokeMethod(dialog, "open");
@@ -3663,6 +3667,10 @@ struct Stress : std::enable_shared_from_this<Stress> {
           return;
         }
         auto* dialog = find_object("sourceCompareDialog");
+        if (!dialog) {  // created on first use: the real button creates it (and opens it)
+          if (auto* opener = find_object("sourceCompareOpen")) QMetaObject::invokeMethod(opener, "clicked");
+          dialog = find_object("sourceCompareDialog");
+        }
         self->check(dialog != nullptr, "the compare dialog is still there");
         auto* content = dialog ? qvariant_cast<QQuickItem*>(dialog->property("contentItem")) : nullptr;
         if (!content) { self->step(); return; }
@@ -4840,19 +4848,19 @@ struct Stress : std::enable_shared_from_this<Stress> {
           auto* button = find_named("faceStudioOpen");
           self->check(ok && button, "«Estudio de rostros…» button visible and enabled in «Origen»");
           if (!button) { self->step(); return; }
-          // Bring it into the panel's view before clicking.
-          for (auto* p = button->parentItem(); p; p = p->parentItem()) {
-            if (p->inherits("QQuickFlickable")) {
-              auto* content = qvariant_cast<QQuickItem*>(p->property("contentItem"));
-              if (content) p->setProperty("contentY", std::max(0.0, button->mapToItem(content, QPointF(0, 0)).y() - 60.0));
-              break;
-            }
-          }
           // Up to three real clicks: the Origen panel may still be settling its scroll when the first one lands.
           auto attempt = std::make_shared<std::function<void(int)>>();
           *attempt = [self, find_named, click_item, wait_for, attempt](int n) {
             auto* b = find_named("faceStudioOpen");
             if (!b) { self->check(false, "the studio opened with a real click (button gone)"); self->step(); return; }
+            // Center it in the visible part of the panel that scrolls it (any window size), then click its center.
+            for (auto* p = b->parentItem(); p; p = p->parentItem()) {
+              if (p->inherits("QQuickFlickable")) {
+                const auto y = b->mapToItem(p, QPointF(0, b->height() / 2)).y();
+                p->setProperty("contentY", std::max(0.0, p->property("contentY").toDouble() + y - p->height() / 2));
+                break;
+              }
+            }
             const auto at = b->mapToScene(QPointF(b->width() / 2, b->height() / 2));
             self->log(QStringLiteral("click %1 on «Estudio de rostros…» at (%2, %3), window %4x%5").arg(n).arg(at.x()).arg(at.y())
                           .arg(self->window->width()).arg(self->window->height()));
@@ -5047,6 +5055,32 @@ struct Stress : std::enable_shared_from_this<Stress> {
                   });
                 });
               });
+            });
+          });
+        });
+      });
+      // 6b. GUI cost of a NEW matrix (the QML reaction to matrixChanged when an NPC's sources arrive): measured on the NPC
+      // switches with the studio open (step 6), then with the studio closed. Guard of the 1 s pause measured before.
+      steps.push_back([self, sources, wait_for, other, target] {
+        const auto open_max = sources()->metrics().value("maxMatrixEmitMs").toLongLong();
+        QObject* popup = nullptr;
+        for (auto* o : self->window->findChildren<QObject*>()) if (o->objectName() == QLatin1String("faceSourceStudio")) popup = o;
+        if (popup) QMetaObject::invokeMethod(popup, "close");
+        auto loaded = [sources](const QString& key) {
+          return [sources, key] { const auto m = sources()->matrix(); return m.value("state").toString() == "ready" && m.value("formKey").toString().compare(key, Qt::CaseInsensitive) == 0; };
+        };
+        self->after(400, [self, sources, wait_for, other, target, open_max, popup, loaded] {
+          self->studio->selectNpc(other);
+          wait_for(loaded(other), 120000, [self, sources, wait_for, target, open_max, popup, loaded](bool) {
+            const auto closed_a = sources()->metrics().value("lastMatrixEmitMs").toLongLong();
+            self->studio->selectNpc(target);
+            wait_for(loaded(target), 120000, [self, sources, open_max, popup, closed_a](bool) {
+              const auto closed_b = sources()->metrics().value("lastMatrixEmitMs").toLongLong();
+              self->log(QStringLiteral("new-matrix GUI cost: max %1 ms with the studio open; %2 / %3 ms with it closed").arg(open_max).arg(closed_a).arg(closed_b));
+              self->check(open_max < 250 && closed_a < 250 && closed_b < 250,
+                          QStringLiteral("a new matrix costs the GUI < 250 ms (open max %1, closed %2 / %3)").arg(open_max).arg(closed_a).arg(closed_b));
+              if (popup) QMetaObject::invokeMethod(popup, "open");
+              self->after(800, [self] { self->step(); });
             });
           });
         });

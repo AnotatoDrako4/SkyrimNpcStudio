@@ -66,8 +66,10 @@ Item {
              + (piece.hasSmp ? " · " + qsTr("físicas SMP") : "")
     }
     function equip(index) { root.studio.outfit.addPiece(root.studio.armorResults.get(index), true) }
+    property alias modeIndex: catalogModeTabs.currentIndex
     // Used by the empty viewer ("Ver prendas") and the command palette.
     function focusSearch() { catalogModeTabs.currentIndex = 0; searchField.forceActiveFocus(); searchField.selectAll() }
+    function showResources() { catalogModeTabs.currentIndex = 1 }
 
     // Mod filter: every plugin that defines or overrides armors, labelled with its MO2 mod.
     readonly property var modOptions: [{ text: qsTr("Todos los mods"), value: "" }].concat(
@@ -136,18 +138,18 @@ Item {
         anchors.margins: Theme.spacingMd
         spacing: Theme.spacingSm
 
-        TabBar {
+        SegmentedControl {
             id: catalogModeTabs
             objectName: "catalogModeTabs"
             Layout.fillWidth: true
-            TabButton {
-                objectName: "armorCatalogTab"
-                text: qsTr("Prendas (ARMO)")
-            }
-            TabButton {
-                objectName: "resourceExplorerTab"
-                text: qsTr("Explorador de recursos (%1)").arg(root.studio.looseResources.totalResources)
-            }
+            stretch: true
+            Accessible.name: qsTr("Modo del catálogo de prendas y recursos")
+            model: [
+                { label: qsTr("Prendas (ARMO)"), glyph: "tag" },
+                { label: qsTr("Recursos (%1)").arg(root.studio.looseResources.totalResources), glyph: "library" }
+            ]
+            currentIndex: 0
+            onActivated: index => currentIndex = index
         }
 
         StackLayout {

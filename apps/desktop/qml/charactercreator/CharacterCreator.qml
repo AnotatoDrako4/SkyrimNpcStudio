@@ -23,6 +23,60 @@ Item {
         leftTabs.currentIndex = 1
         creatorArmorCatalog.focusSearch()
     }
+    function showResources() {
+        creatorSplit.layout.maximized = false
+        creatorSplit.layout.leftVisible = true
+        leftTabs.currentIndex = 2
+        creatorArmorCatalog.showResources()
+    }
+
+    // Pestaña estilizada según el sistema de diseño Stitch MCP (fondo grafito, barra inferior azul acero #4C8DFF e icono vectorial).
+    component DockTabButton: TabButton {
+        id: dockTab
+        property string glyph: ""
+        implicitHeight: Theme.controlHeight + Theme.spacingXs
+        leftPadding: Theme.sp(8)
+        rightPadding: Theme.sp(8)
+        Accessible.name: dockTab.text
+        ToolTip.visible: hovered
+        ToolTip.delay: 450
+        ToolTip.text: dockTab.text
+        contentItem: RowLayout {
+            spacing: Theme.sp(5)
+            Icon {
+                visible: dockTab.glyph.length > 0 && dockTab.width >= Theme.px(68)
+                name: dockTab.glyph
+                size: Theme.small
+                color: dockTab.checked ? Theme.accent : Theme.textDim
+                Layout.alignment: Qt.AlignVCenter
+            }
+            Text {
+                text: dockTab.text
+                color: dockTab.checked ? Theme.text : Theme.textDim
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.small
+                font.bold: dockTab.checked
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                Layout.fillWidth: true
+            }
+        }
+        background: Rectangle {
+            color: dockTab.checked ? Theme.panelAlt : (dockTab.down ? Theme.accentDim : (dockTab.hovered ? Theme.accentSubtle : Theme.header))
+            border.width: dockTab.visualFocus ? Theme.focusWidth : 1
+            border.color: dockTab.visualFocus ? Theme.borderFocus : Theme.borderSubtle
+            Rectangle {
+                visible: dockTab.checked
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.max(Theme.px(16), parent.width - Theme.sp(12))
+                height: 2
+                radius: 1
+                color: Theme.accent
+            }
+        }
+    }
 
     ExportWizardDialog {
         id: exportWizard
@@ -56,13 +110,18 @@ Item {
                 TabBar {
                     id: leftTabs
                     Layout.fillWidth: true
-                    TabButton { text: qsTr("NPCs") }
-                    TabButton { text: qsTr("Prendas") }
-                    TabButton { text: qsTr("Donantes") }
+                    onCurrentIndexChanged: {
+                        if (currentIndex === 1) creatorArmorCatalog.modeIndex = 0
+                        else if (currentIndex === 2) creatorArmorCatalog.modeIndex = 1
+                    }
+                    DockTabButton { text: qsTr("NPCs"); glyph: "person" }
+                    DockTabButton { text: qsTr("Prendas"); glyph: "tag" }
+                    DockTabButton { text: qsTr("Recursos"); glyph: "library" }
+                    DockTabButton { text: qsTr("Donantes"); glyph: "people" }
                 }
 
                 StackLayout {
-                    currentIndex: leftTabs.currentIndex
+                    currentIndex: leftTabs.currentIndex === 2 ? 1 : (leftTabs.currentIndex === 3 ? 2 : leftTabs.currentIndex)
                     Layout.fillWidth: true
                     Layout.fillHeight: true
 
@@ -186,6 +245,31 @@ Item {
                 Layout.fillWidth: true
                 studio: root.studio
                 viewport: charViewport
+                activeStep: leftTabs.currentIndex === 0 && rightTabs.currentIndex === 0 ? 0 : rightTabs.currentIndex
+                onStepActivated: (stepIndex) => {
+                    if (stepIndex === 0) {
+                        root.searchNpc()
+                    } else if (stepIndex === 1) {
+                        creatorSplit.layout.rightVisible = true
+                        rightTabs.currentIndex = 1
+                        charViewport.applyCameraPreset(4)
+                    } else if (stepIndex === 2) {
+                        creatorSplit.layout.rightVisible = true
+                        rightTabs.currentIndex = 2
+                        charViewport.applyCameraPreset(4)
+                    } else if (stepIndex === 3) {
+                        creatorSplit.layout.rightVisible = true
+                        rightTabs.currentIndex = 3
+                        charViewport.applyCameraPreset(0)
+                    } else if (stepIndex === 4 || stepIndex === 5) {
+                        creatorSplit.layout.rightVisible = true
+                        rightTabs.currentIndex = 4
+                        if (stepIndex === 4) root.showCatalog()
+                        charViewport.applyCameraPreset(0)
+                    } else if (stepIndex === 6) {
+                        exportWizard.open()
+                    }
+                }
             }
 
             CharacterViewport {
@@ -193,8 +277,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 studio: root.studio
-                sceneOverride: (leftTabs.currentIndex === 1 && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")) ? root.studio.armorPreview : null
-                previewMode: leftTabs.currentIndex === 1 && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")
+                sceneOverride: ((leftTabs.currentIndex === 1 || leftTabs.currentIndex === 2) && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")) ? root.studio.armorPreview : null
+                previewMode: (leftTabs.currentIndex === 1 || leftTabs.currentIndex === 2) && (root.studio.armorPreview.selectedArmor !== "" || root.studio.armorPreview.selectedMesh !== "")
                 // The empty viewer's actions: the explorer comes back (a user action) on the right tab, search focused.
                 onNpcSearchRequested: root.searchNpc()
                 onCatalogRequested: root.showCatalog()
@@ -273,12 +357,12 @@ Item {
                     id: rightTabs
                     objectName: "creatorRightTabs"
                     Layout.fillWidth: true
-                    TabButton { text: qsTr("Presets") }
-                    TabButton { text: qsTr("Rostro") }
-                    TabButton { text: qsTr("Pelo/Ojos") }
-                    TabButton { text: qsTr("Cuerpo") }
-                    TabButton { text: qsTr("Vestuario") }
-                    TabButton { objectName: "creatorOriginTab"; text: qsTr("Origen") }
+                    DockTabButton { text: qsTr("Presets"); glyph: "document" }
+                    DockTabButton { text: qsTr("Rostro"); glyph: "person" }
+                    DockTabButton { text: qsTr("Pelo/Ojos"); glyph: "eye" }
+                    DockTabButton { text: qsTr("Cuerpo"); glyph: "people" }
+                    DockTabButton { text: qsTr("Vestuario"); glyph: "tag" }
+                    DockTabButton { objectName: "creatorOriginTab"; text: qsTr("Origen"); glyph: "diagnostic" }
                 }
 
                 StackLayout {
