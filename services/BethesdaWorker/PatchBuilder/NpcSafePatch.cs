@@ -84,6 +84,7 @@ internal static partial class NpcSafePatch
         ["TextureLighting"] = ("QNAM", "Tono de piel editado"),
         ["TintLayers"] = ("TINI/TINC/TINV", "Capas de tinte facial editadas"),
         ["DefaultOutfit"] = ("DOFT", "Atuendo por defecto asignado"),
+        ["Items"] = ("CNTO", "Prendas del atuendo añadidas al inventario"),
         ["SleepingOutfit"] = ("SOFT", "Atuendo para dormir asignado"),
     };
 
@@ -110,10 +111,13 @@ internal static partial class NpcSafePatch
         return allowed;
     }
 
-    public static IReadOnlySet<string> AllowedForOutfit(bool alsoSleeping) =>
-        alsoSleeping
-            ? new HashSet<string>(StringComparer.Ordinal) { "DefaultOutfit", "SleepingOutfit" }
-            : new HashSet<string>(StringComparer.Ordinal) { "DefaultOutfit" };
+    public static IReadOnlySet<string> AllowedForOutfit(bool alsoSleeping, bool alsoInventory = false)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { "DefaultOutfit" };
+        if (alsoSleeping) allowed.Add("SleepingOutfit");
+        if (alsoInventory) allowed.Add("Items");
+        return allowed;
+    }
 
     /// <summary>Union of the allowed sets of several operations on the same NPC.</summary>
     public static IReadOnlySet<string> Union(params IReadOnlySet<string>?[] sets)

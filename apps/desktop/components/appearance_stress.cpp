@@ -54,6 +54,17 @@ namespace {
 const char* const kPalette[] = {"#111111", "#3B2219", "#5A3825", "#8B5A2B", "#C2B280", "#E6C280",
                                 "#A53A1E", "#C0392B", "#808080", "#ECECEC", "#2980B9", "#8E44AD"};
 
+// The first rule of a Body Change NG distribution (where the director puts NPC rules) lists `preset` in "presets", by name
+// or as {name, file}.
+bool draft_rule_names_preset(const QString& distribution, const QString& preset) {
+  const auto rules = QJsonDocument::fromJson(distribution.toUtf8()).object().value("rules").toArray();
+  if (rules.isEmpty()) return false;
+  for (const auto& p : rules.first().toObject().value("presets").toArray()) {
+    if ((p.isString() ? p.toString() : p.toObject().value("name").toString()) == preset) return true;
+  }
+  return false;
+}
+
 // Private bytes of this process (logged, not asserted: allocator caches make one-off growth normal).
 qint64 process_memory_mb() {
   PROCESS_MEMORY_COUNTERS_EX counters{};
@@ -4394,7 +4405,11 @@ struct Stress : std::enable_shared_from_this<Stress> {
                      QStringList changes;
                      for (const auto& c : n.value("changes").toList()) {
                        const auto m = c.toMap();
-                       changes << m.value("target").toString() + "=" + m.value("verdict").toString();
+                       QStringList why;  // the codes that decide the verdict (UbeRaceMissing, CustomHeadNeck, ...)
+                       for (const auto& i : m.value("issues").toList()) {
+                         if (i.toMap().value("severity").toString() == QLatin1String("error")) why << i.toMap().value("code").toString();
+                       }
+                       changes << m.value("target").toString() + "=" + m.value("verdict").toString() + (why.isEmpty() ? QString() : "(" + why.join(",") + ")");
                        self->check(m.value("verdict").toString() != QLatin1String("compatible"), form_key + ": a family change is never simply compatible");
                      }
                      QStringList vparts;
@@ -4440,7 +4455,11 @@ struct Stress : std::enable_shared_from_this<Stress> {
           return;
         }
         self->studio->selectNpc(*assign_npc);
-        wait_for([director, assign_npc] { return director->npc().value("formKey").toString() == *assign_npc && director->npc().value("state").toString() == QLatin1String("ready"); },
+        // Selecting the NPC already shown keeps the previous "ready" until its load ends and inspect() starts again: wait for the load too.
+        wait_for([self, director, assign_npc] {
+                   return !self->studio->npc_loading() && director->npc().value("formKey").toString() == *assign_npc &&
+                          director->npc().value("state").toString() == QLatin1String("ready");
+                 },
                  120000, [self, director, report](bool ok) {
                    self->check(ok, "assignment NPC analysed again");
                    if (auto* tabs = self->window->findChild<QObject*>(QStringLiteral("creatorRightTabs"))) tabs->setProperty("currentIndex", 3);
@@ -4454,6 +4473,16 @@ struct Stress : std::enable_shared_from_this<Stress> {
                      };
                      walk(self->window->contentItem());
                      self->check(list != nullptr, "the preset list is on screen in «Cuerpo»");
+                     // The warning shows exactly when an equipped piece draws nothing for this race.
+                     QStringList no_addon;
+                     for (const auto& d : self->scene()->outfit_diagnostics()) {
+                       if (d.toMap().value("noAddonForRace").toBool()) no_addon << d.toMap().value("name").toString();
+                     }
+                     auto* warning = self->window->findChild<QObject*>(QStringLiteral("bodyPiecesWithoutAddon"));
+                     const auto warning_text = warning ? warning->property("text").toString() : QString();
+                     const bool warning_shown = warning && warning->property("visible").toBool();
+                     self->check(warning && warning_shown == !no_addon.isEmpty() && std::all_of(no_addon.begin(), no_addon.end(), [&](const QString& n) { return warning_text.contains(n); }),
+                                 QStringLiteral("pieces without an addon for the race [%1]: warning shown=%2").arg(no_addon.join(", ")).arg(warning_shown));
                      // Scroll the Cuerpo panel so the capture shows the preset section.
                      QQuickItem* viewport = nullptr;
                      for (auto* p = list ? list->parentItem() : nullptr; p; p = p->parentItem()) {
@@ -4494,6 +4523,7 @@ struct Stress : std::enable_shared_from_this<Stress> {
                      self->check(rules.size() == 1 && draft.value("errors").toStringList().isEmpty(), "the draft has one valid rule");
                      const auto text = draft.value("text").toString();
                      self->check(text.contains(QStringLiteral("\"schemaVersion\": 8")), "the draft is a schema 8 distribution");
+                     self->check(draft_rule_names_preset(text, pick.value("name").toString()), "the NPC's rule names the assigned preset");
                      if (pick.value("duplicate").toBool()) {
                        self->check(!rules.isEmpty() && !rules.first().toMap().value("file").toString().isEmpty(), "a repeated preset name is written with its file (BOD-04)");
                      } else {
@@ -5267,6 +5297,396 @@ struct Stress : std::enable_shared_from_this<Stress> {
 
           self->step();
         });
+      });
+    } else if (name == "body-morphs") {
+      // BodySlide repair (2026-10-25): what the viewer really does with a preset, on real NPCs of the profile. Per NPC (SNS_STRESS_NPCS,
+      // default Serana) and preset (SNS_BODY_PRESET, default "Tinraa - Heroine"): body without clothes, with its outfit, both again with
+      // the preset previewed, each at NPC weight 0 / 50 / 100, all from ONE fixed camera (the first scene's frame). Records the scene's
+      // per-shape morph states (bodyMorphs: status, sliders applied, TRI and mesh providers, family verdicts), the inspector's body, and
+      // the pixels that changed against the same condition without the preset. Writes body-morphs-report.json. Not in "all".
+      auto* director = self->studio->body();
+      auto rows = std::make_shared<QJsonArray>();
+      auto frame = std::make_shared<std::pair<QVector3D, float>>(QVector3D(), -1.0f);
+      auto images = std::make_shared<QMap<QString, QImage>>();
+      const QString preset_name = qEnvironmentVariableIsSet("SNS_BODY_PRESET") ? qEnvironmentVariable("SNS_BODY_PRESET") : QStringLiteral("Tinraa - Heroine");
+      QStringList npcs = {QStringLiteral("002B6C:Dawnguard.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      auto wait_rebuild = [self](std::function<void()> action) {
+        action();
+        self->after(900, [self] { self->when_idle([self] { self->after(1500, [self] { self->step(); }); }, 1200); });
+      };
+      auto grab = [self]() {
+        auto* view = self->window->findChild<QQuickItem*>(QStringLiteral("characterView3D"));
+        const auto full = self->window->grabWindow();
+        if (!view) return full;
+        const auto origin = view->mapToScene(QPointF{});
+        const auto dpr = full.devicePixelRatio();
+        return full.copy(QRect(static_cast<int>(origin.x() * dpr), static_cast<int>(origin.y() * dpr), static_cast<int>(view->width() * dpr),
+                               static_cast<int>(view->height() * dpr)));
+      };
+      auto changed_pixels = [](const QImage& a, const QImage& b) {
+        if (a.size() != b.size() || a.isNull()) return -1;
+        const auto ca = a.convertToFormat(QImage::Format_RGB32), cb = b.convertToFormat(QImage::Format_RGB32);
+        int n = 0;
+        for (int y = 0; y < ca.height(); ++y) {
+          const auto* ra = reinterpret_cast<const QRgb*>(ca.constScanLine(y));
+          const auto* rb = reinterpret_cast<const QRgb*>(cb.constScanLine(y));
+          for (int x = 0; x < ca.width(); ++x) {
+            const int d = std::max({std::abs(qRed(ra[x]) - qRed(rb[x])), std::abs(qGreen(ra[x]) - qGreen(rb[x])), std::abs(qBlue(ra[x]) - qBlue(rb[x]))});
+            n += d > 24 ? 1 : 0;
+          }
+        }
+        return n;
+      };
+      steps.push_back([self, director] {
+        director->setFilter(QString(), QString(), false);
+        self->when_idle([self] { self->step(); });
+      });
+      for (const auto& form_key : npcs) {
+        steps.push_back([self, director, form_key, frame] {
+          *frame = {QVector3D(), -1.0f};
+          director->previewPreset(QString());
+          director->setShowOutfit(true);
+          director->setPreviewWeight(-1);
+          self->scene()->setOriginal(false);
+          self->studio->selectNpc(form_key);
+          self->then_idle();
+        });
+        struct Condition {
+          bool outfit;
+          bool preset;
+          int weight;
+        };
+        std::vector<Condition> conditions;
+        for (const bool preset : {false, true})
+          for (const bool outfit : {false, true})
+            for (const int weight : {0, 50, 100}) conditions.push_back({outfit, preset, weight});
+        for (const auto& c : conditions) {
+          steps.push_back([self, director, c, preset_name, wait_rebuild, form_key] {
+            wait_rebuild([self, director, c, preset_name, form_key] {
+              QString uid;
+              if (c.preset) {
+                for (const auto& p : director->presets()) {
+                  const auto row = p.toMap();
+                  if (row.value("name").toString() == preset_name) uid = row.value("uid").toString();
+                }
+                self->check(!uid.isEmpty(), form_key + ": preset «" + preset_name + "» is in the profile");
+              }
+              director->previewPreset(uid);
+              director->setShowOutfit(c.outfit);
+              director->setPreviewWeight(c.weight);
+            });
+          });
+          steps.push_back([self, director, rows, frame, images, c, form_key, grab, changed_pixels] {
+            auto* controls = self->window->findChild<QObject*>(QStringLiteral("characterViewport"));
+            if (frame->second < 0) *frame = {self->scene()->center(), self->scene()->radius()};
+            if (controls) {
+              QMetaObject::invokeMethod(controls, "frame", Q_ARG(QVariant, QVariant::fromValue(frame->first)), Q_ARG(QVariant, frame->second),
+                                        Q_ARG(QVariant, 0));
+            }
+            self->after(1200, [self, director, rows, images, c, form_key, grab, changed_pixels] {
+              const auto key = QStringLiteral("%1-%2-w%3").arg(c.preset ? "preset" : "base", c.outfit ? "outfit" : "body").arg(c.weight);
+              const auto image = grab();
+              const auto shot = QDir(self->work_dir).filePath(QStringLiteral("body-%1-%2.png").arg(QString(form_key).replace(':', '_'), key));
+              image.save(shot);
+              (*images)[form_key + key] = image;
+              int diff = -1;
+              if (c.preset) {
+                const auto base = QStringLiteral("base-%1-w%2").arg(c.outfit ? "outfit" : "body").arg(c.weight);
+                diff = changed_pixels((*images)[form_key + base], image);
+              }
+              const auto summary = self->scene()->body_morph_summary();
+              const auto body = summary.value("body").toMap();
+              QJsonArray shapes;
+              int visible_changed = 0;
+              for (const auto& r : self->scene()->body_morphs()) {
+                const auto m = r.toMap();
+                shapes.append(QJsonObject::fromVariantMap(m));
+                const auto st = m.value("status").toString();
+                if (m.value("shown").toBool() && (st == "applied" || st == "partial" || st == "needs-rebuild")) ++visible_changed;
+              }
+              const auto npc = director->npc();
+              self->log(QStringLiteral("body-morphs %1 %2: preset=%3 (%4) weight=%5/%6 verdict=%7 visibleChanged=%8 hiddenChanged=%9 changedPixels=%10 | "
+                                       "body %11 @ %12 [%13, %14 morphs, %15 compatible, %16 applied] | inspector %17 @ %18")
+                            .arg(form_key, key, summary.value("preset").toString(), summary.value("presetMode").toString())
+                            .arg(summary.value("weight").toDouble()).arg(summary.value("recordWeight").toDouble())
+                            .arg(summary.value("verdict").toString()).arg(summary.value("visibleChanged").toInt()).arg(summary.value("hiddenChanged").toInt())
+                            .arg(diff)
+                            .arg(body.value("meshPath").toString(), body.value("provider").toString(), body.value("statusLabel").toString())
+                            .arg(body.value("morphs").toLongLong()).arg(body.value("compatible").toLongLong()).arg(body.value("applied").toInt())
+                            .arg(npc.value("body").toMap().value("path").toString(), npc.value("body").toMap().value("provider").toString()));
+              for (const auto& o : summary.value("outfit").toList()) {
+                const auto m = o.toMap();
+                self->log(QStringLiteral("    piece %1: %2 · %3/%4 shapes with morphs · %5 changed · refit %6 · %7")
+                              .arg(m.value("piece").toString(), m.value("family").toString()).arg(m.value("withMorphs").toInt())
+                              .arg(m.value("shapes").toInt()).arg(m.value("changed").toInt()).arg(m.value("needsRefit").toBool() ? "YES" : "no")
+                              .arg(m.value("statuses").toStringList().join(" / ")));
+              }
+              // The viewer never claims a preset it did not apply: "applied"/"partial" only with real moved vertices on a visible shape.
+              const auto verdict = summary.value("verdict").toString();
+              if (verdict == "applied" || verdict == "partial") self->check(visible_changed > 0, form_key + " " + key + ": an applied verdict has visible deformed shapes");
+              if (!c.preset) self->check(verdict == "none", form_key + " " + key + ": without a preset nothing is claimed");
+              // Same mesh in the inspector and the viewer when the body is drawn.
+              if (!c.outfit && !body.isEmpty() && npc.value("state").toString() == "ready") {
+                self->check(npc.value("body").toMap().value("path").toString().compare(body.value("meshPath").toString(), Qt::CaseInsensitive) == 0,
+                            form_key + ": inspector and viewer resolve the same body mesh");
+              }
+              rows->append(QJsonObject{{"npc", form_key}, {"name", npc.value("name").toString()}, {"condition", key},
+                                       {"summary", QJsonObject::fromVariantMap(summary)}, {"shapes", shapes},
+                                       {"inspectorBody", QJsonObject::fromVariantMap(npc.value("body").toMap())},
+                                       {"inspectorFamily", npc.value("familyLabel").toString()},
+                                       {"changedPixelsVsBase", diff}, {"capture", shot},
+                                       {"issues", QJsonArray::fromVariantList(self->scene()->issues())}});
+              self->step();
+            });
+          });
+        }
+        // Are the meshes on screen (outfit worn) the base BodyMorph expects, or do they carry a baked preset? (OSP/OSD rebuild.)
+        steps.push_back([self, director, rows, form_key] {
+          QStringList meshes;
+          for (const auto& r : self->scene()->body_morphs()) {
+            const auto mesh = r.toMap().value("meshPath").toString();
+            if (!mesh.isEmpty() && !meshes.contains(mesh, Qt::CaseInsensitive)) meshes << mesh;
+          }
+          director->verifyBuilds(meshes);
+          auto timer = std::make_shared<QElapsedTimer>();
+          timer->start();
+          auto poll = std::make_shared<std::function<void()>>();
+          *poll = [self, director, rows, form_key, timer, poll] {
+            if (self->finished || !self->studio) return;
+            const auto check = director->build_check();
+            if (check.value("state").toString() == "checking" && timer->elapsed() < 300000) {
+              QTimer::singleShot(200, self->studio, *poll);
+              return;
+            }
+            self->check(check.value("state").toString() == "ready", form_key + ": BodySlide build check finished " + check.value("error").toString());
+            for (const auto& r : check.value("rows").toList()) {
+              const auto m = r.toMap();
+              self->log(QStringLiteral("    build %1 @ %2: %3 (%4, max %5, %6 shapes) %7")
+                            .arg(m.value("mesh").toString(), m.value("provider").toString(), m.value("verdict").toString(), m.value("project").toString())
+                            .arg(m.value("maxDistance").toDouble(), 0, 'f', 6).arg(m.value("shapes").toInt()).arg(m.value("detail").toString().left(160)));
+            }
+            rows->append(QJsonObject{{"npc", form_key}, {"condition", "build-check"}, {"buildCheck", QJsonObject::fromVariantMap(check)}});
+            self->step();
+          };
+          (*poll)();
+        });
+      }
+      steps.push_back([self, director, rows] {
+        director->previewPreset(QString());
+        director->setShowOutfit(true);
+        director->setPreviewWeight(-1);
+        QFile out(QDir(self->work_dir).filePath("body-morphs-report.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*rows).toJson());
+        self->then_idle();
+      });
+    } else if (name == "dress") {
+      // Dress the primary NPC in the armors of SNS_STRESS_DRESS (ARMO FormKeys, ','-separated) through the outfit editor, as
+      // the user would in Vestuario (clear, then add each piece), and report what the 3D view draws: every outfit shape with
+      // its NIF and provider, the scene issues (a mesh not found or unreadable fails), the outfit validation and, with
+      // SNS_STRESS_DRESS_EXPORT=<plugin.esp>, the Mode A patch exported into work\dress-export. SNS_PREVIEW_MODS shows a
+      // staged build without installing it. Captures dress.png, writes dress.json. Not in "all".
+      const auto keys = qEnvironmentVariable("SNS_STRESS_DRESS").split(',', Qt::SkipEmptyParts);
+      auto report = std::make_shared<QJsonObject>();
+      steps.push_back([self] {
+        self->studio->selectNpc(self->primary_npc);
+        self->then_idle();
+      });
+      // SNS_STRESS_DRESS_PRESET=<BodySlide preset name>: the Body Director previews it (body and garments morph with their TRI),
+      // assigns it to the NPC and, with an export plugin, writes the Body Change NG distribution into work\dress-body.
+      if (const auto preset_name = qEnvironmentVariable("SNS_STRESS_DRESS_PRESET"); !preset_name.isEmpty()) {
+        steps.push_back([self, preset_name, report] {
+          auto* director = self->studio->body();
+          auto clock = std::make_shared<QElapsedTimer>();
+          clock->start();
+          auto poll = std::make_shared<std::function<void()>>();
+          *poll = [self, director, preset_name, report, clock, poll] {
+            const auto n = director->npc();
+            const bool ready = !self->studio->npc_loading() && n.value("formKey").toString().compare(self->primary_npc, Qt::CaseInsensitive) == 0 &&
+                               n.value("state").toString() == QLatin1String("ready");
+            if (!ready && clock->elapsed() < 180000) {
+              self->after(200, *poll);
+              return;
+            }
+            self->check(ready, "body analysed for the preset: " + n.value("error").toString());
+            QVariantMap pick;
+            for (const auto& v : director->presets()) {
+              if (v.toMap().value("name").toString() == preset_name) pick = v.toMap();
+            }
+            self->check(!pick.isEmpty(), "the profile has the BodySlide preset «" + preset_name + "»");
+            if (pick.isEmpty()) {
+              self->step();
+              return;
+            }
+            self->log(QStringLiteral("dress preset «%1» family %2 verdict %3 file %4").arg(preset_name, pick.value("family").toString(),
+                                                                                         pick.value("verdict").toString(), pick.value("file").toString()));
+            director->setShowOutfit(true);
+            director->previewPreset(pick.value("uid").toString());
+            const auto refused = director->assign(pick.value("uid").toString(), false);
+            self->check(refused.isEmpty(), "preset assigned to the NPC: " + refused);
+            (*report)["preset"] = QJsonObject::fromVariantMap(pick);
+            (*report)["distribution"] = director->draft().value("text").toString();
+            self->check(draft_rule_names_preset(director->draft().value("text").toString(), preset_name),
+                        "the NPC's rule in the distribution names the preset «" + preset_name + "»");
+            const auto plugin = qEnvironmentVariable("SNS_STRESS_DRESS_EXPORT");
+            if (plugin.isEmpty() || !refused.isEmpty()) {
+              self->then_idle();
+              return;
+            }
+            director->exportDistribution(QStringLiteral("SNS Body - %1").arg(self->appearance()->npc_label()),
+                                         QDir(self->work_dir).filePath(QStringLiteral("dress-body")), false);
+            auto wait = std::make_shared<std::function<void()>>();
+            *wait = [self, director, report, wait] {
+              if (director->export_result().value("state").toString() == QLatin1String("exporting")) {
+                self->after(100, *wait);
+                return;
+              }
+              const auto r = director->export_result();
+              self->check(r.value("state").toString() != QLatin1String("error"), "body distribution exported: " + r.value("error").toString());
+              (*report)["bodyExport"] = QJsonObject::fromVariantMap(r);
+              self->log("dress body export: " + QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(r)).toJson(QJsonDocument::Compact)).left(1200));
+              self->then_idle();
+            };
+            self->after(100, *wait);
+          };
+          self->after(200, *poll);
+        });
+      }
+      steps.push_back([self, keys] {
+        self->check(!keys.isEmpty(), "SNS_STRESS_DRESS names the armors to wear");
+        self->studio->outfit()->clearPieces();
+        for (const auto& k : keys) self->studio->equipArmorByFormKey(k.trimmed());
+        // Each piece arrives with the worker's catalog answer: wait until all of them are in the draft (30 s at most).
+        auto clock = std::make_shared<QElapsedTimer>();
+        clock->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, keys, clock, poll] {
+          if (self->studio->outfit()->pieces().size() < keys.size() && clock->elapsed() < 30000) {
+            self->after(200, *poll);
+            return;
+          }
+          self->then_idle();
+        };
+        self->after(200, *poll);
+      });
+      steps.push_back([self, keys, report] {
+        QStringList worn;
+        QJsonArray pieces;
+        for (const auto& p : self->studio->outfit()->pieces()) {
+          const auto m = p.toMap();
+          worn << m.value("formKey").toString().toLower();
+          pieces.append(QJsonObject::fromVariantMap(m));
+          self->log(QStringLiteral("  piece %1 %2").arg(m.value("formKey").toString(), m.value("name").toString()));
+        }
+        for (const auto& k : keys) self->check(worn.contains(k.trimmed().toLower()), "the draft wears " + k.trimmed());
+        QJsonArray parts;
+        QMap<QString, int> shown_per_armor;
+        for (const auto& p : self->scene()->parts()) {
+          const auto row = p.toMap();
+          const auto insp = row.value("inspector").toMap();
+          const bool shown = row.value("shownByDefault").toBool();
+          const auto group = row.value("group").toString();
+          if (group == QLatin1String("outfit")) shown_per_armor[insp.value("piece").toString()] += shown ? 1 : 0;
+          parts.append(QJsonObject{{"group", group}, {"piece", insp.value("piece").toString()}, {"shape", insp.value("shape").toString()},
+                                   {"nif", insp.value("nif").toString()}, {"provider", insp.value("nifProvider").toString()},
+                                   {"slots", insp.value("slots").toString()}, {"shown", shown}, {"hiddenReason", row.value("hiddenReason").toString()}});
+          if (group != QLatin1String("head")) {
+            self->log(QStringLiteral("  part [%1] %2 / %3 :: %4 @ %5 %6%7")
+                          .arg(group, insp.value("piece").toString().left(44), insp.value("shape").toString().left(28), insp.value("nif").toString().right(60),
+                               insp.value("nifProvider").toString().left(48), shown ? "SHOWN" : "hidden",
+                               row.value("hiddenReason").toString().isEmpty() ? QString() : " (" + row.value("hiddenReason").toString() + ")"));
+          }
+        }
+        QJsonArray issues;
+        int broken = 0;
+        for (const auto& i : self->scene()->issues()) {
+          const auto m = i.toMap();
+          const auto code = m.value("code").toString();
+          if (code == QLatin1String("MeshNotFound") || code == QLatin1String("MeshUnreadable")) ++broken;
+          issues.append(QJsonObject::fromVariantMap(m));
+          self->log(QStringLiteral("  issue %1 %2: %3 [%4]").arg(m.value("severity").toString(), code, m.value("message").toString().left(200),
+                                                                 m.value("subject").toString().right(80)));
+        }
+        self->check(broken == 0, QStringLiteral("every mesh of the outfit was found and read (%1 not)").arg(broken));
+        QJsonArray morphs;
+        for (const auto& m : self->scene()->body_morphs()) {
+          const auto row = QJsonObject::fromVariantMap(m.toMap());
+          morphs.append(row);
+          self->log("  morph " + QString::fromUtf8(QJsonDocument(row).toJson(QJsonDocument::Compact)).left(260));
+        }
+        (*report)["bodyMorphs"] = morphs;
+        (*report)["bodyMorphSummary"] = QJsonObject::fromVariantMap(self->scene()->body_morph_summary());
+        self->log("  morph summary " + QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(self->scene()->body_morph_summary())).toJson(QJsonDocument::Compact)).left(600));
+        for (auto it = shown_per_armor.begin(); it != shown_per_armor.end(); ++it) {
+          self->log(QStringLiteral("  armor %1: %2 shape(s) shown").arg(it.key()).arg(it.value()));
+        }
+        const auto shot = QDir(self->work_dir).filePath(QStringLiteral("dress.png"));
+        self->window->grabWindow().save(shot);
+        (*report)["npc"] = self->primary_npc;
+        (*report)["pieces"] = pieces;
+        (*report)["parts"] = parts;
+        (*report)["issues"] = issues;
+        (*report)["capture"] = shot;
+        self->studio->outfit()->validate();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, poll] {
+          if (self->studio->outfit()->validating()) {
+            self->after(100, *poll);
+            return;
+          }
+          self->step();
+        };
+        self->after(200, *poll);
+      });
+      steps.push_back([self, report] {
+        auto* outfit = self->studio->outfit();
+        QJsonArray issues;
+        for (const auto& i : outfit->validation().value("issues").toList()) {
+          const auto m = i.toMap();
+          issues.append(QJsonObject::fromVariantMap(m));
+          self->log(QStringLiteral("  outfit issue %1 %2: %3 [%4]").arg(m.value("severity").toString(), m.value("code").toString(),
+                                                                       m.value("message").toString().left(200), m.value("subject").toString()));
+        }
+        (*report)["validation"] = issues;
+        (*report)["exportable"] = outfit->exportable();
+        self->check(outfit->exportable(), "the outfit validates for this NPC");
+        const auto plugin = qEnvironmentVariable("SNS_STRESS_DRESS_EXPORT");
+        if (plugin.isEmpty() || !outfit->exportable()) {
+          self->step();
+          return;
+        }
+        const auto dir = QDir(self->work_dir).filePath(QStringLiteral("dress-export"));
+        auto done = std::make_shared<bool>(false);
+        auto result = std::make_shared<QVariantMap>();
+        auto c1 = std::make_shared<QMetaObject::Connection>();
+        auto c2 = std::make_shared<QMetaObject::Connection>();
+        *c1 = QObject::connect(outfit, &OutfitEditor::exported, self->studio, [done, result](const QVariantMap& r) { *result = r; *done = true; });
+        *c2 = QObject::connect(outfit, &OutfitEditor::exportFailed, self->studio, [done, result](const QString& m, const QVariantList&) {
+          (*result)["failure"] = m;
+          *done = true;
+        });
+        self->log("dress: Mode A export of " + plugin + " to " + dir);
+        outfit->exportPatch(plugin, dir, true, false, QStringLiteral("Atuendo de %1 creado con Skyrim NPC Studio").arg(self->appearance()->npc_label()),
+                            false, false, false, {}, QStringLiteral("Skyrim NPC Studio"));
+        auto wait = std::make_shared<std::function<void()>>();
+        *wait = [self, wait, done, result, c1, c2, report] {
+          if (!*done) {
+            self->after(100, *wait);
+            return;
+          }
+          QObject::disconnect(*c1);
+          QObject::disconnect(*c2);
+          self->check(!result->contains("failure"), "dress export: " + result->value("failure").toString());
+          (*report)["export"] = QJsonObject::fromVariantMap(*result);
+          self->log("dress export result: " + QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(*result)).toJson(QJsonDocument::Compact)).left(1500));
+          self->step();
+        };
+        self->after(100, *wait);
+      });
+      steps.push_back([self, report] {
+        QFile out(QDir(self->work_dir).filePath("dress.json"));
+        if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*report).toJson());
+        self->step();
       });
     } else if (name == "outfit-diagnosis") {
       // SER-01..03: what the 3D view draws of each NPC's default outfit and why. For every NPC (SNS_STRESS_NPCS, default Serana and
@@ -6581,6 +7001,45 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->log(QStringLiteral("quitting while building=%1 sceneLoading=%2").arg(self->appearance()->building()).arg(self->scene()->loading()));
           self->finish();
         });
+      });
+    } else if (name == "npc-timings") {
+      // Scene build telemetry in ONE process: each NPC (SNS_STRESS_NPCS, default Serana, Lydia, Aela, Serana) is selected only after the
+      // previous scene has settled, so a repeated NPC shows the warm cache. Writes npc-timings.json (stats.timingsMs / stats.cache of
+      // every load; the same numbers go to the diagnostics session log as "timings #N"). Measurement only, nothing is edited. Not in "all".
+      auto rows = std::make_shared<QJsonArray>();
+      QStringList npcs = {QStringLiteral("002B6C:Dawnguard.esm"), QStringLiteral("0A2C8E:Skyrim.esm"), QStringLiteral("01A696:Skyrim.esm"),
+                          QStringLiteral("002B6C:Dawnguard.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      for (int i = 0; i < npcs.size(); ++i) {
+        const auto form_key = npcs[i].trimmed();
+        steps.push_back([self, form_key] {
+          self->studio->selectNpc(form_key);
+          self->then_idle();
+        });
+        steps.push_back([self, rows, form_key, i] {
+          const auto stats = self->scene()->stats();
+          const auto name = self->studio->npc().value("name").toString();
+          PROCESS_MEMORY_COUNTERS_EX memory{};
+          K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory), sizeof(memory));
+          const auto mb = [](SIZE_T bytes) { return static_cast<qint64>(bytes / (1024 * 1024)); };
+          self->check(self->appearance()->npc_form_key().compare(form_key, Qt::CaseInsensitive) == 0 && stats.contains("timingsMs"),
+                      QStringLiteral("load %1: %2 (%3) built, %4 ms; private %5 MB, working set %6 MB (peak %7 MB)")
+                          .arg(i + 1).arg(form_key, name).arg(stats.value("elapsedMs").toLongLong())
+                          .arg(mb(memory.PrivateUsage)).arg(mb(memory.WorkingSetSize)).arg(mb(memory.PeakWorkingSetSize)));
+          rows->append(QJsonObject{{"order", i + 1}, {"formKey", form_key}, {"name", name},
+                                   {"privateMB", mb(memory.PrivateUsage)}, {"workingSetMB", mb(memory.WorkingSetSize)},
+                                   {"peakWorkingSetMB", mb(memory.PeakWorkingSetSize)},
+                                   {"elapsedMs", stats.value("elapsedMs").toLongLong()}, {"installMs", stats.value("installMs").toLongLong()},
+                                   {"timingsMs", QJsonObject::fromVariantMap(stats.value("timingsMs").toMap())},
+                                   {"cache", QJsonObject::fromVariantMap(stats.value("cache").toMap())}});
+          self->step();
+        });
+      }
+      steps.push_back([self, rows] {
+        QFile file(QDir(self->work_dir).filePath(QStringLiteral("npc-timings.json")));
+        self->check(file.open(QIODevice::WriteOnly) && file.write(QJsonDocument(*rows).toJson()) > 0,
+                    "npc-timings.json written to " + file.fileName());
+        self->step();
       });
     } else {
       check(false, "unknown scenario " + name);

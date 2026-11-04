@@ -8,6 +8,57 @@ ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
     readonly property var modelInfo: forge.workspace.model || ({})
+
+    signal saveAndConvertRequested()
+    signal convertPreviewRequested(bool force)
+    signal toolRequested(string tool)
+
+    readonly property bool isExternalNonGltf: {
+        if (!modelInfo.path || modelInfo.storage === "managed")
+            return false;
+        const fmt = String(modelInfo.format || "").toLowerCase();
+        return fmt === "blend" || fmt === "fbx" || fmt === "obj";
+    }
+
+    function isPartIsolated(partIndex) {
+        const p = root.parts || [];
+        if (partIndex < 0 || partIndex >= p.length || p.length <= 1 || !p[partIndex].visible)
+            return false;
+        const keep = {};
+        let cur = partIndex;
+        while (cur >= 0 && cur < p.length) {
+            keep[cur] = true;
+            cur = p[cur].parent !== undefined ? p[cur].parent : -1;
+        }
+        let anyHidden = false;
+        for (let i = 0; i < p.length; ++i) {
+            if (!keep[i]) {
+                if (p[i].visible)
+                    return false;
+                anyHidden = true;
+            }
+        }
+        return anyHidden;
+    }
+    function isolatePart(partIndex) {
+        const p = root.parts || [];
+        if (partIndex < 0 || partIndex >= p.length)
+            return;
+        if (root.isPartIsolated(partIndex)) {
+            root.scene.showAllParts();
+            return;
+        }
+        const keep = {};
+        let cur = partIndex;
+        while (cur >= 0 && cur < p.length) {
+            keep[cur] = true;
+            cur = p[cur].parent !== undefined ? p[cur].parent : -1;
+        }
+        for (let i = 0; i < p.length; ++i)
+            root.scene.setPartVisible(i, !!keep[i]);
+        root.scene.selectPart(partIndex);
+    }
+
     Text {
         text: qsTr("Importar personaje")
         color: Theme.text
@@ -39,12 +90,55 @@ ColumnLayout {
                  root.modelInfo.storage !== "managed" && (root.modelInfo.format === "glb" || root.modelInfo.format === "gltf")
         onClicked: root.forge.copySelectedModelToProject()
     }
+    // Automatic / manual BLEND, FBX, OBJ -> GLB conversion controls
+    Button {
+        Layout.fillWidth: true
+        visible: root.isExternalNonGltf && root.forge.projectPath.length === 0
+        highlighted: true
+        enabled: !root.forge.busy
+        text: qsTr("Guardar .sncf y convertir vista previa a GLB…")
+        onClicked: root.saveAndConvertRequested()
+    }
+    Button {
+        Layout.fillWidth: true
+        visible: root.isExternalNonGltf && root.forge.projectPath.length > 0
+        highlighted: true
+        enabled: !root.forge.busy
+        text: root.forge.blenderBusy
+            ? qsTr("Convirtiendo a GLB en Blender…")
+            : qsTr("Convertir a GLB y previsualizar")
+        onClicked: root.convertPreviewRequested(true)
+    }
+    Button {
+        Layout.fillWidth: true
+        visible: root.forge.blenderBusy
+        text: qsTr("Cancelar conversión de Blender")
+        onClicked: root.forge.cancelOperation()
+    }
     Text {
         Layout.fillWidth: true
         visible: root.modelInfo.storage === "managed"
         text: qsTr("Guardado en este proyecto · SHA-256: %1").arg(root.modelInfo.sha256 || "")
         color: Theme.textDim
         wrapMode: Text.WordWrap
+    }
+    Text {
+        Layout.fillWidth: true
+        visible: !!root.modelInfo.sourcePath
+        text: qsTr("Convertido desde: %1 (%2)").arg(root.modelInfo.sourcePath || "")
+              .arg(root.modelInfo.blenderVersion ? "Blender " + root.modelInfo.blenderVersion : (root.modelInfo.sourceFormat || "BLEND"))
+        color: Theme.accent
+        font.pixelSize: Theme.small
+        wrapMode: Text.WrapAnywhere
+    }
+    Button {
+        Layout.fillWidth: true
+        visible: !!root.modelInfo.sourcePath
+        enabled: !root.forge.busy
+        text: qsTr("Reconvertir desde archivo origen (.blend)")
+        onClicked: root.convertPreviewRequested(true)
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("Invalida la vista previa actual y vuelve a exportar el GLB desde el archivo original en Blender.")
     }
     Text {
         Layout.fillWidth: true
@@ -114,8 +208,9 @@ ColumnLayout {
     Text {
         Layout.fillWidth: true
         text: root.scene.hasModel ? qsTr("Renderizado en el visor (Qt Quick 3D RuntimeLoader).")
+            : root.forge.blenderBusy ? (root.forge.statusMessage || qsTr("Convirtiendo modelo a GLB con Blender…"))
             : root.scene.message.length ? root.scene.message
-            : qsTr("Las vistas previas admiten GLB y glTF 2.0. Para FBX/OBJ/BLEND, guarda el proyecto y usa «Convertir modelo seleccionado a GLB» en Blender.")
+            : qsTr("Las vistas previas admiten GLB y glTF 2.0. Al seleccionar un BLEND/FBX/OBJ en un proyecto guardado, se convierte automáticamente a GLB mediante el puente de Blender.")
         color: root.scene.state === "error" ? Theme.warn : Theme.textDim
         wrapMode: Text.WordWrap
     }
@@ -124,7 +219,10 @@ ColumnLayout {
         Text {
             required property var modelData
             Layout.fillWidth: true
-            text: qsTr("Armature %1: %2").arg(modelData.name || qsTr("(sin nombre)")).arg(modelData.joints.join(", "))
+            text: qsTr("Armature %1 (%2 huesos): %3")
+                .arg(modelData.name || qsTr("(sin nombre)"))
+                .arg((modelData.joints || []).length)
+                .arg((modelData.joints || []).join(", "))
             color: Theme.textMuted
             wrapMode: Text.WordWrap
         }
@@ -176,6 +274,14 @@ ColumnLayout {
                     + (partRow.modelData.hiddenBy.length ? qsTr(" · oculta por %1").arg(partRow.modelData.hiddenBy) : "")
                 onClicked: root.scene.selectPart(highlighted ? -1 : partRow.modelData.index)
             }
+            ToolButton {
+                visible: root.parts.length > 1
+                text: root.isPartIsolated(partRow.modelData.index) ? qsTr("Todo") : qsTr("Solo")
+                font.pixelSize: Theme.small
+                onClicked: root.isolatePart(partRow.modelData.index)
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Ver esta malla por separado (aislar)")
+            }
         }
     }
     Text {
@@ -215,7 +321,8 @@ ColumnLayout {
     }
     Button {
         Layout.fillWidth: true
-        text: qsTr("Preparar adaptación · bridge pendiente")
-        enabled: false
+        text: qsTr("Abrir asistente Convertir a Skyrim…")
+        enabled: root.forge.hasProject && !!root.modelInfo.path
+        onClicked: root.toolRequested("skyrim")
     }
 }

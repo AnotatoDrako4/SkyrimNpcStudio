@@ -19,6 +19,8 @@ ColumnLayout {
         text: JSON.stringify({
             npc: root.forge.npc,
             model: root.forge.workspace.model || null,
+            blender: root.forge.workspace.blender || null,
+            skyrimConversion: root.forge.skyrimConversion || null,
             validation: root.forge.validation,
             preview: {
                 state: root.forge.scene.state,

@@ -101,6 +101,9 @@ struct MeshFile {
   // HDT-SMP physics definition named by the root's "HDT Skinned Mesh Physics Object" string
   // extra data (Data-relative, e.g. "meshes\armor\skirt.xml"); empty when the mesh has none.
   std::string physics_xml;
+  // "BODYTRI" string extra data written by BodySlide "Build Morphs", as stored (relative to meshes\, e.g.
+  // "armor\x\shirt.tri"): the TRI RaceMenu's BodyMorph reads in game. Empty when the mesh was built without morphs.
+  std::string body_tri;
 };
 
 // Parses a NIF from memory. Throws sns::Error(Parse) if the file cannot be read at all;

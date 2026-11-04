@@ -145,8 +145,14 @@ ScrollView {
                         elide: Text.ElideRight
                     }
                     StatusBadge {
-                        text: qsTr("Visualizado en 3D ✓")
-                        tone: Theme.ok
+                        // The scene's verdict (real TRI morphs on a visible shape), never the mere existence of a rule.
+                        readonly property var summary: root.studio.scene.bodyMorphSummary
+                        readonly property bool ours: summary.preset === (root.studio.body.assignedPreset().name ?? "")
+                        text: !ours ? qsTr("No mostrado en 3D")
+                              : summary.verdict === "applied" ? qsTr("Morphs reales en 3D")
+                              : summary.verdict === "partial" ? qsTr("En 3D, prendas sin ajustar")
+                              : qsTr("No aplicado en 3D")
+                        tone: !ours ? Theme.textDim : summary.verdict === "applied" ? Theme.ok : summary.verdict === "partial" ? Theme.warn : Theme.error
                     }
                     StatusBadge {
                         text: qsTr("%1 sliders").arg(root.studio.body.assignedPreset().sliders ?? 0)

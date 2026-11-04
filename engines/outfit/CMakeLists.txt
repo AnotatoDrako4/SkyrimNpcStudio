@@ -1,7 +1,8 @@
 add_library(sns_outfit STATIC
   src/outfit_draft.cpp
   src/outfit_presets.cpp
-  src/loose_outfit_indexer.cpp)
+  src/loose_outfit_indexer.cpp
+  src/outfit_fit_doctor.cpp)
 add_library(sns::outfit ALIAS sns_outfit)
 target_include_directories(sns_outfit PUBLIC include)
 target_link_libraries(sns_outfit

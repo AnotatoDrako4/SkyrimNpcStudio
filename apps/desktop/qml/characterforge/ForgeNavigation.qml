@@ -26,6 +26,7 @@ ColumnLayout {
             { key: "library", glyph: "library", label: qsTr("Biblioteca de modelos"), tip: qsTr("Modelos ya importados en tus proyectos"), needsProject: false },
             { key: "ai", glyph: "bulb", label: qsTr("Generar con IA"), tip: qsTr("Imágenes de referencia y generación asistida"), needsProject: true },
             { key: "blender", glyph: "link", label: qsTr("Blender y MCP"), tip: qsTr("Conexión con Blender para convertir modelos"), needsProject: true },
+            { key: "skyrim", glyph: "export", label: qsTr("Convertir a Skyrim"), tip: qsTr("Diagnóstico de compatibilidad y NIF de Skyrim SE validado (recurso estático)"), needsProject: true },
             { key: "skeleton", glyph: "people", label: qsTr("Esqueleto"), tip: qsTr("Huesos y compatibilidad con el esqueleto de Skyrim"), needsProject: true },
             { key: "materials", glyph: "light", label: qsTr("Materiales"), tip: qsTr("Texturas y materiales del modelo"), needsProject: true }
         ] },

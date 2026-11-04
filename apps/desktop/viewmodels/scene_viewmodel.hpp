@@ -36,6 +36,13 @@ class SceneViewModel : public QObject {
   Q_PROPERTY(QVariantMap stats READ stats NOTIFY changed)
   Q_PROPERTY(QVariantList outfitDiagnostics READ outfit_diagnostics NOTIFY changed)
   Q_PROPERTY(QVariantList coveredBodyDiagnostics READ covered_body_diagnostics NOTIFY changed)
+  // BodySlide morph data of every drawn body/outfit shape (rendering::ShapeMorphState): [{partId, group, piece, shape, status,
+  // statusLabel, shown, meshPath, meshProvider, triPath, triProvider, morphs, compatible, applied: [{slider, value, vertices,
+  // maxDisplacement}], appliedCount, missing, maxDisplacement, detail, familyVerdict, familyReason}].
+  Q_PROPERTY(QVariantList bodyMorphs READ body_morphs NOTIFY changed)
+  // {preset, presetMode: "preview"|"assigned"|"none", weight, skeleton, body: {...the visible body's row}, visibleChanged,
+  // hiddenChanged, counts: {status: n}, outfit: [{piece, family, shapes, withMorphs, needsRefit, status, detail}], verdict, label}
+  Q_PROPERTY(QVariantMap bodyMorphSummary READ body_morph_summary NOTIFY changed)
   // Head <-> body skin match of the scene on view (an ESTIMATE of the seam at the neck, see sns::appearance::evaluate_skin_match):
   // {state: "none" | "ready", verdict, message, worst, worstRole, codes, caveats, head: {label, color}, pairs: [{role, label, color,
   // deltaE}]}. "none" while nothing is installed.
@@ -66,6 +73,8 @@ class SceneViewModel : public QObject {
   QVariantMap stats() const { return stats_; }
   QVariantList outfit_diagnostics() const { return outfit_diagnostics_; }
   QVariantList covered_body_diagnostics() const { return covered_body_diagnostics_; }
+  QVariantList body_morphs() const { return body_morphs_; }
+  QVariantMap body_morph_summary() const { return body_morph_summary_.isEmpty() ? QVariantMap{{"verdict", "none"}} : body_morph_summary_; }
   QVariantMap skin_match() const { return skin_match_.isEmpty() ? QVariantMap{{"state", "none"}} : skin_match_; }
   QVector3D center() const { return center_; }
   float radius() const { return radius_; }
@@ -171,6 +180,8 @@ class SceneViewModel : public QObject {
   std::shared_ptr<const rendering::AssetOverlay> portrait_overlay_;
   QVariantList parts_, issues_;
   QVariantList outfit_diagnostics_, covered_body_diagnostics_;
+  QVariantList body_morphs_;
+  QVariantMap body_morph_summary_;
   QVariantMap stats_;
   QVariantMap skin_match_;  // see the skinMatch property; empty until a scene is installed
   QVariantMap visibility_;

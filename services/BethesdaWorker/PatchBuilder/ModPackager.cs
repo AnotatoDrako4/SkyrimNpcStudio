@@ -43,6 +43,26 @@ internal static class ModPackager
             ct);
     }
 
+    public static ExportResponse ExportConvertedOutfit(
+        LoadOrderSession session, CatalogQueries queries, ExportConvertedOutfitRequest request, CancellationToken ct)
+    {
+        return ExportCore(
+            session,
+            request.PluginName,
+            request.OutputDirectory,
+            request.CreateZip,
+            request.Author,
+            request.Description,
+            request.PluginProviders,
+            "converted-outfit",
+            (stagedPlugin, stagedModDir) => ConvertedOutfitBuilder.Build(session, queries, request, stagedPlugin, ct),
+            ct);
+    }
+
+    public static ExportResponse ExportForgeStaticResource(LoadOrderSession session, ExportForgeResourceRequest request, CancellationToken ct) =>
+        ExportCore(session, request.PluginName, request.OutputDirectory, request.CreateZip, request.Author, request.Description, null,
+            "forge-static-resource", (stagedPlugin, stagedModDir) => StaticResourceBuilder.Build(session, request, stagedPlugin, stagedModDir, ct), ct);
+
     public static ExportResponse ExportFaceOverhaul(
         LoadOrderSession session, CatalogQueries queries, ExportFaceOverhaulRequest request, CancellationToken ct)
     {
@@ -265,6 +285,10 @@ internal static class ModPackager
         sb.AppendLine();
         sb.AppendLine(CultureInfo.InvariantCulture, $"Mod generado por Skyrim NPC Studio (worker {WorkerVersion}) el {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC.");
         sb.AppendLine(CultureInfo.InvariantCulture, $"Modo de exportación: `{mode}`.");
+        if (mode == "forge-static-resource")
+        {
+            return BuildStaticResourceReadme(sb, pluginName, description, built, bundledAssets);
+        }
         if (mode == "native-npc-technical")
         {
             sb.AppendLine("NO INSTALAR EN SKYRIM: artefacto técnico de pruebas. FaceGen NIF y FaceTint DDS pendientes; no es un mod listo para jugar.");
@@ -360,6 +384,44 @@ internal static class ModPackager
         return sb.ToString();
     }
 
+    // Character Forge static resource: no NPC, no masters, no FaceGen; only the STAT, its files and how to place it.
+    private static string BuildStaticResourceReadme(StringBuilder sb, string pluginName, string? description, BuiltPatch built,
+        IReadOnlyList<string> bundledAssets)
+    {
+        var modName = Path.GetFileNameWithoutExtension(pluginName);
+        sb.AppendLine("Recurso estático de Character Forge: un STAT nuevo que usa el NIF incluido. No modifica ningún registro existente y no tiene masters.");
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            sb.AppendLine().AppendLine(description);
+        }
+
+        sb.AppendLine().AppendLine("## Contenido").AppendLine();
+        sb.AppendLine(CultureInfo.InvariantCulture, $"- `{pluginName}` — {(built.EslFlagged ? "ESP con flag ESL (no ocupa índice de carga completo)" : "ESP")}, sin masters.");
+        foreach (var record in built.Records)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"- {record.RecordType} `{record.EditorId}` ({record.FormKey}).");
+        }
+
+        foreach (var asset in bundledAssets)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"- `{asset.Replace('\\', '/')}` (exportado y verificado por Character Forge).");
+        }
+
+        sb.AppendLine().AppendLine("## Instalación con Mod Organizer 2").AppendLine();
+        sb.AppendLine("1. Usa un perfil de MO2 de prueba, no el habitual.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"2. *Instalar mod desde archivo* y elige `{modName}.zip`; activa el mod y el plugin `{pluginName}`.");
+        sb.AppendLine("3. En el juego, abre la consola:");
+        foreach (var record in built.Records)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"   - `help {record.EditorId} 4` muestra el FormID del STAT en tu orden de carga;");
+        }
+
+        sb.AppendLine("   - `player.placeatme <FormID>` lo coloca delante del jugador.");
+        sb.AppendLine().AppendLine("El NIF no tiene colisión: se ve, pero se puede atravesar.");
+        sb.AppendLine().AppendLine("Estado: generado y verificado por el estudio; pendiente de comprobar dentro del juego (PENDIENTE_SKYRIM).");
+        return sb.ToString();
+    }
+
     internal static string BuildMetaIni(string? description, string modName)
     {
         var sb = new StringBuilder();
@@ -447,9 +509,12 @@ internal static class ModPackager
     {
         var pending = new List<string>
         {
-            "Probar el mod dentro de Skyrim, en un perfil de MO2 de prueba: que el NPC se ve y se equipa como en la vista previa.",
+            built.Records.Count > 0 && built.Records.All(r => r.RecordType == "STAT")
+                ? "Probar el mod dentro de Skyrim, en un perfil de MO2 de prueba: que el STAT colocado con player.placeatme se ve con su textura, su escala y su orientación."
+                : "Probar el mod dentro de Skyrim, en un perfil de MO2 de prueba: que el NPC se ve y se equipa como en la vista previa.",
         };
-        if (bundledAssets.Count > 0)
+        // A Character Forge static resource bundles its NIF/DDS, not FaceGen: no MO2 priority to check.
+        if (bundledAssets.Count > 0 && !(built.Records.Count > 0 && built.Records.All(r => r.RecordType == "STAT")))
         {
             var above = (built.Faces ?? []).SelectMany(f => f.Provenance.InstallAbove).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             pending.Add(above.Count > 0

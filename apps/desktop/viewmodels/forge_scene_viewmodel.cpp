@@ -243,10 +243,15 @@ void ForgeSceneViewModel::remove_staging(const QString& folder) { remove_below(r
 
 void ForgeSceneViewModel::load(const QString& path_or_url) {
   const auto local = local_path(path_or_url);
+  const auto next_path = local.isEmpty() ? QString() : QFileInfo(local).absoluteFilePath();
+  if (!next_path.isEmpty() && next_path == path_ &&
+      (state_ == QStringLiteral("validating") || state_ == QStringLiteral("loading") || state_ == QStringLiteral("loaded"))) {
+    return;
+  }
   ++operation_;
   if (cancel_) cancel_->store(true);
   cancel_ = std::make_shared<std::atomic<bool>>(false);
-  path_ = local.isEmpty() ? QString() : QFileInfo(local).absoluteFilePath();
+  path_ = next_path;
   inspection_.clear();
   rendered_.clear();
   clear_source();

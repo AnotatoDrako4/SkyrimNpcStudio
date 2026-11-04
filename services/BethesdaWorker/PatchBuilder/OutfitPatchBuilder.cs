@@ -158,12 +158,14 @@ internal static partial class OutfitPatchBuilder
         var standaloneBuilt = new List<BuiltStandaloneOutfit>();
         var records = new List<ExportedRecord>();
         var usedEditorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var releases = new List<(FormKey Copy, uint Mask)>();
         foreach (var (npc, assignment, validation) in resolved)
         {
             var editorId = UniqueEditorId(assignment.OutfitEditorId ?? $"SNS_{npc.EditorID ?? npc.FormKey.ID.ToString("X6")}Outfit", usedEditorIds);
             var outfit = patch.Outfits.AddNew(editorId);
 
             var (itemKeys, outfitPieces) = ResolveOutfitItems(validation.Pieces, assignment.MaterialOverrides);
+            (itemKeys, outfitPieces) = ReleaseAddonSlots(session, queries, patch, request.PluginName, assignment, itemKeys, outfitPieces, usedEditorIds, records, releases);
             outfit.Items = new ExtendedList<IFormLinkGetter<IOutfitTargetGetter>>(
                 itemKeys.Select(k => (IFormLinkGetter<IOutfitTargetGetter>)new FormLink<IOutfitTargetGetter>(k)));
 
@@ -172,6 +174,15 @@ internal static partial class OutfitPatchBuilder
             if (assignment.AlsoSetSleepingOutfit)
             {
                 npcOverride.SleepingOutfit.SetTo(outfit.FormKey);
+            }
+
+            if (assignment.AlsoAddToInventory)
+            {
+                npcOverride.Items ??= new ExtendedList<ContainerEntry>();
+                foreach (var key in itemKeys.Where(k => npcOverride.Items.All(e => e.Item.Item.FormKey != k)))
+                {
+                    npcOverride.Items.Add(new ContainerEntry { Item = new ContainerItem { Item = new FormLink<IItemGetter>(key), Count = 1 } });
+                }
             }
 
             records.Add(new ExportedRecord { FormKey = outfit.FormKey.ToString(), RecordType = "OTFT", EditorId = editorId, Kind = "new" });
@@ -210,10 +221,117 @@ internal static partial class OutfitPatchBuilder
         });
 
         var allowedByNpc = resolved.ToDictionary(
-            r => r.Npc.FormKey, r => NpcSafePatch.AllowedForOutfit(r.Assignment.AlsoSetSleepingOutfit));
+            r => r.Npc.FormKey, r => NpcSafePatch.AllowedForOutfit(r.Assignment.AlsoSetSleepingOutfit, r.Assignment.AlsoAddToInventory));
         var masters = Verify(session, pluginPath, patchKey, built, standaloneBuilt, request.EslFlag, allowedByNpc, out var semanticDiffs, issues);
+        VerifyReleases(session, pluginPath, patchKey, releases);
         return new BuiltPatch(pluginPath, masters, request.EslFlag, records, built, issues, StandaloneOutfits: standaloneBuilt,
             SemanticDiffs: semanticDiffs);
+    }
+
+    /// <summary>Swaps each released piece for a new ARMO whose new ARMA drop the slots; addons that never claimed them are shared with the base armor.</summary>
+    private static (IReadOnlyList<FormKey> ItemKeys, IReadOnlyList<ArmorSummary> Pieces) ReleaseAddonSlots(
+        LoadOrderSession session, CatalogQueries queries, SkyrimMod patch, string pluginName, OutfitAssignment assignment,
+        IReadOnlyList<FormKey> itemKeys, IReadOnlyList<ArmorSummary> pieces, HashSet<string> used, List<ExportedRecord> records,
+        List<(FormKey Copy, uint Mask)> releases)
+    {
+        if (assignment.AddonSlotReleases is not { Count: > 0 })
+        {
+            return (itemKeys, pieces);
+        }
+
+        var keys = itemKeys.ToArray();
+        var summaries = pieces.ToArray();
+        foreach (var release in assignment.AddonSlotReleases)
+        {
+            var at = queries.TryParseAnyFormKey(release.ArmorFormKey, out var key) ? Array.IndexOf(keys, key) : -1;
+            if (at < 0)
+            {
+                throw ReleaseRefused("ReleaseNotInOutfit", $"Armor '{release.ArmorFormKey}' is not a piece of this outfit.", release);
+            }
+
+            if ((summaries[at].SlotMask & release.SlotMask) != 0)
+            {
+                throw ReleaseRefused("ReleaseOfOwnSlot", $"Armor '{release.ArmorFormKey}' occupies these slots itself; only slots claimed by its addons alone can be released.", release);
+            }
+
+            var armor = session.LinkCache.Resolve<IArmorGetter>(key);
+            var name = armor.EditorID ?? key.ID.ToString("X6");
+            var copy = patch.Armors.DuplicateInAsNewRecord(armor);
+            copy.EditorID = UniqueEditorId($"SNS_{name}_Released", used);
+            copy.TemplateArmor.Clear();
+            copy.Armature.Clear();
+            var released = false;
+            foreach (var link in armor.Armature)
+            {
+                var addon = link.TryResolve(session.LinkCache);
+                if (addon?.BodyTemplate is not { } body || ((uint)body.FirstPersonFlags & release.SlotMask) == 0)
+                {
+                    copy.Armature.Add(link.FormKey);
+                    continue;
+                }
+
+                var freed = patch.ArmorAddons.DuplicateInAsNewRecord(addon);
+                freed.EditorID = UniqueEditorId($"SNS_{addon.EditorID ?? addon.FormKey.ID.ToString("X6")}_Released", used);
+                freed.BodyTemplate!.FirstPersonFlags = (BipedObjectFlag)((uint)body.FirstPersonFlags & ~release.SlotMask);
+                copy.Armature.Add(freed.FormKey);
+                records.Add(new ExportedRecord { FormKey = freed.FormKey.ToString(), RecordType = "ARMA", EditorId = freed.EditorID, Kind = "new" });
+                released = true;
+            }
+
+            if (!released)
+            {
+                throw ReleaseRefused("ReleaseWithoutEffect", $"No addon of armor '{release.ArmorFormKey}' claims these slots.", release);
+            }
+
+            records.Add(new ExportedRecord { FormKey = copy.FormKey.ToString(), RecordType = "ARMO", EditorId = copy.EditorID, Kind = "new" });
+            keys[at] = copy.FormKey;
+            summaries[at] = summaries[at] with
+            {
+                FormKey = copy.FormKey.ToString(),
+                FormId = copy.FormKey.ID.ToString("X8"),
+                EditorId = copy.EditorID,
+                OriginPlugin = pluginName,
+                WinningPlugin = pluginName,
+            };
+            releases.Add((copy.FormKey, release.SlotMask));
+        }
+
+        return (keys, summaries);
+    }
+
+    private static WorkerException ReleaseRefused(string code, string message, AddonSlotRelease release) =>
+        new(ErrorCodes.ValidationFailed, "Validation failed; nothing was written.", [Issue.Error(code, message, release.ArmorFormKey)]);
+
+    /// <summary>The written plugin, read back: no addon of a released armor claims the released slots any more.</summary>
+    private static void VerifyReleases(LoadOrderSession session, string pluginPath, ModKey patchKey, IReadOnlyList<(FormKey Copy, uint Mask)> releases)
+    {
+        if (releases.Count == 0)
+        {
+            return;
+        }
+
+        using var written = SkyrimMod.CreateFromBinaryOverlay(new ModPath(patchKey, pluginPath), SkyrimRelease.SkyrimSE,
+            new BinaryReadParameters { MasterFlagsLookup = session.MasterStyles });
+        var armors = written.Armors.ToDictionary(a => a.FormKey);
+        var addons = written.ArmorAddons.ToDictionary(a => a.FormKey);
+        foreach (var (copy, mask) in releases)
+        {
+            if (!armors.TryGetValue(copy, out var armor))
+            {
+                throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: released armor {copy} is absent.");
+            }
+
+            foreach (var link in armor.Armature)
+            {
+                var claimed = addons.TryGetValue(link.FormKey, out var addon)
+                    ? addon.BodyTemplate?.FirstPersonFlags
+                    : session.LinkCache.Resolve<IArmorAddonGetter>(link.FormKey).BodyTemplate?.FirstPersonFlags;
+                if (((uint)(claimed ?? 0) & mask) != 0)
+                {
+                    throw new WorkerException(ErrorCodes.ValidationFailed, $"Verification failed: addon {link.FormKey} of {copy} still claims a released slot.");
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -221,7 +339,7 @@ internal static partial class OutfitPatchBuilder
     /// masters present and in load order, overrides point at the new outfits, items match,
     /// ESL range respected and every reference resolvable.
     /// </summary>
-    private static IReadOnlyList<ModKey> Verify(
+    internal static IReadOnlyList<ModKey> Verify(
         LoadOrderSession session, string pluginPath, ModKey patchKey, IReadOnlyList<BuiltAssignment> built,
         IReadOnlyList<BuiltStandaloneOutfit> standalone, bool esl,
         IReadOnlyDictionary<FormKey, IReadOnlySet<string>> allowedByNpc, out IReadOnlyList<NpcSemanticDiff> semanticDiffs,

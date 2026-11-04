@@ -287,6 +287,12 @@ TEST_CASE("Reference, range and index errors are found in the data", "[gltf]") {
                                       Json::object()});
   CHECK(has(inspect_json(two_parents), "NodeHierarchyInvalid"));
 
+  auto orphan_joint = triangle();
+  orphan_joint["nodes"] = Json::array({Json{{"mesh", 0}}, Json{{"name", "MCH-eye.L"}}});
+  orphan_joint["scenes"] = Json::array({Json{{"nodes", Json::array({0})}}});
+  orphan_joint["skins"] = Json::array({Json{{"name", "SarahRig"}, {"joints", Json::array({0, 1})}}});
+  CHECK(has(inspect_json(orphan_joint), "NodeHierarchyInvalid"));
+
   auto old = triangle();
   old["asset"]["version"] = "1.0";
   CHECK(has(inspect_json(old), "UnsupportedVersion"));

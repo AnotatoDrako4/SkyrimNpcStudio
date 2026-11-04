@@ -32,11 +32,14 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/character_forge_viewmodel.cpp viewmodels/character_forge_viewmodel.hpp
   viewmodels/forge_asset_library.cpp viewmodels/forge_asset_library.hpp
   viewmodels/forge_blender_bridge.cpp viewmodels/forge_blender_bridge.hpp
-  viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp)
+  viewmodels/forge_skyrim_package.cpp viewmodels/forge_skyrim_package.hpp
+  viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp
+  viewmodels/outfit_fit_doctor_viewmodel.cpp viewmodels/outfit_fit_doctor_viewmodel.hpp)
 
 set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py PROPERTIES QT_RESOURCE_ALIAS forge_skyrim.py)
 qt_add_resources(SkyrimNpcStudio forge_bridge_script PREFIX "/forge"
-  FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py)
+  FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -94,6 +97,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/FaceSourceStudio.qml
     qml/charactercreator/SkinMatchCard.qml
     qml/charactercreator/PresetHeadDialog.qml
+    qml/charactercreator/OutfitFitDoctor.qml
     qml/charactercreator/CharacterCreator.qml
     qml/characterforge/AIGenerationPanel.qml
     qml/characterforge/ForgeAppearanceEditor.qml
@@ -117,6 +121,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/characterforge/ModelImporter.qml
     qml/characterforge/NativeNpcEditor.qml
     qml/characterforge/SkeletonEditor.qml
+    qml/characterforge/SkyrimConversionWizard.qml
     qml/characterforge/StatsEditor.qml
   RESOURCES
     qml/shaders/alpha_channel.vert

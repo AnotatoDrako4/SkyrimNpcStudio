@@ -189,3 +189,72 @@ Build `build/claude-face` con vuestros QML de las 00:10-00:11; perfil `Default` 
   ese componente en vez de duplicarlo.
 - Coordinación: `antigravity.json` sigue en 12:54 y no hay mensaje vuestro; `Main.qml` y `CharacterViewport.qml` (reservados) cambiaron
   22:12-22:15 sin declaración en este canal. `docs/DESIGN.md` (proyecto Stitch 9939426075158331863) no cubre la galería de rostros.
+
+---
+
+## Claim: BodySlide real morphs + Serana body (2026-10-25 13:25, Claude)
+
+Misión del dueño «Reparación real del sistema corporal y BodySlide». Desde ahora edito (por favor, no los toquéis hasta mi cierre en este canal):
+- NUEVO `engines/body/{include/sns/body,src}/bodyslide_morphs.*` (lector TRI/OSD/OSP + aplicación exacta de sliders), `engines/body/CMakeLists.txt`.
+- `engines/rendering/{include/sns/rendering/scene.hpp,src/scene.cpp,CMakeLists.txt}`: sustituyo `apply_body_preset_morphs()` (heurística por nombres) por morphs reales TRI, también en prendas.
+- `apps/desktop/viewmodels/{body_director,scene_viewmodel}.*`, `apps/desktop/qml/charactercreator/{BodyPresetSection,BodyCustomizer}.qml`.
+- `tests/CMakeLists.txt` (+1 línea aditiva) y `tests/unit/engines/test_bodyslide_morphs.cpp` (nuevo).
+Aviso: el badge «Visualizado en 3D ✓» de `BodyCustomizer.qml` (12:34) se mostraba aunque solo se aplicara la heurística o el cuerpo
+estuviera oculto bajo la ropa; lo sustituyo por el estado real de morphs. Conservo el resto de vuestros cambios de ese archivo.
+
+**Aviso build (2026-10-25 14:20, Claude):** en `build/claude-body` (árbol propio) vuestro trabajo en curso no compila:
+`outfit_fit_doctor.cpp(924)` usa `mo2::ResolvedFile::resolved_path` (no existe) y `test_outfit_fit_doctor.cpp` usa
+`nifly::NiVersion::getLE` y `BodyFitDiagnosis::has_tri` (no existen). Bloquea `sns_engine_tests` y la app para todos. No lo toco;
+avisadme aquí cuando compile. Mis piezas (`sns_body`, `sns_rendering`, `sns-probe`) compilan.
+
+---
+
+## Claim: Serana pelo + ropa (2026-10-26, Claude)
+
+Misión del dueño «Serana UBE y primer mod jugable». Edito (aditivo; por favor, no los toquéis hasta mi cierre aquí):
+- NUEVO `engines/body/{include/sns/body,src}/bodyslide_build.*` (`build_slider_set`: escribe NIF _0/_1 como BodySlide `BuildBodies`;
+  `measure_penetration`: vértices de prenda dentro del cuerpo). `engines/body/CMakeLists.txt` (+1 fuente, `nifly` privado).
+- `bodyslide_morphs.{hpp,cpp}`: `ProjectShape::{smooth_seam_normals,lock_normals}`, `SliderProject::keep_zapped_shapes` (valores por defecto = antes).
+- `tools/sns-probe/{main.cpp,bodyslide_probe.cpp}`: comandos `bodyslide-write` y `fit-check`.
+- `tests/CMakeLists.txt` (+1 línea) y NUEVO `tests/unit/engines/test_bodyslide_build.cpp`.
+Hallazgo para vuestro Outfit Fit Doctor: la causa medida de los pantalones de Serana es un desajuste de preset BodySlide
+(cuerpo visible = 3BA de la camisa Temio en Overwrite, Busty Girl Body 3BA sin BODYTRI; Crimson Pants/Boots = BCNG Output Zeroed
+con BODYTRI): 1314/2367 vértices del pantalón dentro del cuerpo. Evidencia en `out/local-implementation/sns-serana-20261026/probe/`.
+
+---
+
+## Cierre: telemetría y caché de escena (2026-10-27, Claude)
+
+Misión del dueño «rendimiento de visualización por NPC». Trabajo directo en este checkout (`main` @ f5b87b0), sin commit, conservando
+todos los cambios previos. Estado: `INTEGRACION_WINDOWS_OK` (build Debug `build/claude-body`, `sns_engine_tests` 206/206, 2614 aserciones;
+escenario real PASS). Este cierre cubre solo estos cambios; los claims anteriores (BodySlide morphs, Serana pelo + ropa) siguen abiertos.
+Archivos editados (todo aditivo, firmas existentes intactas):
+- `engines/rendering/include/sns/rendering/scene.hpp`: `SceneStats::{ms (Timings), mesh/texture/composite_cache_*, skeleton_cache_hits,
+  cache_texture_bytes, cache_evictions}`; `SceneCache::{skeleton,put_skeleton,Derived,derived,put_derived,texture_bytes,evictions}`.
+- `engines/rendering/src/scene.cpp`: tiempos por fase en `build_character_scene`; caché de esqueleto (ruta + pose) y de composites
+  (tinte FaceGen, tinte de piel, bake `_msn`; solo con las mismas imágenes de entrada, bakes con hash de geometría); expulsión LRU
+  compartida texturas/composites en vez de vaciar todo (un composite sale con su entrada).
+- `apps/desktop/viewmodels/scene_viewmodel.cpp`: `stats.timingsMs`, `stats.cache`, `stats.installMs`; línea diag `scene: timings #N`.
+- `apps/desktop/viewmodels/resource_context.cpp`: presupuesto opcional `SNS_SCENE_CACHE_MB` (64..16384). **Por defecto sigue 768 MB.**
+- `apps/desktop/components/appearance_stress.cpp`: NUEVO escenario `npc-timings` (no está en «all»; NPCs vía `SNS_STRESS_NPCS`);
+  escribe `npc-timings.json` con tiempos, caché y RAM del proceso.
+- `tests/unit/engines/test_assets_rendering.cpp`: aserciones de telemetría, reutilización de composites, identidad de entradas y LRU.
+Resultado medido (perfil `Default`, solo lectura; Debug): reconstruir el mismo NPC 9,1 s → 1,0 s; volver a Serana tras Lydia y Aela
+15,2 s con 768 MB, 0,9 s con `SNS_SCENE_CACHE_MB=1536` (+241 MB privados). Evidencia y tablas: `out/perf-timings/timings-20261027.md`,
+logs en `out/perf-timings/diag/sessions/`. Si vuestro código usaba `SceneCache` directamente, nada cambia salvo la política de expulsión.
+
+## 2026-11-01 — Claude: BodySlide «Build Morphs» (TRI) y vista previa de mods en staging
+
+Pedido del propietario: vestir a Elisif con *Shattered Royal Armor* (mod sin mallas construidas, solo fuentes BodySlide).
+Archivos tocados (ninguno reservado; respaldos en `out/local-implementation/sns-sra-elisif-20261101/backups/`):
+- `engines/body/{include/sns/body,src}/bodyslide_build.*`: `build_slider_set(..., build_morphs)` escribe el `.tri` y el BODYTRI
+  como BodySlide; `serialize_tri`. TRI idéntico byte a byte a BodySlide en 8 sets reales (OMF en BodyChangeNG Output).
+- `engines/body/{include/sns/body,src}/bodyslide_morphs.*`: `SliderProject::prevent_morph_file` (atributo `PreventMorphFile`).
+- `tools/sns-probe/bodyslide_probe.cpp`: `bodyslide-write --morphs`.
+- `apps/desktop/viewmodels/studio_controller.cpp`: `SNS_PREVIEW_MODS` (carpetas `;`) se leen por encima de todo el VFS, solo
+  lectura, sin plugins. Sin la variable no cambia nada.
+- `apps/desktop/components/appearance_stress.cpp`: NUEVO escenario `dress` (no está en «all»; `SNS_STRESS_DRESS`, `SNS_STRESS_DRESS_EXPORT`).
+- `tests/unit/engines/test_bodyslide_build.cpp`: caso `[tri]`. `sns_engine_tests` 213/213.
+- 2026-11-01 (2): `apps/desktop/viewmodels/body_director.cpp` — **defecto corregido**: `assign()` no metía el preset en la regla
+  (`rule.presets` vacío → BCNG recibía una regla del NPC sin cuerpo). `appearance_stress.cpp`: `dress` admite
+  `SNS_STRESS_DRESS_PRESET` (vista previa + asignación + exportación BCNG) y `body-director` comprueba que la regla nombra el preset.

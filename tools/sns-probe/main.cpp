@@ -26,6 +26,8 @@
 #include "sns/face/facegen.hpp"
 #include "sns/textures/dds.hpp"
 
+int bodyslide_command(int argc, char** argv);  // bodyslide_probe.cpp
+
 namespace {
 
 int usage() {
@@ -34,7 +36,8 @@ int usage() {
       "  sns-probe bsa-list <archive.bsa> [substring]\n"
       "  sns-probe bsa-extract <archive.bsa> <data path> <output file>\n"
       "  sns-probe nif-dump <file.nif> [raw vertex dump directory]\n"
-      "  sns-probe dds-raw <file.dds> <output.rgba>  (mip 0 decoded to RGBA8)\n",
+      "  sns-probe dds-raw <file.dds> <output.rgba>  (mip 0 decoded to RGBA8)\n"
+      "  sns-probe bodyslide-build|bodyslide-match|bodyslide-write|bodyslide-batch|fit-check|tri-apply --... (see bodyslide_probe.cpp)\n",
       stderr);
   return 2;
 }
@@ -122,6 +125,7 @@ int main(int argc, char** argv) {
   if (argc < 3) return usage();
   const std::string_view command = argv[1];
   try {
+    if (command == "bodyslide-build" || command == "bodyslide-match" || command == "bodyslide-write" || command == "bodyslide-batch" || command == "fit-check" || command == "tri-apply") return bodyslide_command(argc, argv);
     if (command == "dds-raw" && argc == 4) {
       const auto bytes = sns::file_io::read_file(sns::text::path_from_utf8(argv[2]), 512ull * 1024 * 1024);
       const auto image = sns::textures::parse_dds(bytes);

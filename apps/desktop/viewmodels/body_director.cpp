@@ -8,6 +8,7 @@
 #include <QUrl>
 #include <algorithm>
 #include <format>
+#include <mutex>
 #include <optional>
 
 #include "diagnostics/crash_diagnostics.hpp"
@@ -16,9 +17,11 @@
 #include "resource_context.hpp"
 #include "sns/assets/asset_resolver.hpp"
 #include "sns/body/body_analysis.hpp"
+#include "sns/body/bodyslide_morphs.hpp"
 #include "sns/body/bodyslide_presets.hpp"
 #include "sns/core/text.hpp"
 #include "sns/ipc/protocol.hpp"
+#include "sns/nif/mesh.hpp"
 
 namespace sns::app {
 namespace method = ipc::protocol::method;
@@ -79,6 +82,9 @@ struct BodyDirector::Library {
   std::optional<body::bcng::Distribution> base;  // the profile's current distribution, when it parses
   std::string base_error;
   std::unique_ptr<body::BodyInspector> inspector;
+  // BodySlide slider sets of the profile, read on the first build check.
+  std::shared_ptr<std::once_flag> project_index_once = std::make_shared<std::once_flag>();
+  body::ProjectIndex project_index;
 };
 
 struct BodyDirector::Analysis {
@@ -112,10 +118,14 @@ void BodyDirector::set_profile(SnapshotPtr snapshot) {
   environment_ = {{"state", snapshot_ ? "loading" : "none"}};
   presets_.clear();
   preset_total_ = 0;
+  // A preset uid belongs to one profile's files: a new profile (or provider order) drops the preview.
+  preview_uid_.clear();
+  preview_form_key_.clear();
   emit environmentChanged();
   emit npcChanged();
   emit presetsChanged();
   emit exportResultChanged();
+  emit previewChanged();
   rebuild_draft();
   if (snapshot_) start_load();
 }
@@ -424,6 +434,7 @@ QString BodyDirector::assign(const QString& uid, bool accept_experimental) {
   // A name shared by several winning files is ambiguous for BCNG: name the file (BOD-04).
   if (library_->presets.duplicate_of(p->name)) ref.file = p->source;
   d.file = qs(ref.file);
+  rule.presets = {std::move(ref)};  // without it BCNG gets a rule that names the NPC and no body
   const QString target_fk = d.form_key;
   rules_.erase(std::remove_if(rules_.begin(), rules_.end(), [&](const auto& r) { return r.id == d.id; }), rules_.end());
   rules_.push_back(std::move(d));
@@ -489,6 +500,147 @@ QVariantMap BodyDirector::assignedPreset(const QString& form_key) const {
       {"family", info->family},
       {"provider", info->provider},
       {"sliders", static_cast<int>(info->sliders.size())}};
+}
+
+void BodyDirector::previewPreset(const QString& uid) {
+  const QString fk = analysis_ ? qs(analysis_->info.form_key) : npc_.value("formKey").toString();
+  if (!uid.isEmpty() && (!library_ || !library_->presets.find(ss(uid)))) return;
+  if (preview_uid_ == uid && (uid.isEmpty() || same_form_key(preview_form_key_, fk))) return;
+  preview_uid_ = uid;
+  preview_form_key_ = uid.isEmpty() ? QString() : fk;
+  diag::record("body", ("preview " + ss(uid.isEmpty() ? QStringLiteral("none") : uid)).c_str());
+  emit previewChanged();
+}
+
+void BodyDirector::setShowOutfit(bool show) {
+  if (show_outfit_ == show) return;
+  show_outfit_ = show;
+  emit previewChanged();
+}
+
+void BodyDirector::setPreviewWeight(double weight) {
+  const double w = weight < 0 ? -1.0 : std::clamp(weight, 0.0, 100.0);
+  if (w == preview_weight_) return;
+  preview_weight_ = w;
+  emit previewChanged();
+}
+
+QVariantMap BodyDirector::preview() const {
+  QVariantMap m{{"formKey", preview_form_key_}, {"presetUid", preview_uid_}, {"showOutfit", show_outfit_}, {"weight", preview_weight_}};
+  if (library_ && !preview_uid_.isEmpty()) {
+    if (const auto* p = library_->presets.find(ss(preview_uid_))) {
+      m["presetName"] = qs(p->name);
+      m["family"] = p->family.family == body::BodyFamily::Other ? qs(p->family.other_name) : qs(std::string(body::family_label(p->family.family)));
+      m["sliders"] = static_cast<int>(p->sliders.size());
+    }
+  }
+  return m;
+}
+
+std::optional<BodyDirector::AssignedPresetInfo> BodyDirector::scene_preset_for(const QString& form_key, bool* is_preview) const {
+  if (is_preview) *is_preview = false;
+  if (library_ && !preview_uid_.isEmpty() && same_form_key(preview_form_key_, form_key)) {
+    if (const auto* p = library_->presets.find(ss(preview_uid_))) {
+      AssignedPresetInfo info;
+      info.uid = qs(p->uid);
+      info.name = qs(p->name);
+      info.family = p->family.family == body::BodyFamily::Other ? qs(p->family.other_name) : qs(std::string(body::family_label(p->family.family)));
+      info.provider = qs(p->provider);
+      info.sliders = p->sliders;
+      if (is_preview) *is_preview = true;
+      return info;
+    }
+  }
+  return assigned_preset_for(form_key);
+}
+
+void BodyDirector::verifyBuilds(const QStringList& mesh_paths) {
+  const int serial = ++build_check_serial_;
+  if (!snapshot_ || !library_ || !library_->context || !library_->context->resolver) {
+    build_check_ = {{"state", "error"}, {"error", tr("No hay un perfil MO2 cargado.")}};
+    emit buildCheckChanged();
+    return;
+  }
+  QStringList unique;
+  for (const auto& p : mesh_paths) {
+    if (!p.isEmpty() && !unique.contains(p, Qt::CaseInsensitive)) unique << p;
+  }
+  build_check_ = {{"state", "checking"}, {"meshes", unique.size()}};
+  emit buildCheckChanged();
+  QThreadPool::globalInstance()->start([self = QPointer<BodyDirector>(this), lib = library_, unique, serial] {
+    diag::record("body", ("verify builds of " + std::to_string(unique.size()) + " meshes").c_str());
+    QVariantList rows;
+    QString error;
+    std::size_t projects = 0;
+    try {
+      // The slider sets of this profile, once per library (the .osp files rarely change while the studio runs).
+      std::call_once(*lib->project_index_once, [&] { lib->project_index = body::load_project_index(lib->snapshot->vfs); });
+      projects = lib->project_index.projects.size();
+      const auto resolver = lib->context->resolver;
+      const body::DataReader read = [resolver](const std::string& path) { return resolver->read(path); };
+      for (const auto& mesh : unique) {
+        const auto path = ss(mesh);
+        QVariantMap row{{"mesh", mesh}};
+        const auto where = resolver->locate(path);
+        row["provider"] = where ? qs(where->kind == assets::AssetLocation::Kind::Archive ? where->provider + " (" + where->archive_provider + ")"
+                                                                                           : where->provider)
+                                : QString();
+        const auto candidates = lib->project_index.for_mesh(path);
+        if (candidates.empty()) {
+          row["verdict"] = QStringLiteral("no-project");
+          row["detail"] = tr("Ningún proyecto BodySlide (.osp) del perfil construye esta malla: no se puede comprobar su base.");
+          rows << row;
+          continue;
+        }
+        const auto bytes = resolver->read(path);
+        if (!bytes) {
+          row["verdict"] = QStringLiteral("error");
+          row["detail"] = tr("La malla no está en el perfil.");
+          rows << row;
+          continue;
+        }
+        const auto built = nif::load_mesh(*bytes, path);
+        std::optional<body::BaseBuildCheck> best;
+        for (const auto* project : candidates) {
+          auto check = body::check_base_build(*project, read, built, path);
+          const auto rank = [](const std::string& v) { return v == "base" ? 0 : v == "preset-baked" ? 1 : v == "not-comparable" ? 2 : 3; };
+          if (!best || rank(check.verdict) < rank(best->verdict) ||
+              (rank(check.verdict) == rank(best->verdict) && check.max_distance < best->max_distance)) {
+            best = std::move(check);
+          }
+        }
+        row["project"] = qs(best->project);
+        row["osp"] = qs(best->osp);
+        row["verdict"] = qs(best->verdict);
+        row["reference"] = qs(best->reference);
+        row["maxDistance"] = best->max_distance;
+        row["shapes"] = static_cast<int>(best->shapes_compared);
+        row["missingData"] = string_list(best->missing_data);
+        row["detail"] = qs(best->detail);
+        row["candidates"] = static_cast<int>(candidates.size());
+        rows << row;
+      }
+    } catch (const std::exception& e) {
+      error = QString::fromUtf8(e.what());
+    }
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, serial, rows, error, projects] {
+          if (!self || serial != self->build_check_serial_) return;
+          self->build_check_ = error.isEmpty()
+                                   ? QVariantMap{{"state", "ready"}, {"rows", rows}, {"projects", static_cast<int>(projects)}}
+                                   : QVariantMap{{"state", "error"}, {"error", error}};
+          emit self->buildCheckChanged();
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+bool BodyDirector::show_outfit_for(const QString&) const { return show_outfit_; }
+
+std::optional<float> BodyDirector::weight_override_for(const QString&) const {
+  if (preview_weight_ < 0) return std::nullopt;
+  return static_cast<float>(preview_weight_);
 }
 
 void BodyDirector::removeRule(const QString& id) {

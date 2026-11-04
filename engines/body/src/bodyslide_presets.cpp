@@ -271,6 +271,10 @@ PresetFileResult parse_slider_presets(std::string_view xml_text, std::string_vie
         };
         if (text::iequals_ascii(*size, "small")) set_endpoint(s.small);
         else if (text::iequals_ascii(*size, "big")) set_endpoint(s.big);
+        else if (text::iequals_ascii(*size, "both")) {  // BodySlide PresetCollection::LoadPresetFile: one value for both sizes
+          set_endpoint(s.small);
+          set_endpoint(s.big);
+        }
         else out.warnings.push_back(std::format("«{}»: tamaño «{}» desconocido en el slider {}.", preset.name, *size, *sname));
       }
     }

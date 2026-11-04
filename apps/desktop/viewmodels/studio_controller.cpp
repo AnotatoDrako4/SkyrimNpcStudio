@@ -362,6 +362,17 @@ void StudioController::loadProfile(const QString& profile) {
         QMetaObject::invokeMethod(self, [self, text, value] { if (self) self->set_progress(text, value); }, Qt::QueuedConnection);
       };
       snap->vfs = mo2::VirtualFileSystem::build(snap->config, snap->profile, snap->game, options);
+      // SNS_PREVIEW_MODS: folders (';'-separated) of mods that are not installed, read above every provider, so a staged
+      // build (meshes, textures) shows in the studio without touching the profile. Read-only like every provider; plugins
+      // in them are not loaded.
+      if (const auto preview = qEnvironmentVariable("SNS_PREVIEW_MODS"); !preview.isEmpty()) {
+        auto providers = snap->vfs.providers();
+        for (const auto& dir : preview.split(';', Qt::SkipEmptyParts)) {
+          const auto root = to_path(QDir::cleanPath(dir.trimmed()));
+          providers.push_back({"[vista previa] " + text::path_to_utf8(root.filename()), root, mo2::ProviderKind::Mod, 0});
+        }
+        snap->vfs = mo2::VirtualFileSystem::build_from(std::move(providers), options);
+      }
       snap->load_order = mo2::resolve_load_order(snap->profile, snap->vfs, snap->game);
       snap->language = mo2::detect_game_language(snap->profile);
       for (const auto* list : {&snap->load_order.active, &snap->load_order.inactive}) {

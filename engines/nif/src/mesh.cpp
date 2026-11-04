@@ -180,6 +180,17 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
       if (!file.physics_xml.empty()) break;
     }
   }
+  auto find_body_tri = [&](auto& refs) {
+    for (const auto& ref : refs) {
+      const auto* data = nif.GetHeader().GetBlock<nifly::NiStringExtraData>(ref);
+      if (data && text::iequals_ascii(data->name.get(), "BODYTRI") && file.body_tri.empty()) file.body_tri = data->stringData.get();
+    }
+  };
+  if (auto* root = nif.GetRootNode()) find_body_tri(root->extraDataRefs);
+  for (auto* shape : nif.GetShapes()) {
+    if (!file.body_tri.empty()) break;
+    find_body_tri(shape->extraDataRefs);
+  }
 
   for (auto* shape : nif.GetShapes()) {
     Shape s;

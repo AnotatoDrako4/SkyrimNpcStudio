@@ -34,6 +34,7 @@ public static class Methods
 
     public const string ValidateOutfit = "outfit.validate";
     public const string ExportOutfitPatch = "export.outfitPatch";
+    public const string ExportConvertedOutfit = "export.convertedOutfit";
     public const string SearchHeadParts = "catalog.searchHeadParts";
     public const string ExportFacePatch = "export.faceOverhaul";
     public const string ExportCompleteNpc = "export.completeOverhaul";
@@ -48,6 +49,7 @@ public static class Methods
     public const string CreationValidateBehavior = "creation.validateBehavior";
     public const string BodyInspectNpcs = "body.inspectNpcs";
     public const string ExportBodyDistribution = "export.bodyDistribution";
+    public const string ExportForgeStaticResource = "export.forgeStaticResource";
 
     /// <summary>Server → client notification emitted while indexing.</summary>
     public const string IndexProgress = "catalog.progress";

@@ -95,6 +95,16 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     public OutfitValidateResponse ValidateOutfit(OutfitValidateRequest request) =>
         Guard(() => state.Read(c => OutfitValidator.Validate(c.Session, c.Queries, request)));
 
+    [JsonRpcMethod(Methods.ExportConvertedOutfit)]
+    public Task<ExportResponse> ExportConvertedOutfit(ExportConvertedOutfitRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() =>
+        {
+            Log.Info($"exporting converted outfit {request.PluginName} to {request.OutputDirectory}");
+            var response = state.Export(c => ModPackager.ExportConvertedOutfit(c.Session, c.Queries, request, ct));
+            Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), masters: {string.Join(", ", response.Masters)}");
+            return response;
+        }), ct);
+
     [JsonRpcMethod(Methods.ExportOutfitPatch)]
     public Task<ExportResponse> ExportOutfitPatch(ExportOutfitPatchRequest request, CancellationToken ct) =>
         Task.Run(() => Guard(() =>
@@ -168,6 +178,16 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             Log.Info($"exporting body distribution {request.ModName} ({request.Files?.Count ?? 0} files) to {request.OutputDirectory}");
             var response = state.Export(c => BodyDistributionPackager.Export(c.Session, request, ct));
             Log.Info($"exported {response.ModDirectory}{(response.ZipPath is null ? "" : " + " + response.ZipPath)}");
+            return response;
+        }), ct);
+
+    [JsonRpcMethod(Methods.ExportForgeStaticResource)]
+    public Task<ExportResponse> ExportForgeStaticResource(ExportForgeResourceRequest request, CancellationToken ct) =>
+        Task.Run(() => Guard(() =>
+        {
+            Log.Info($"exporting Character Forge static {request.EditorId} as {request.PluginName} to {request.OutputDirectory}");
+            var response = state.Export(c => ModPackager.ExportForgeStaticResource(c.Session, request, ct));
+            Log.Info($"exported {response.PluginPath} (sha256 {response.PluginSha256[..12]}…), {response.Files.Count} file(s)");
             return response;
         }), ct);
 

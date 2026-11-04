@@ -2,6 +2,7 @@
 
 #include <QRegularExpression>
 #include <QUrl>
+#include <QTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
@@ -13,6 +14,10 @@
 #include "sns/ipc/protocol.hpp"
 #include "forge_asset_library.hpp"
 #include "forge_blender_bridge.hpp"
+#include "forge_skyrim_package.hpp"
+#include "sns/creation/skyrim_conversion.hpp"
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <chrono>
 #include <algorithm>
 
@@ -61,6 +66,12 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
       blender["version"] = report.value("blenderVersion").toString().toStdString();
       next["blender"] = blender;
       draft_.set_workspace(std::move(next));
+      if (!project_path_.isEmpty()) {
+        try {
+          creation::ForgeProjectStore::save(std::filesystem::path(project_path_.toStdWString()), draft_.current());
+          draft_.mark_saved();
+        } catch (...) {}
+      }
       last_error_.clear();
       preview_selected_model();
     } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
@@ -68,7 +79,59 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
     emit changed();
   });
   connect(blender_bridge_, &ForgeBlenderBridge::failed, this, [this](const QString& message) {
-    busy_ = false; last_error_ = message; emit changed();
+    busy_ = false; last_error_ = message;
+    skyrim_easy_ = false;  // a failed or cancelled Blender job ends the easy chain
+    if (skyrim_.value("state").toString() == QStringLiteral("running")) {
+      skyrim_["state"] = QStringLiteral("error");
+      skyrim_["message"] = message;
+    }
+    emit changed();
+  });
+  connect(blender_bridge_, &ForgeBlenderBridge::progressed, this, [this](const QString& step, double fraction) {
+    skyrim_["step"] = step; skyrim_["fraction"] = fraction; emit changed();
+  });
+  connect(blender_bridge_, &ForgeBlenderBridge::skyrimCompleted, this,
+          [this](const QString& operation, const QString& stage, const QVariantMap& report) {
+    try {
+      auto json = Json::parse(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson().toStdString());
+      const auto inspection = report.value("inspection").toMap();
+      const auto profile = QString::fromStdString(json.value("profile", std::string("static")));
+      QString mapping_error;
+      if (profile == QStringLiteral("skinned")) {
+        // Read-only reference skeleton; without one the classification blocks with noReferenceSkeleton.
+        try {
+          forge_skyrim::attach_skeleton_mapping(json, forge_skyrim::default_reference_skeleton(json));
+        } catch (const std::exception& ex) { mapping_error = QString::fromUtf8(ex.what()); }
+      }
+      const auto classification = creation::skyrim::classify(json, profile.toStdString());
+      QVariantMap next{{"operation", operation}, {"modelKey", skyrim_.value("modelKey")}, {"modelName", skyrim_.value("modelName")},
+                       {"blenderVersion", report.value("blenderVersion")}, {"pynifly", report.value("pynifly")},
+                       {"sourceSha256", report.value("sourceSha256")}, {"totals", inspection.value("totals")},
+                       {"dimensions", inspection.value("dimensions")}, {"prepare", report.value("prepare")},
+                       {"classification", to_map(classification)}, {"profile", profile}, {"skyrimStatus", "PENDIENTE_SKYRIM"}};
+      if (profile == QStringLiteral("skinned")) {
+        next["skeletonMapping"] = to_map(json.value("skeletonMapping", Json::object()));
+        if (!mapping_error.isEmpty()) next["mappingError"] = mapping_error;
+        next["states"] = to_map(creation::skyrim::skinned_states(json, classification, nullptr));
+      }
+      if (operation == QStringLiteral("inspect")) {
+        next["state"] = QStringLiteral("analyzed");
+      } else {
+        const auto packaged = forge_skyrim::package_export(project_path_, stage, json, skyrim_.value("modelName").toString());
+        for (auto it = packaged.begin(); it != packaged.end(); ++it) next[it.key()] = it.value();
+        next["state"] = packaged.value("packaged").toBool() ? QStringLiteral("exported") : QStringLiteral("verificationFailed");
+        next["export"] = report.value("export");
+      }
+      skyrim_ = next;
+      last_error_.clear();
+    } catch (const std::exception& ex) {
+      skyrim_["state"] = QStringLiteral("error");
+      skyrim_["message"] = QString::fromUtf8(ex.what());
+      last_error_ = QString::fromUtf8(ex.what());
+    }
+    busy_ = false;
+    emit changed();
+    if (skyrim_easy_) QTimer::singleShot(0, this, [this] { continue_easy(); });
   });
   connect(worker_, &WorkerClient::stateChanged, this, [this] { set_catalog_ready(false); });
 }
@@ -100,6 +163,7 @@ bool CharacterForgeViewModel::newProject(const QString& name) {
     invalidate_validation();
     has_project_ = true;
     project_path_.clear();
+    skyrim_.clear();  // a conversion result belongs to the session that produced it
     last_error_.clear();
     scene_->reset();
     set_preview({});  // a preview belonged to the previous project's draft
@@ -127,6 +191,7 @@ bool CharacterForgeViewModel::openProject(const QString& folder_or_url) {
     invalidate_validation();
     has_project_ = true;
     project_path_ = QString::fromStdWString(folder.wstring());
+    skyrim_.clear();  // a conversion result belongs to the session that produced it
     last_error_.clear();
     preview_selected_model();
     set_preview({});
@@ -156,6 +221,31 @@ bool CharacterForgeViewModel::saveProject(const QString& folder_or_url) {
       if ((w.contains("model") && managed(w.at("model"))) ||
           (w.contains("library") && std::any_of(w.at("library").begin(), w.at("library").end(), managed)))
         throw std::invalid_argument("Move or copy the complete .sncf folder to keep its managed model assets together");
+    }
+    if (project_path_.isEmpty() && std::filesystem::is_regular_file(folder / "project.json")) {
+      try {
+        const auto existing = creation::ForgeProjectStore::load(folder);
+        const auto existing_lib = existing.workspace.value("library", Json::array());
+        if (existing_lib.is_array() && !existing_lib.empty()) {
+          auto w = draft_.current().workspace;
+          auto lib = w.value("library", Json::array());
+          if (!lib.is_array()) lib = Json::array();
+          const QString folder_qs = QString::fromStdWString(folder.wstring());
+          for (const auto& entry : existing_lib) {
+            if (!entry.is_object() || entry.value("storage", std::string{}) != "managed") continue;
+            const auto rel = QString::fromStdString(entry.value("path", std::string{}));
+            const auto sha = QString::fromStdString(entry.value("sha256", std::string{}));
+            if (forge_assets::resolve_model(folder_qs, rel, sha).isEmpty()) continue;
+            const bool already = std::any_of(lib.begin(), lib.end(), [&](const Json& cur) {
+              return cur.is_object() && cur.value("storage", std::string{}) == "managed" &&
+                     cur.value("sha256", std::string{}) == entry.value("sha256", std::string{});
+            });
+            if (!already && lib.size() < 100) lib.push_back(entry);
+          }
+          w["library"] = lib;
+          draft_.set_workspace(std::move(w));
+        }
+      } catch (...) {}
     }
     creation::ForgeProjectStore::save(folder, draft_.current());
     draft_.mark_saved();
@@ -619,7 +709,8 @@ QVariantMap CharacterForgeViewModel::workspace() const {
 }
 QVariantMap CharacterForgeViewModel::capabilities() const {
   return {{"nativeRecords", true}, {"nativeFaceGen", false}, {"modelPreview", true},
-          {"blenderBridge", true}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false}};
+          {"blenderBridge", true}, {"blenderMcp", false}, {"aiGeneration", false}, {"materialExport", false},
+          {"skyrimStaticNif", true}, {"skyrimArmor", false}, {"skyrimNpc", false}};
 }
 void CharacterForgeViewModel::setWorkspaceValue(const QString& field, const QVariant& value) {
   edit([&] { auto w = draft_.current().workspace; w[ss(field)] = to_json(value); draft_.set_workspace(std::move(w)); }, false);
@@ -650,8 +741,12 @@ void CharacterForgeViewModel::selectModelFile(const QString& url) {
           || qFromLittleEndian<quint32>(data + 16) != 0x4E4F534A || length > 16 * 1024 * 1024 || length > info.size() - 20)
         throw std::invalid_argument("Unsupported or truncated GLB metadata");
       jsonBytes = file.read(length);
-    } else if (extension == "blend" && file.read(7) != "BLENDER") {
-      throw std::invalid_argument("Invalid Blender file header");
+    } else if (extension == "blend") {
+      // Plain "BLENDER", or the zstd (Blender 3+, default when compression is on) and gzip (older) containers.
+      const auto magic = file.read(7);
+      if (!magic.startsWith("BLENDER") && !magic.startsWith(QByteArray("\x28\xB5\x2F\xFD", 4)) &&
+          !magic.startsWith(QByteArray("\x1F\x8B", 2)))
+        throw std::invalid_argument("Invalid Blender file header");
     }
     if (!jsonBytes.isEmpty()) {
       const auto metadata = Json::parse(jsonBytes.toStdString());
@@ -792,6 +887,145 @@ void CharacterForgeViewModel::convertSelectedModelWithBlender() {
     const auto source = QString::fromStdString(model.at("path").get<std::string>());
     blender_bridge_->convert(executable, source);
     busy_ = true; last_error_.clear();
+  } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+  emit changed();
+}
+QString CharacterForgeViewModel::skyrim_model_key() const {
+  if (!has_project_) return {};
+  const auto model = draft_.current().workspace.value("model", Json::object());
+  return QString::fromStdString(model.value("path", std::string{}) + "|" + model.value("sha256", std::string{}));
+}
+QVariantMap CharacterForgeViewModel::skyrim_conversion() const {
+  if (skyrim_.isEmpty() || skyrim_.value("modelKey").toString() != skyrim_model_key()) return {{"state", "none"}, {"easy", skyrim_easy_}};
+  auto result = skyrim_;
+  result["easy"] = skyrim_easy_;
+  return result;
+}
+void CharacterForgeViewModel::createSkyrimModEasy() {
+  if (!has_project_ || busy_) return;
+  skyrim_easy_ = true;
+  start_skyrim_job(QStringLiteral("inspect"));
+  if (!busy_) skyrim_easy_ = false;  // refused before starting (no saved project, model or Blender): lastError says why
+  emit changed();
+}
+void CharacterForgeViewModel::continue_easy() {
+  const auto current = skyrim_conversion();
+  const auto state = current.value("state").toString();
+  if (state == QStringLiteral("analyzed") && current.value("classification").toMap().value("exportable").toBool()) {
+    start_skyrim_job(QStringLiteral("exportNif"));
+    if (!busy_) skyrim_easy_ = false;
+  } else if (state == QStringLiteral("exported")) {
+    packageSkyrimMod();
+    if (!busy_) skyrim_easy_ = false;  // refused before calling the worker (fail() already said why)
+  } else {
+    skyrim_easy_ = false;  // blocking issue, failed verification or error: the panel shows it
+  }
+  emit changed();
+}
+void CharacterForgeViewModel::setSkyrimProfile(const QString& profile) {
+  if (profile == skyrim_profile_ || busy_) return;
+  if (profile != QStringLiteral("static") && profile != QStringLiteral("skinned")) {
+    last_error_ = tr("Perfil de conversión desconocido: %1").arg(profile);
+    emit changed();
+    return;
+  }
+  skyrim_profile_ = profile;
+  skyrim_.clear();  // a result belongs to the profile that produced it
+  emit changed();
+}
+void CharacterForgeViewModel::analyzeSkyrimCompatibility() { start_skyrim_job(QStringLiteral("inspect")); }
+void CharacterForgeViewModel::exportSkyrimNif() { start_skyrim_job(QStringLiteral("exportNif")); }
+void CharacterForgeViewModel::packageSkyrimMod() {
+  if (!has_project_ || busy_) return;
+  const auto current = skyrim_conversion();
+  const auto folder = current.value("folder").toString();
+  if (current.value("state").toString() != QStringLiteral("exported") || folder.isEmpty()) {
+    last_error_ = tr("Exporta primero el NIF validado.");
+    emit changed();
+    return;
+  }
+  const auto fail = [this](const QString& message) {
+    skyrim_easy_ = false;
+    skyrim_["modState"] = QStringLiteral("error");
+    skyrim_["modMessage"] = message;
+    skyrim_.remove("mod");
+    emit changed();
+  };
+  if (current.value("profile").toString() == QStringLiteral("skinned"))
+    return fail(tr("El perfil skinned aún no crea registros (ARMO/ARMA): solo produce el NIF verificado."));
+  if (worker_->state() != WorkerClient::State::Ready) return fail(tr("El worker no está listo: %1").arg(worker_->statusText()));
+  Json request;
+  try {
+    const auto output = project_path_ + QStringLiteral("/exports/skyrim/mods");
+    if (!QDir().mkpath(output)) throw std::runtime_error("Cannot create the mods folder of the project");
+    request = forge_skyrim::mod_request(folder, output);
+  } catch (const std::exception& ex) { return fail(QString::fromUtf8(ex.what())); }
+  skyrim_["modState"] = QStringLiteral("running");
+  skyrim_.remove("mod");
+  skyrim_.remove("modMessage");
+  busy_ = true;
+  last_error_.clear();
+  emit changed();
+  // The answer belongs to this package: a newer export (another folder) drops it.
+  worker_->call(ipc::protocol::method::kExportForgeStaticResource, request, std::chrono::minutes(2), this,
+    [this, folder](const Json& r) {
+      busy_ = false;
+      if (skyrim_.value("folder").toString() != folder) { emit changed(); return; }
+      auto mod = to_map(r);
+      mod["status"] = QStringLiteral("PAQUETE_MO2_VERIFICADO");
+      mod["inGame"] = QStringLiteral("PENDIENTE_SKYRIM");
+      skyrim_["mod"] = mod;
+      skyrim_["modState"] = QStringLiteral("done");
+      skyrim_easy_ = false;
+      emit changed();
+    },
+    [this, folder](int, const QString& error, const Json&) {
+      busy_ = false;
+      if (skyrim_.value("folder").toString() != folder) { emit changed(); return; }
+      skyrim_["modState"] = QStringLiteral("error");
+      skyrim_["modMessage"] = error;
+      skyrim_easy_ = false;
+      emit changed();
+    });
+}
+void CharacterForgeViewModel::start_skyrim_job(const QString& operation) {
+  if (!has_project_ || busy_) return;
+  try {
+    if (project_path_.isEmpty()) throw std::invalid_argument("Save the .sncf project before converting a model for Skyrim");
+    const auto& w = draft_.current().workspace;
+    if (!w.contains("model") || !w.at("model").is_object()) throw std::invalid_argument("Select a model first");
+    if (!w.contains("blender") || !w.at("blender").contains("executable"))
+      throw std::invalid_argument("Detect or select Blender first (Blender y MCP)");
+    const auto& model = w.at("model");
+    auto source = QString::fromStdString(model.at("path").get<std::string>());
+    if (model.value("storage", std::string{}) == "managed") {
+      const auto orig_source = QString::fromStdString(model.value("sourcePath", std::string{}));
+      if (!orig_source.isEmpty() && QFileInfo::exists(orig_source)) {
+        source = orig_source;
+      } else {
+        source = forge_assets::resolve_model(project_path_, source, QString::fromStdString(model.value("sha256", std::string{})));
+      }
+      if (source.isEmpty()) throw std::invalid_argument("The managed model is missing or modified");
+    }
+    if (operation == QStringLiteral("exportNif")) {
+      const auto current = skyrim_conversion();
+      if (current.value("state").toString() == QStringLiteral("none") ||
+          !current.value("classification").toMap().value("exportable").toBool())
+        throw std::invalid_argument("Analyze the model first; export stays disabled while a blocking issue remains");
+    }
+    const auto name = forge_skyrim::slug(QFileInfo(source).completeBaseName());
+    blender_bridge_->runSkyrimJob(QString::fromStdString(w.at("blender").at("executable").get<std::string>()), operation, source,
+                                  QStringLiteral("CharacterForge\\") + name, name + QStringLiteral(".nif"), skyrim_profile_);
+    const auto previous = skyrim_conversion();
+    skyrim_ = previous.value("state").toString() == QStringLiteral("none") ? QVariantMap{} : previous;
+    skyrim_["state"] = QStringLiteral("running");
+    skyrim_["operation"] = operation;
+    skyrim_["step"] = QStringLiteral("start");
+    skyrim_["fraction"] = 0.0;
+    skyrim_["modelKey"] = skyrim_model_key();
+    skyrim_["modelName"] = name;
+    busy_ = true;
+    last_error_.clear();
   } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
   emit changed();
 }

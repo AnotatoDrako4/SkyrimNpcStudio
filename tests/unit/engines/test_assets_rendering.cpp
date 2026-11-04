@@ -413,8 +413,30 @@ TEST_CASE("SMP XML collision shapes and why the game would not draw a shape", "[
   CHECK(sns::rendering::hidden_reason(s, names).find("physics proxy") != std::string::npos);
   s.textures[0] = "textures\\a.dds";
   CHECK(sns::rendering::hidden_reason(s, names).empty());  // textured shapes stay visible even if listed
+  // A listed shape with a transparent material is a proxy too, even with a texture; it would be drawn opaque otherwise.
+  s.material_alpha = 0.0f;
+  CHECK(sns::rendering::hidden_reason(s, names).find("physics proxy") != std::string::npos);
+  CHECK(sns::rendering::hidden_reason(s, {}).empty());  // the XML is the evidence: unlisted, it is not claimed
+  s.material_alpha = 1.0f;
   s.has_shader = false; CHECK(sns::rendering::hidden_reason(s, {}).find("no shader") != std::string::npos);
   s.has_shader = true; s.hidden = true; CHECK(sns::rendering::hidden_reason(s, {}).find("Hidden") != std::string::npos);
+}
+
+TEST_CASE("A head left in a garment mesh is told apart from a piece that really claims the head", "[scene][smp]") {
+  constexpr std::uint32_t kCirclet = 1u << (42 - 30);
+  constexpr std::uint32_t kHead = 1u << (30 - 30);
+  sns::nif::Shape s;
+  s.shader_type = sns::nif::kShaderFaceTint;
+  s.partitions = {130, 143, 230};
+  CHECK_FALSE(sns::rendering::outfit_reference_head_reason(s, kCirclet).empty());
+  CHECK(sns::rendering::outfit_reference_head_reason(s, kCirclet | kHead).empty());  // a helmet with a face
+  s.partitions = {130, 32};
+  CHECK(sns::rendering::outfit_reference_head_reason(s, kCirclet).empty());  // has body parts
+  s.partitions.clear();
+  CHECK(sns::rendering::outfit_reference_head_reason(s, kCirclet).empty());  // no partition evidence
+  s.partitions = {130};
+  s.shader_type = 1;
+  CHECK(sns::rendering::outfit_reference_head_reason(s, kCirclet).empty());  // not a face shape
 }
 
 TEST_CASE("SMP XML parser rejects malformed, DTD and oversized input", "[scene][smp]") {
@@ -580,6 +602,80 @@ TEST_CASE("Synthetic character scene: MO2 resolution, transforms, alpha, helpers
   CHECK(part_named(portrait, "Hair").tint.has_value());
   CHECK(portrait.texture_info.count("textures\\test\\plate_d.dds") == 0);
 
+  // Build telemetry: a second build with the same cache reads and decodes nothing; phase times add up.
+  sns::rendering::SceneOptions cached;
+  cached.cache = std::make_shared<sns::rendering::SceneCache>();
+  const auto cold = sns::rendering::build_character_scene(a, resolver, cached);
+  CHECK(cold.stats.mesh_cache_hits == 0);
+  CHECK(cold.stats.mesh_cache_misses == 2);  // armor + head
+  CHECK(cold.stats.texture_cache_hits == 0);
+  CHECK(cold.stats.texture_cache_misses == cold.stats.textures_loaded + cold.stats.textures_missing);
+  const auto warm = sns::rendering::build_character_scene(a, resolver, cached);
+  CHECK(warm.stats.mesh_cache_hits == 2);
+  CHECK(warm.stats.mesh_cache_misses == 0);
+  CHECK(warm.stats.texture_cache_misses == 0);
+  CHECK(warm.stats.texture_cache_hits == cold.stats.textures_loaded);
+  CHECK(warm.stats.ms.mesh_read == 0.0);
+  CHECK(warm.stats.ms.texture_decode == 0.0);
+  // Composites (FaceGen tint, _msn bake) are reused from the very same decoded inputs, with identical results.
+  CHECK(cold.stats.composite_cache_hits == 0);
+  CHECK(cold.stats.composite_cache_misses >= 2);
+  CHECK(warm.stats.composite_cache_misses == 0);
+  CHECK(warm.stats.composite_cache_hits == cold.stats.composite_cache_misses);
+  CHECK(warm.textures.at(head_part.diffuse) == cold.textures.at(head_part.diffuse));
+  CHECK(pixel(*warm.textures.at(head_part.diffuse), 0) == pixel(*scene.textures.at(head_part.diffuse), 0));
+  CHECK(part_named(warm, "MsnSkin").msn_agreement == part_named(cold, "MsnSkin").msn_agreement);
+  CHECK(pixel(*warm.textures.at(part_named(warm, "MsnSkin").normal), 5) == pixel(*scene.textures.at(msn_part.normal), 5));
+  // A derived entry answers only for the exact same input images: an equal-looking copy is another input.
+  {
+    sns::rendering::SceneCache store;
+    auto input = std::make_shared<const sns::textures::DdsImage>(*scene.textures.at("textures\\test\\head_d.dds"));
+    auto copy = std::make_shared<const sns::textures::DdsImage>(*input);
+    sns::rendering::SceneCache::Derived entry;
+    entry.inputs = {input};
+    entry.image = input;
+    store.put_derived("k", entry);
+    CHECK(store.derived("k", {input}).has_value());
+    CHECK_FALSE(store.derived("k", {copy}).has_value());
+    CHECK_FALSE(store.derived("other", {input}).has_value());
+    store.clear();
+    CHECK_FALSE(store.derived("k", {input}).has_value());
+  }
+  // Budget: least recently used first (a lookup refreshes), and a composite leaves with its input.
+  {
+    const auto image = [](std::uint8_t v) {
+      auto img = std::make_shared<sns::textures::DdsImage>();
+      img->width = img->height = 4;
+      img->data.assign(64, v);  // 64 bytes each
+      return std::shared_ptr<const sns::textures::DdsImage>(img);
+    };
+    sns::rendering::SceneCache store(64 * 3);
+    const auto a_img = image(1), b_img = image(2), c_img = image(3);
+    store.put_texture("a", {a_img, "BC7", {}});
+    store.put_texture("b", {b_img, "BC7", {}});
+    store.put_texture("c", {c_img, "BC7", {}});
+    CHECK(store.texture("a").has_value());  // a is now newer than b
+    sns::rendering::SceneCache::Derived from_b;
+    from_b.inputs = {b_img};
+    store.put_derived("b|tint", from_b);    // no image: costs nothing, but depends on b
+    store.put_texture("d", {image(4), "BC7", {}});
+    CHECK_FALSE(store.texture("b").has_value());  // the least recently used went
+    CHECK_FALSE(store.derived("b|tint", {b_img}).has_value());
+    CHECK(store.texture("a").has_value());
+    CHECK(store.texture("c").has_value());
+    CHECK(store.texture("d").has_value());
+    CHECK(store.texture_bytes() == 64 * 3);
+    CHECK(store.evictions() == 1);
+    store.put_texture("a", {image(5), "BC7", {}});  // replacing a key does not evict anything else
+    CHECK(store.texture_bytes() == 64 * 3);
+    CHECK(store.evictions() == 1);
+  }
+  const auto& t = cold.stats.ms;
+  CHECK(t.total >= t.skeleton + t.geometry + t.textures + t.composite);
+  CHECK(t.geometry >= t.mesh_read);
+  CHECK(t.textures >= t.texture_decode);
+  CHECK(scene.stats.mesh_cache_misses == 2);  // no cache: every read counts as a miss
+
   // Missing XML is a dependency warning; the NIF still loads in its reference pose.
   std::filesystem::remove(dir.path() / "Base Mod/meshes/test/armor.xml");
   const auto missing_vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}, {"Override Mod", dir.path() / "Override Mod"}});
@@ -679,6 +775,42 @@ TEST_CASE("AssetResolver locates assets packed inside BSA archives", "[assets]")
   CHECK_FALSE(resolver.locate("meshes/nonexistent.nif").has_value());
 }
 
+TEST_CASE("An equipped piece with no armor addon for the NPC's race draws nothing, keeps its slots and says so", "[rendering][outfit]") {
+  sns::test::TempDir dir;
+  dir.write("Base Mod/meshes/test/skin_body.nif", make_test_nif("SkinBody"));
+  dir.write("Base Mod/meshes/test/skin_hands.nif", make_test_nif("SkinHands"));
+  const auto vfs = sns::mo2::VirtualFileSystem::build_from({{"Base Mod", dir.path() / "Base Mod"}});
+  sns::assets::AssetResolver resolver(vfs, {});
+
+  sns::rendering::Appearance a;
+  a.npc_form_key = "000001:Test.esp";
+  // The worker sends no addons when no ARMA of the armor lists the race (Serana on 00UBE_NordRace in vanilla robes).
+  a.pieces.push_back({"000200:Test.esp", "Royal Robes", "outfit", 1u << (32 - 30), {}});
+  a.pieces.push_back({"000001:Skyrim.esm", "Skin Body", "skin", 1u << (32 - 30),
+                      {{"000002:Skyrim.esm", "meshes\\test\\skin_body.nif", false, 1u << (32 - 30)}}});
+  a.pieces.push_back({"000003:Skyrim.esm", "Skin Hands", "skin", 1u << (33 - 30),
+                      {{"000004:Skyrim.esm", "meshes\\test\\skin_hands.nif", false, 1u << (33 - 30)}}});
+
+  const auto scene = sns::rendering::build_character_scene(a, resolver, {});
+
+  REQUIRE(scene.outfit_diagnostics.size() == 1);
+  const auto& piece = scene.outfit_diagnostics[0];
+  CHECK(piece.equipped);
+  CHECK(piece.no_addon_for_race);
+  CHECK(piece.reason.find("no armor addon") != std::string::npos);
+  CHECK(std::any_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) {
+    return i.code == "PieceNoAddonForRace" && i.severity == "warning" && i.message.find("Royal Robes") != std::string::npos;
+  }));
+  // The body stays hidden under the slot, and the reason names the piece that draws nothing.
+  const auto body = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "SkinBody"; });
+  REQUIRE(body != scene.parts.end());
+  CHECK_FALSE(body->shown_by_default);
+  CHECK(body->hidden_reason.find("no armor addon") != std::string::npos);
+  const auto hands = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) { return p.shape_name == "SkinHands"; });
+  REQUIRE(hands != scene.parts.end());
+  CHECK(hands->shown_by_default);
+}
+
 TEST_CASE("Outfit visibility diagnostics track unequipped pieces and covered skin parts", "[rendering][outfit]") {
   sns::test::TempDir dir;
   dir.write("Base Mod/meshes/test/cuirass.nif", make_test_nif("CuirassShape"));
@@ -748,61 +880,9 @@ TEST_CASE("Outfit visibility diagnostics track unequipped pieces and covered ski
   CHECK(hands_part->shown_by_default);
 }
 
-TEST_CASE("apply_body_preset_morphs deforms vertices based on bone influences and sliders", "[scene][bodymorph]") {
-  sns::nif::Shape shape;
-  shape.name = "FemaleBody";
-  shape.positions = {
-      {0.0f, 10.0f, 110.0f},   // breast area
-      {0.0f, -12.0f, 95.0f},   // butt area
-      {0.0f, 0.0f, 60.0f}      // thigh/leg area
-  };
-  shape.normals = {
-      {0.0f, 1.0f, 0.0f},
-      {0.0f, -1.0f, 0.0f},
-      {0.0f, 0.0f, -1.0f}
-  };
-  shape.indices = {0, 1, 2};
-  shape.uvs = {{0, 0}, {1, 0}, {0.5f, 1}};
-  shape.skinned = true;
-  shape.bones = {"NPC L Breast", "NPC Butt", "NPC L Thigh"};
-  shape.influences = {
-      {{{0, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}},
-      {{{1, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}},
-      {{{2, 0, 0, 0}}, {{1.0f, 0.0f, 0.0f, 0.0f}}}
-  };
-
-  std::vector<sns::rendering::BodySliderSetting> sliders = {
-      {"Breasts", 20.0f, 100.0f},
-      {"Butt", 50.0f, 80.0f}
-  };
-
-  const auto initial_positions = shape.positions;
-
-  // Apply at weight 100 (big slider values)
-  sns::rendering::apply_body_preset_morphs(shape, sliders, 100.0f);
-
-  // Breast vertex displaced forward in +Y
-  CHECK(shape.positions[0].y > initial_positions[0].y);
-  // Butt vertex displaced backward in -Y
-  CHECK(shape.positions[1].y < initial_positions[1].y);
-
-  // Normals should be updated and tangents ensured
-  CHECK(shape.normals.size() == shape.positions.size());
-  CHECK(shape.tangents.size() == shape.positions.size());
-  CHECK(shape.bitangents.size() == shape.positions.size());
-
-  // Test weight interpolation: at weight 0, deformation is smaller than at weight 100
-  auto shape_weight0 = shape;
-  shape_weight0.positions = initial_positions;
-  sns::rendering::apply_body_preset_morphs(shape_weight0, sliders, 0.0f);
-
-  const float disp_y_w100 = shape.positions[0].y - initial_positions[0].y;
-  const float disp_y_w0 = shape_weight0.positions[0].y - initial_positions[0].y;
-  CHECK(disp_y_w100 > disp_y_w0);
-  CHECK(disp_y_w0 > 0.0f);
-}
-
-TEST_CASE("build_character_scene applies body preset options to skin parts", "[scene][bodymorph]") {
+TEST_CASE("build_character_scene never claims a body preset it could not apply with real morphs", "[scene][bodymorph]") {
+  // A body built without BodySlide "Build Morphs" (no BODYTRI): the old viewer bent it by slider names and said
+  // "aplicado"; now it is left exactly as it is, labelled missing-tri, and the scene warns instead of claiming success.
   sns::test::TempDir dir;
   sns::rendering::Appearance a;
   a.npc_form_key = "000A2C8E:Skyrim.esm";
@@ -825,6 +905,7 @@ TEST_CASE("build_character_scene applies body preset options to skin parts", "[s
   const auto vfs = sns::mo2::VirtualFileSystem::build_from({{"Mod", dir.path() / "Mod"}});
   sns::assets::AssetResolver resolver(vfs, {});
 
+  const auto plain = sns::rendering::build_character_scene(a, resolver, {});
   sns::rendering::SceneOptions options;
   options.body_preset = sns::rendering::BodyPresetOption{
       "Curvy Beauty",
@@ -834,17 +915,18 @@ TEST_CASE("build_character_scene applies body preset options to skin parts", "[s
 
   const auto scene = sns::rendering::build_character_scene(a, resolver, options);
   REQUIRE_FALSE(scene.parts.empty());
+  const auto& before = part_named(plain, "BaseBody");
+  const auto& after = part_named(scene, "BaseBody");
+  CHECK(after.label == "Skin Body");           // no "(preset)" suffix on an unchanged mesh
+  CHECK(after.vertices == before.vertices);     // not a single vertex moved
+  REQUIRE(scene.body_morphs.size() == 1);
+  CHECK(scene.body_morphs[0].status == "missing-tri");
 
-  const auto skin_part = std::find_if(scene.parts.begin(), scene.parts.end(), [](const auto& p) {
-    return p.group == "skin";
-  });
-  REQUIRE(skin_part != scene.parts.end());
-  CHECK(skin_part->label == "Skin Body (Curvy Beauty)");
-
-  const bool has_issue = std::any_of(scene.issues.begin(), scene.issues.end(), [](const auto& i) {
-    return i.code == "BodyPresetApplied" && i.subject == "Curvy Beauty";
-  });
-  CHECK(has_issue);
+  const auto has = [&](const char* code) {
+    return std::any_of(scene.issues.begin(), scene.issues.end(), [&](const auto& i) { return i.code == code; });
+  };
+  CHECK_FALSE(has("BodyPresetApplied"));
+  CHECK(has("BodyPresetNotApplied"));
 }
 
 

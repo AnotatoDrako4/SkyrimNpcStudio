@@ -35,6 +35,8 @@ inline constexpr const char* kCreationValidateBehavior = "creation.validateBehav
 // 1.7 (Universal Body Director): body facts of NPCs and the packaging of a generated body distribution.
 inline constexpr const char* kBodyInspectNpcs = "body.inspectNpcs";
 inline constexpr const char* kExportBodyDistribution = "export.bodyDistribution";
+// Character Forge: a verified static resource package as an MO2 mod with an ESL plugin holding one STAT.
+inline constexpr const char* kExportForgeStaticResource = "export.forgeStaticResource";
 // Server -> client notification.
 inline constexpr const char* kIndexProgress = "catalog.progress";
 // Client -> server notification understood by StreamJsonRpc (same as LSP).

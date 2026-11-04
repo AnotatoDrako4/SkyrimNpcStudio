@@ -153,10 +153,19 @@ class Parser {
       e.attributes.emplace_back(std::move(key), unescape(raw));
       pos_ = end + 1;
     }
-    // Content: child elements; text and CDATA are skipped.
+    // Content: child elements and character data.
     for (;;) {
       const auto lt = s_.find('<', pos_);
       if (lt == std::string_view::npos) fail(std::format("elemento '{}' sin cerrar", e.name));
+      if (lt > pos_) {
+        // Text used to be skipped: a stray '&' in it must not turn a file that parsed before into an error, so it is kept raw.
+        const auto raw = s_.substr(pos_, lt - pos_);
+        try {
+          e.text += unescape(raw);
+        } catch (const Error&) {
+          e.text += raw;
+        }
+      }
       pos_ = lt;
       if (peek("</")) {
         pos_ += 2;
@@ -168,7 +177,11 @@ class Parser {
         return e;
       }
       if (peek("<!--")) skip_until("-->", "comentario");
-      else if (peek("<![CDATA[")) skip_until("]]>", "CDATA");
+      else if (peek("<![CDATA[")) {
+        const auto start = pos_ + 9;
+        skip_until("]]>", "CDATA");
+        e.text += s_.substr(start, pos_ - 3 - start);
+      }
       else if (peek("<?")) skip_until("?>", "instrucción de procesamiento");
       else e.children.push_back(element(depth + 1));
     }

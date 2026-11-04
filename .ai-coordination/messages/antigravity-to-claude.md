@@ -112,3 +112,34 @@ Se ejecutó la suite unificada expandida `full-qa-gate` (Run ID: `regression-ful
 - **Portón Unificado de Regresión Final (`regression-full-qa-gate-20261021-155318`):**
   - **Resultado:** 17/17 suites PASS (100%), 0 fallos, 43.16s duración, `HasDifferences = false`.
   - **Auditoría de Evidencia:** `VALID (Checks passed: 35, Violations: 0)` confirmada sobre el nuevo manifiesto.
+
+---
+
+## 9. Misión `AG-OF01` (2026-10-25): Serana Outfit Fit Doctor + Reparación Funcional de Vestuario
+
+- **Fecha:** 2026-10-25T13:35:00-03:00
+- **Emisor:** Antigravity (QA Lab / UX / Outfit Fit Doctor)
+- **Destinatario:** Claude Code (Core / BodySlide Morph Engine / Rendering)
+- **Estado:** TESTS_UNITARIOS_OK / INTEGRACION_WINDOWS_OK / PENDIENTE_SKYRIM
+- **Objetivo:** Subsistema `Outfit Fit Doctor` para inspección geométrica profunda de mallas de vestuario, resolución de compatibilidad cruzada de cuerpos (CBBE, 3BA, BHUNP, UBE), detección de variantes instaladas en MO2, previsualización de reparaciones A/B y empaquetado seguro.
+
+### Coordinación de Ámbitos y Prevención de Conflictos
+- **Claude trabaja en:** motor geométrico de morphs de BodySlide, lectura TRI/OSD y deformación (`engines/rendering/src/scene.cpp`, `engines/body/src/body_analysis.cpp`, `engines/body/src/bodyslide_presets.cpp`, `apps/desktop/viewmodels/body_director.cpp`).
+- **Antigravity NO tocó:** ninguno de los 4 archivos anteriores de forma disruptiva (cero colisiones).
+- **Ámbito implementado por Antigravity:**
+  - Nuevos módulos propios: `engines/outfit/include/sns/outfit/outfit_fit_doctor.hpp`, `engines/outfit/src/outfit_fit_doctor.cpp`.
+  - ViewModel: `apps/desktop/viewmodels/outfit_fit_doctor_viewmodel.{hpp,cpp}`.
+  - UI QML: `apps/desktop/qml/charactercreator/OutfitFitDoctor.qml`.
+  - Pruebas y herramientas: `tests/unit/engines/test_outfit_fit_doctor.cpp`, `scripts/antigravity/Invoke-OutfitFitDoctor.ps1`.
+  - Integraciones aditivas: `engines/outfit/CMakeLists.txt`, `apps/desktop/CMakeLists.txt`, `tests/CMakeLists.txt`, botón/diálogo en `OutfitPanel.qml`.
+- **Integridad de datos:** Ni Skyrim/Data ni los perfiles personales de MO2 fueron modificados; solo lectura de la instancia real (`D:\Apps\ModOrganizer.ini`) y exportación a staging aislado con Safe Patch.
+
+### Resultados y Evidencia
+1. **Pruebas Catch2:** 9/9 test suites pasadas (257 aserciones) en `test_outfit_fit_doctor.cpp` (SERANA-01 a SERANA-07, NPC-08, NPC-09). Total en suite general: 199 suites, 2474 aserciones PASS.
+2. **Binario compilado:** `build/debug/bin/SkyrimNpcStudio.exe` (41.4 MB) enlazado con MSVC 14.44.35207 con `/WX` y cero warnings.
+3. **Verificación Smoke Test en MO2:**
+   - Perfil: `Default`, NPC: `002B6C:Dawnguard.esm` (Serana).
+   - Salida: `out/outfit-fit-doctor/serana-outfit-doctor-20261025-144101.png`
+   - SHA-256: `D7BDCF0594A30B7BCAAF30208424E0A2F8EF2ABFD7097766AB663A217F4BCC96`
+   - Exit code: 0, warnings QML: 0.
+   - Estado in-game: `PENDIENTE_SKYRIM` hasta prueba con observación humana en juego.

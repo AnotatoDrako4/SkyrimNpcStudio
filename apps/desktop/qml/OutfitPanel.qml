@@ -73,6 +73,21 @@ ScrollView {
         }
     }
 
+    Dialog {
+        id: fitDoctorDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(Theme.px(840), Overlay.overlay ? Overlay.overlay.width - 40 : Theme.px(840))
+        height: Math.min(Theme.px(700), Overlay.overlay ? Overlay.overlay.height - 40 : Theme.px(700))
+        title: qsTr("Outfit Fit Doctor — Diagnóstico y Reparación de Vestuario")
+        standardButtons: Dialog.Close
+
+        OutfitFitDoctor {
+            anchors.fill: parent
+            studio: root.studio
+        }
+    }
+
     ColorDialog {
         id: materialColorDialog
         title: qsTr("Elegir color de tinte para la pieza")
@@ -770,6 +785,13 @@ ScrollView {
                         }
                     }
                 }
+            }
+
+            Button {
+                Layout.fillWidth: true
+                text: qsTr("🩺 Abrir Outfit Fit Doctor (Inspección y Reparación Avanzada)")
+                highlighted: true
+                onClicked: fitDoctorDialog.open()
             }
 
             // Botones de acción principales

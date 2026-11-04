@@ -1,0 +1,329 @@
+{
+ "blenderVersion": "5.2.3 LTS",
+ "export": {
+  "bytes": 2879,
+  "log": [],
+  "objects": [
+   "Goblet"
+  ],
+  "operator": "export_scene.pynifly",
+  "output": "Data\\meshes\\CharacterForge\\goblet\\goblet.nif",
+  "result": [],
+  "settings": {
+   "blender_xf": false,
+   "export_animations": false,
+   "export_modifiers": false,
+   "export_pose": false,
+   "intuit_defaults": false,
+   "preserve_hierarchy": false,
+   "rename_bones": true,
+   "target_game": "SKYRIMSE",
+   "write_tris": false
+  },
+  "sha256": "9B65C070EE672EC2A1790E7D5886B2FA4F82F1884124528AAA7237D74755926D"
+ },
+ "inspection": {
+  "armatures": [],
+  "boundsMax": [
+   4.0,
+   4.0,
+   16.8
+  ],
+  "boundsMin": [
+   -4.0,
+   -4.0,
+   -2.8
+  ],
+  "dimensions": [
+   8.0,
+   8.0,
+   19.6
+  ],
+  "duplicates": [],
+  "images": [
+   {
+    "bytes": 2742,
+    "colorspace": "sRGB",
+    "exists": true,
+    "fileFormat": "PNG",
+    "filepath": "<fixture>/goblet_diffuse.png",
+    "height": 64,
+    "name": "goblet_diffuse",
+    "packed": false,
+    "source": "FILE",
+    "width": 64
+   }
+  ],
+  "materials": [
+   {
+    "alpha": false,
+    "images": [
+     {
+      "image": "goblet_diffuse",
+      "role": "diffuse"
+     }
+    ],
+    "name": "GobletBrass",
+    "pynifly": null,
+    "shader": "ShaderNodeBsdfPrincipled",
+    "unsupportedChannels": [],
+    "useNodes": true
+   }
+  ],
+  "meshes": [
+   {
+    "armature": null,
+    "boundaryEdges": 0,
+    "boundsMax": [
+     4.0,
+     4.0,
+     16.8
+    ],
+    "boundsMin": [
+     -4.0,
+     -4.0,
+     -2.8
+    ],
+    "customNormals": false,
+    "data": "Cylinder",
+    "edges": 72,
+    "faces": 26,
+    "location": [
+     0.0,
+     0.0,
+     7.0
+    ],
+    "looseVertices": 0,
+    "materials": [
+     "GobletBrass"
+    ],
+    "modifiers": [],
+    "name": "Goblet",
+    "negativeScale": false,
+    "ngons": 2,
+    "nonManifoldEdges": 0,
+    "parent": null,
+    "rotationEuler": [
+     0.0,
+     -0.0,
+     0.0
+    ],
+    "scale": [
+     1.0,
+     1.0,
+     1.4
+    ],
+    "shapeKeys": [],
+    "triangles": 92,
+    "unnormalizedVertices": 0,
+    "uvLayers": [
+     "UVMap"
+    ],
+    "vertexGroups": 0,
+    "vertices": 48,
+    "verticesOver4Influences": 0,
+    "weightedVertices": 0,
+    "zeroAreaFaces": 0
+   }
+  ],
+  "objectTypes": [
+   "MESH"
+  ],
+  "objects": 1,
+  "totals": {
+   "armatures": 0,
+   "images": 1,
+   "materials": 1,
+   "meshes": 1,
+   "shapeKeys": 0,
+   "triangles": 92,
+   "vertices": 48
+  },
+  "unitScale": 1.0
+ },
+ "operation": "exportNif",
+ "prepare": {
+  "textures": {
+   "folder": "Data\\textures\\CharacterForge\\goblet",
+   "missing": [],
+   "staged": [
+    {
+     "colorspace": "sRGB",
+     "height": 64,
+     "image": "goblet_diffuse",
+     "nifPath": "textures\\characterforge\\goblet\\goblet_diffuse.dds",
+     "packed": false,
+     "png": "Data\\textures\\CharacterForge\\goblet\\goblet_diffuse.png",
+     "width": 64
+    }
+   ]
+  },
+  "transforms": {
+   "applied": [
+    "Goblet"
+   ],
+   "skipped": []
+  }
+ },
+ "prepared": {
+  "armatures": [],
+  "boundsMax": [
+   4.0,
+   4.0,
+   16.8
+  ],
+  "boundsMin": [
+   -4.0,
+   -4.0,
+   -2.8
+  ],
+  "dimensions": [
+   8.0,
+   8.0,
+   19.6
+  ],
+  "duplicates": [],
+  "images": [
+   {
+    "bytes": 2742,
+    "colorspace": "sRGB",
+    "exists": true,
+    "fileFormat": "PNG",
+    "filepath": "<fixture>/goblet_diffuse.png",
+    "height": 64,
+    "name": "goblet_diffuse",
+    "packed": false,
+    "source": "FILE",
+    "width": 64
+   }
+  ],
+  "materials": [
+   {
+    "alpha": false,
+    "images": [
+     {
+      "image": "goblet_diffuse",
+      "role": "diffuse"
+     }
+    ],
+    "name": "GobletBrass",
+    "pynifly": null,
+    "shader": "ShaderNodeBsdfPrincipled",
+    "unsupportedChannels": [],
+    "useNodes": true
+   }
+  ],
+  "meshes": [
+   {
+    "armature": null,
+    "boundaryEdges": 0,
+    "boundsMax": [
+     4.0,
+     4.0,
+     16.8
+    ],
+    "boundsMin": [
+     -4.0,
+     -4.0,
+     -2.8
+    ],
+    "customNormals": false,
+    "data": "Cylinder",
+    "edges": 72,
+    "faces": 26,
+    "location": [
+     0.0,
+     0.0,
+     7.0
+    ],
+    "looseVertices": 0,
+    "materials": [
+     "GobletBrass"
+    ],
+    "modifiers": [],
+    "name": "Goblet",
+    "negativeScale": false,
+    "ngons": 2,
+    "nonManifoldEdges": 0,
+    "parent": null,
+    "rotationEuler": [
+     0.0,
+     -0.0,
+     0.0
+    ],
+    "scale": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "shapeKeys": [],
+    "triangles": 92,
+    "unnormalizedVertices": 0,
+    "uvLayers": [
+     "UVMap"
+    ],
+    "vertexGroups": 0,
+    "vertices": 48,
+    "verticesOver4Influences": 0,
+    "weightedVertices": 0,
+    "zeroAreaFaces": 0
+   }
+  ],
+  "objectTypes": [
+   "MESH"
+  ],
+  "objects": 1,
+  "totals": {
+   "armatures": 0,
+   "images": 1,
+   "materials": 1,
+   "meshes": 1,
+   "shapeKeys": 0,
+   "triangles": 92,
+   "vertices": 48
+  },
+  "unitScale": 1.0
+ },
+ "pynifly": {
+  "available": true,
+  "exportOperator": "export_scene.pynifly",
+  "module": "io_scene_nifly",
+  "targetGames": [
+   "FO3",
+   "FO4",
+   "FO76",
+   "SF",
+   "SKYRIM",
+   "SKYRIMSE"
+  ],
+  "tested": true,
+  "version": [
+   29,
+   1,
+   0
+  ]
+ },
+ "readback": {
+  "game": "SKYRIMSE",
+  "shapes": [
+   {
+    "bones": 0,
+    "name": "Goblet",
+    "normals": 61,
+    "shaderBlock": "BSLightingShaderProperty",
+    "textures": {
+     "Diffuse": "textures\\characterforge\\goblet\\goblet_diffuse.dds",
+     "EnvMap": "",
+     "Normal": "",
+     "Specular": ""
+    },
+    "triangles": 92,
+    "uvs": 61,
+    "vertices": 61
+   }
+  ]
+ },
+ "schema": "sns.forge.skyrim/1",
+ "sourceFormat": "blend",
+ "status": "ok"
+}

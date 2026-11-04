@@ -8,6 +8,7 @@ Everything is made from Blender primitives (no third-party asset):
                        a 12-frame bone animation and an embedded generated texture.
   rigged_figure_split/ the same figure as .gltf + .bin + .png (external resources).
   bridge_sources      optional local-only OBJ, FBX, BLEND fixtures for bridge tests.
+  skyrim_prop         optional local-only static prop (.blend + external PNG) for the NIF pipeline.
   parts_set.glb        four mesh nodes in a hierarchy (Body > Helmet, Body > Shield, Sword at the
                        root); Body has two materials, so its mesh has two primitives.
 Naming models (suzanne, rigged_figure, parts_set) builds only those.
@@ -195,9 +196,150 @@ def bridge_sources(folder):
         print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
 
 
+def skyrim_prop(folder):
+    """Local-only static prop for the Skyrim NIF pipeline: a goblet in game units (about 20 units tall),
+    an external PNG outside any 'textures' folder and an unapplied scale, plus a copy whose texture is missing.
+    """
+    reset()
+    bpy.ops.mesh.primitive_cylinder_add(vertices=24, radius=4.0, depth=14.0, location=(0, 0, 7.0))
+    cup = bpy.context.active_object
+    cup.name = "Goblet"
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.cylinder_project()
+    bpy.ops.object.mode_set(mode="OBJECT")
+    cup.scale = (1.0, 1.0, 1.4)  # left unapplied on purpose
+    image = bpy.data.images.new("goblet_diffuse", width=64, height=64)
+    image.generated_type = "COLOR_GRID"
+    png = os.path.join(folder, "goblet_diffuse.png")
+    image.filepath_raw = png
+    image.file_format = "PNG"
+    image.save()
+    cup.data.materials.append(material("GobletBrass", (1.0, 1.0, 1.0, 1.0), image))
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "skyrim_prop.blend"))
+    bpy.data.images["goblet_diffuse"].filepath = os.path.join(folder, "missing", "goblet_missing.png")
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "skyrim_prop_missing_texture.blend"), copy=True)
+    for name in ("goblet_diffuse.png", "skyrim_prop.blend", "skyrim_prop_missing_texture.blend"):
+        path = os.path.join(folder, name)
+        print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
+
+
+SPINE = ("NPC Pelvis [Pelv]", "NPC Spine [Spn0]", "NPC Spine1 [Spn1]", "NPC Spine2 [Spn2]")
+
+
+def skyrim_skinned(folder):
+    """Local-only skinned fixture for the SkinnedMesh profile (needs PyNifly). The armature is PyNifly's import of a
+    Skyrim reference skeleton (SNS_REFERENCE_SKELETON, default: the skeleton.nif shipped with PyNifly), so the bones
+    keep their exact names and bind transforms. Derived from that skeleton: never commit the outputs.
+
+    skyrim_skinned.blend             open tube (10 rings x 12 sides, UV seam) around the spine, weighted along it:
+                                     ring 3 sums to 0.8 (PyNifly normalizes), ring 5 has 5 influences (it keeps 4),
+                                     SBP_32_BODY partition, external PNG.
+    skyrim_skinned_unweighted.blend  the same with one vertex left without weights.
+    skyrim_skinned_custom_bone.blend the same with ring 9 weighted to an added bone "Goblin_Tail".
+    """
+    import math
+    import addon_utils
+    import bmesh
+    from mathutils import Vector
+
+    reset()
+    # default_set=True: PyNifly's importer reads its add-on preferences. Under --factory-startup they live only in
+    # this session's memory and are never saved.
+    module = addon_utils.enable("io_scene_nifly", default_set=True, handle_error=None)
+    if module is None:
+        raise RuntimeError("PyNifly (io_scene_nifly) is required for skyrim_skinned")
+    skeleton = os.environ.get("SNS_REFERENCE_SKELETON") or os.path.join(
+        os.path.dirname(module.__file__), "skeletons", "Skyrim", "skeleton.nif")
+    bpy.ops.import_scene.pynifly(filepath=skeleton, create_bones=True, rename_bones=False, rotate_bones_pretty=True,
+                                 blender_xf=False, import_animations=False, import_collisions=False)
+    arma = next(o for o in bpy.context.scene.objects if o.type == "ARMATURE")
+    arma.name = "SkyrimReference"
+    for other in [o for o in bpy.context.scene.objects if o is not arma]:
+        bpy.data.objects.remove(other, do_unlink=True)
+    heads = [arma.matrix_world @ arma.data.bones[n].head_local for n in SPINE]
+    low, high = heads[0].z - 6.0, heads[-1].z + 10.0
+    rings, sides, radius = 10, 12, 8.0
+    mesh = bpy.data.meshes.new("SkinnedTube")
+    bm = bmesh.new()
+    grid = []
+    for r in range(rings):
+        z = low + (high - low) * r / (rings - 1)
+        grid.append([bm.verts.new((heads[0].x + radius * math.cos(2 * math.pi * s / sides),
+                                   heads[0].y + radius * math.sin(2 * math.pi * s / sides), z)) for s in range(sides)])
+    uv = bm.loops.layers.uv.new("UVMap")
+    for r in range(rings - 1):
+        for s in range(sides):
+            face = bm.faces.new((grid[r][s], grid[r][(s + 1) % sides], grid[r + 1][(s + 1) % sides], grid[r + 1][s]))
+            for loop, (du, dv) in zip(face.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+                loop[uv].uv = ((s + du) / sides, (r + dv) / (rings - 1))
+    bm.normal_update()
+    bm.to_mesh(mesh)
+    bm.free()
+    tube = bpy.data.objects.new("SkinnedTube", mesh)
+    bpy.context.scene.collection.objects.link(tube)
+    groups = {n: tube.vertex_groups.new(name=n) for n in SPINE + ("NPC L Thigh [LThg]", "SBP_32_BODY")}
+    for vertex in mesh.vertices:
+        z, ring = vertex.co.z, vertex.index // sides
+        weights = {}
+        if z <= heads[0].z:
+            weights[SPINE[0]] = 1.0
+        elif z >= heads[-1].z:
+            weights[SPINE[-1]] = 1.0
+        else:
+            for i in range(len(SPINE) - 1):
+                if heads[i].z <= z <= heads[i + 1].z:
+                    t = (z - heads[i].z) / (heads[i + 1].z - heads[i].z)
+                    weights[SPINE[i]], weights[SPINE[i + 1]] = 1.0 - t, t
+                    break
+        if ring == 3:  # unnormalized on purpose: the exporter normalizes
+            weights = {k: 0.8 * v for k, v in weights.items()}
+        if ring == 5:  # five influences on purpose: the exporter keeps the four heaviest
+            weights = {n: 0.25 for n in SPINE}
+            weights["NPC L Thigh [LThg]"] = 0.004
+        for name, weight in weights.items():
+            groups[name].add([vertex.index], weight, "REPLACE")
+        groups["SBP_32_BODY"].add([vertex.index], 1.0, "REPLACE")
+    modifier = tube.modifiers.new("Armature", "ARMATURE")
+    modifier.object = arma
+    image = bpy.data.images.new("tube_diffuse", width=64, height=64)
+    image.generated_type = "COLOR_GRID"
+    image.filepath_raw = os.path.join(folder, "tube_diffuse.png")
+    image.file_format = "PNG"
+    image.save()
+    tube.data.materials.append(material("TubeSkin", (1.0, 1.0, 1.0, 1.0), image))
+    outputs = ["tube_diffuse.png", "skyrim_skinned.blend"]
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "skyrim_skinned.blend"))
+    # Variant: one vertex without any bone weight.
+    for name in SPINE + ("NPC L Thigh [LThg]",):
+        groups[name].remove([0])
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "skyrim_skinned_unweighted.blend"), copy=True)
+    outputs.append("skyrim_skinned_unweighted.blend")
+    groups[SPINE[0]].add([0], 1.0, "REPLACE")
+    # Variant: ring 9 weighted to a bone the reference skeleton does not have.
+    bpy.context.view_layer.objects.active = arma
+    bpy.ops.object.mode_set(mode="EDIT")
+    tail = arma.data.edit_bones.new("Goblin_Tail")
+    tail.head = arma.data.edit_bones[SPINE[-1]].head + Vector((0.0, -10.0, 0.0))
+    tail.tail = tail.head + Vector((0.0, -5.0, 0.0))
+    tail.parent = arma.data.edit_bones[SPINE[-1]]
+    bpy.ops.object.mode_set(mode="OBJECT")
+    custom = tube.vertex_groups.new(name="Goblin_Tail")
+    ring9 = [v.index for v in mesh.vertices if v.index // sides == 9]
+    for name in SPINE:
+        groups[name].remove(ring9)
+    custom.add(ring9, 1.0, "REPLACE")
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(folder, "skyrim_skinned_custom_bone.blend"), copy=True)
+    outputs.append("skyrim_skinned_custom_bone.blend")
+    for name in outputs:
+        path = os.path.join(folder, name)
+        print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
+
+
 DEFAULT_MODELS = ("suzanne", "rigged_figure", "parts_set")
 MODELS = {"suzanne": suzanne, "rigged_figure": rigged_figure,
-          "parts_set": parts_set, "bridge_sources": bridge_sources}
+          "parts_set": parts_set, "bridge_sources": bridge_sources, "skyrim_prop": skyrim_prop,
+          "skyrim_skinned": skyrim_skinned}
 
 
 def main():

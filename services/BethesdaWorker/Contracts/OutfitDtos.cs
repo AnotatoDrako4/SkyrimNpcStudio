@@ -51,8 +51,26 @@ public sealed record OutfitAssignment
 
     public bool AlsoSetSleepingOutfit { get; init; }
 
+    /// <summary>Also lists the pieces in the NPC's inventory (CNTO), for an actor the game does not dress from DefaultOutfit.</summary>
+    public bool AlsoAddToInventory { get; init; }
+
+    /// <summary>Pieces of this outfit replaced by a copy whose addons no longer claim some slots.</summary>
+    public IReadOnlyList<AddonSlotRelease>? AddonSlotReleases { get; init; }
+
     /// <summary>Saved material requests; currently rejected with MaterialVariantPreviewOnly.</summary>
     public IReadOnlyList<PieceMaterialDto>? MaterialOverrides { get; init; }
+}
+
+/// <summary>
+/// One armor whose addon claims a slot another piece of the outfit draws in (a corset mesh with the body's legs in slot 53, against
+/// the pants). The outfit gets a new ARMO and new ARMA without those slots; the base records stay untouched, so nobody else changes.
+/// </summary>
+public sealed record AddonSlotRelease
+{
+    public required string ArmorFormKey { get; init; }
+
+    /// <summary>Slots taken off the addons, as a biped mask (bit 0 = slot 30).</summary>
+    public required uint SlotMask { get; init; }
 }
 
 public sealed record StandaloneOutfit
@@ -79,6 +97,28 @@ public sealed record ExportOutfitPatchRequest
     public string? Description { get; init; }
 
     /// <summary>Optional plugin → MO2 mod name map, used to document dependencies.</summary>
+    public IReadOnlyDictionary<string, string>? PluginProviders { get; init; }
+}
+
+/// <summary>One piece of a converted outfit: the armor it copies and the female mesh (relative to meshes\) converted to the NPC's body.</summary>
+public sealed record ConvertedOutfitPiece
+{
+    public required string BaseArmorFormKey { get; init; }
+    public required string FemaleMesh { get; init; }
+}
+
+/// <summary>New ARMA/ARMO per piece for the NPC's race, a new OTFT, and an NPC override that only changes DefaultOutfit.</summary>
+public sealed record ExportConvertedOutfitRequest
+{
+    public required string PluginName { get; init; }
+    public required string OutputDirectory { get; init; }
+    public required string NpcFormKey { get; init; }
+    public required IReadOnlyList<ConvertedOutfitPiece> Pieces { get; init; }
+    public string? OutfitEditorId { get; init; }
+    public bool EslFlag { get; init; }
+    public bool CreateZip { get; init; } = true;
+    public string Author { get; init; } = "Skyrim NPC Studio";
+    public string? Description { get; init; }
     public IReadOnlyDictionary<string, string>? PluginProviders { get; init; }
 }
 

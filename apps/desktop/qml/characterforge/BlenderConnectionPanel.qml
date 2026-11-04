@@ -48,7 +48,7 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: qsTr("Convierte FBX, OBJ o BLEND a GLB validado. El resultado se guarda en la biblioteca del proyecto; aún no se convierte a NIF de Skyrim.")
+        text: qsTr("Convierte FBX, OBJ o BLEND a GLB validado para la vista previa. El NIF de Skyrim se genera en «Convertir a Skyrim».")
         color: Theme.textDim
         wrapMode: Text.WordWrap
     }

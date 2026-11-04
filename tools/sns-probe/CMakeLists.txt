@@ -1,6 +1,6 @@
-add_executable(sns-probe main.cpp ${PROJECT_SOURCE_DIR}/apps/desktop/diagnostics/crash_diagnostics.cpp)
+add_executable(sns-probe main.cpp bodyslide_probe.cpp ${PROJECT_SOURCE_DIR}/apps/desktop/diagnostics/crash_diagnostics.cpp)
 target_include_directories(sns-probe PRIVATE ${PROJECT_SOURCE_DIR}/apps/desktop)
-target_link_libraries(sns-probe PRIVATE sns::assets sns::textures sns::face sns::core nifly sns::compile_options)
+target_link_libraries(sns-probe PRIVATE sns::assets sns::textures sns::face sns::body sns::nif sns::core nifly sns::compile_options)
 if(WIN32)
   target_link_libraries(sns-probe PRIVATE dbghelp)
 endif()

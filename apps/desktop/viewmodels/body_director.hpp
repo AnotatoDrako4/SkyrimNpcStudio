@@ -47,6 +47,13 @@ class BodyDirector : public QObject {
   //  verification: [...], status: "PAQUETE_MO2_VERIFICADO"|"", inGame: "PENDIENTE_SKYRIM"}
   Q_PROPERTY(QVariantMap exportResult READ export_result NOTIFY exportResultChanged)
   Q_PROPERTY(QString defaultExportDirectory READ default_export_directory CONSTANT)
+  // 3D preview of a preset WITHOUT a rule (nothing is exported from it): {formKey, presetUid, presetName, family, showOutfit,
+  // weight (-1 = the NPC record's weight)}. The scene deforms the body and every outfit piece with their own TRI morphs and
+  // reports per shape what it really did (SceneViewModel.bodyMorphs).
+  Q_PROPERTY(QVariantMap preview READ preview NOTIFY previewChanged)
+  // Are the meshes the base Body Change NG / RaceMenu morphs expect? {state: "none"|"checking"|"ready"|"error", error, projects,
+  //  rows: [{mesh, provider, project, osp, verdict, reference, maxDistance, shapes, missingData, detail}]} (body::check_base_build).
+  Q_PROPERTY(QVariantMap buildCheck READ build_check NOTIFY buildCheckChanged)
 
  public:
   struct AssignedPresetInfo {
@@ -83,6 +90,18 @@ class BodyDirector : public QObject {
   // Returns details of the preset assigned to form_key (or currently inspected NPC)
   Q_INVOKABLE QVariantMap assignedPreset(const QString& form_key = {}) const;
   std::optional<AssignedPresetInfo> assigned_preset_for(const QString& form_key) const;
+  // Preview: "" = no preview preset (the assigned rule, if any, still applies). Tied to the inspected NPC.
+  Q_INVOKABLE void previewPreset(const QString& uid);
+  Q_INVOKABLE void setShowOutfit(bool show);
+  Q_INVOKABLE void setPreviewWeight(double weight);  // < 0 = the record's weight
+  [[nodiscard]] QVariantMap preview() const;
+  // Rebuilds each mesh's base from its BodySlide project (OSP + OSD of the profile) and compares it vertex by vertex. Read-only.
+  Q_INVOKABLE void verifyBuilds(const QStringList& mesh_paths);
+  [[nodiscard]] QVariantMap build_check() const { return build_check_; }
+  // What the scene of `form_key` deforms with: the preview preset of that NPC first, else its assigned rule.
+  std::optional<AssignedPresetInfo> scene_preset_for(const QString& form_key, bool* is_preview = nullptr) const;
+  [[nodiscard]] bool show_outfit_for(const QString& form_key) const;
+  [[nodiscard]] std::optional<float> weight_override_for(const QString& form_key) const;
   Q_INVOKABLE void removeRule(const QString& id);
   Q_INVOKABLE void clearDraft();
   // Exports the merged distribution as a new mod "<modName>" (and ZIP) inside `outputDir` (a folder outside MO2 and the game).
@@ -96,6 +115,8 @@ class BodyDirector : public QObject {
   void draftChanged();
   void exportResultChanged();
   void bodyAssigned(const QString& form_key, const QString& preset_uid);
+  void previewChanged();
+  void buildCheckChanged();
 
  private:
   struct Library;
@@ -121,6 +142,11 @@ class BodyDirector : public QObject {
   bool filter_compatible_ = false;
   std::vector<DraftRule> rules_;
   std::string merged_text_;
+  QVariantMap build_check_;
+  int build_check_serial_ = 0;
+  QString preview_form_key_, preview_uid_;
+  bool show_outfit_ = true;
+  double preview_weight_ = -1.0;
   QVariantMap environment_, npc_, draft_, export_result_;
   QVariantList presets_;
   int preset_total_ = 0;

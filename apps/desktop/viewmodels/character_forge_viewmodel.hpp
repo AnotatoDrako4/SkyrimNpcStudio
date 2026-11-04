@@ -59,6 +59,15 @@ class CharacterForgeViewModel final : public QObject {
   // The last record search: {state: "idle" | "loading" | "ready" | "error", kind, count, code, error}. 0 results, an unindexed profile and
   // a refused kind are told apart.
   Q_PROPERTY(QVariantMap recordSearch READ record_search NOTIFY recordsChanged)
+  // Blender -> Skyrim conversion of the selected model (tools/blender/forge_skyrim.py + engines/creation skyrim_conversion):
+  // {state: "none" | "running" | "analyzed" | "exported" | "verificationFailed" | "error", operation, step, fraction, modelKey,
+  //  message, blenderVersion, pynifly, totals, dimensions, classification: {issues, counts, exportable}, verification, folder,
+  //  manifest, skyrimStatus}. A result for another model reads as {state: "none"}. Exported resources stay PENDIENTE_SKYRIM.
+  // Profile "skinned" adds profile, skeletonMapping (bones: verified|suggested|unrecognized|incompatible) and
+  // states: {current, states: [{state, reached, detail}]} (PREVIEW_ONLY .. PENDIENTE_SKYRIM, see skinned_states).
+  Q_PROPERTY(QVariantMap skyrimConversion READ skyrim_conversion NOTIFY changed)
+  // "static" (Type A resource, default) or "skinned" (SkinnedMesh). Changing it drops the previous result.
+  Q_PROPERTY(QString skyrimProfile READ skyrim_profile WRITE setSkyrimProfile NOTIFY changed)
   // The 3D preview of the selected model (independent from the NPC scenes of the other workspaces).
   Q_PROPERTY(ForgeSceneViewModel* scene READ scene CONSTANT)
 
@@ -87,6 +96,9 @@ class CharacterForgeViewModel final : public QObject {
   QVariantMap capabilities() const;
   bool can_export_technical() const { return catalog_ready_ && !busy_ && validation_.value("technicallyExportable").toBool(); }
   ForgeSceneViewModel* scene() const { return scene_; }
+  QVariantMap skyrim_conversion() const;
+  QString skyrim_profile() const { return skyrim_profile_; }
+  Q_INVOKABLE void setSkyrimProfile(const QString& profile);
   QVariantMap behavior_catalog() const { return behavior_catalog_.isEmpty() ? QVariantMap{{"state", "none"}} : behavior_catalog_; }
   QVariantMap archetype_preview() const { return archetype_preview_.isEmpty() ? QVariantMap{{"state", "idle"}} : archetype_preview_; }
   QVariantMap voice_analysis() const { return voice_analysis_.isEmpty() ? QVariantMap{{"state", "none"}} : voice_analysis_; }
@@ -133,6 +145,19 @@ class CharacterForgeViewModel final : public QObject {
   Q_INVOKABLE void selectBlenderExecutable(const QString& url);
   Q_INVOKABLE void detectBlender();
   Q_INVOKABLE void convertSelectedModelWithBlender();
+  // ANALIZAR COMPATIBILIDAD CON SKYRIM: inspects a copy of the selected model in Blender and classifies it (writes nothing).
+  Q_INVOKABLE void analyzeSkyrimCompatibility();
+  // Exports the selected model with PyNifly, re-reads the NIF with nifly and, when every check passes, writes a Type A
+  // resource folder (NIF + DDS + manifest) into <project>.sncf/exports/skyrim/. Never into Skyrim or MO2.
+  Q_INVOKABLE void exportSkyrimNif();
+  // EMPAQUETAR MOD MO2: asks the worker (export.forgeStaticResource) for an MO2 mod made of the exported package plus a new
+  // ESL plugin with one STAT, re-read and zipped, in <project>.sncf/exports/skyrim/mods/. skyrimConversion gains modState
+  // (running | done | error), mod (the worker's answer) and modMessage. Needs the worker with an indexed profile.
+  Q_INVOKABLE void packageSkyrimMod();
+  // Modo fácil: ANALIZAR -> EXPORTAR NIF VALIDADO (only when nothing blocks) -> EMPAQUETAR MOD MO2, chained. Every step is the
+  // same as its button, with the same checks; the chain stops at the first step that cannot run and the panel says why.
+  // skyrimConversion.easy is true while the chain runs.
+  Q_INVOKABLE void createSkyrimModEasy();
   Q_INVOKABLE void selectReferenceImage(const QString& role, const QString& url);
   void invalidate_validation();
   void set_catalog_ready(bool ready);
@@ -150,6 +175,12 @@ class CharacterForgeViewModel final : public QObject {
   void reset_behavior();
   void merge_behavior_validation(const Json& behavior);
   void preview_selected_model();
+  void start_skyrim_job(const QString& operation);
+  void continue_easy();
+  bool skyrim_easy_ = false;
+  QString skyrim_profile_ = QStringLiteral("static");
+  QString skyrim_model_key() const;
+  QVariantMap skyrim_;
   EnvironmentProvider environment_;
   ForgeSceneViewModel* scene_ = nullptr;
   ForgeBlenderBridge* blender_bridge_ = nullptr;

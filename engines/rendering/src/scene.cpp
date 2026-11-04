@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "sns/assets/asset_resolver.hpp"
+#include "sns/body/bodyslide_morphs.hpp"
 #include "sns/core/error.hpp"
 #include "sns/core/text.hpp"
 #include "sns/rendering/smp_xml.hpp"
@@ -17,6 +20,25 @@ namespace sns::rendering {
 namespace {
 
 using nif::Vec3;
+using Clock = std::chrono::steady_clock;
+
+double ms_since(Clock::time_point start) {
+  return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+
+// FNV-1a over the raw bytes of a few arrays: a cache key for derived data, not a security hash.
+template <typename... Arrays>
+std::uint64_t content_hash(const Arrays&... arrays) {
+  std::uint64_t h = 1469598103934665603ull;
+  const auto mix = [&h](const auto& array) {
+    const auto* bytes = reinterpret_cast<const unsigned char*>(array.data());
+    const std::size_t count = array.size() * sizeof(array[0]);
+    for (std::size_t i = 0; i < count; ++i) h = (h ^ bytes[i]) * 1099511628211ull;
+    h = (h ^ count) * 1099511628211ull;  // array boundaries matter
+  };
+  (mix(arrays), ...);
+  return h;
+}
 
 void issue(CharacterScene& scene, std::string severity, std::string code, std::string message, std::string subject) {
   scene.issues.push_back({std::move(severity), std::move(code), std::move(message), std::move(subject)});
@@ -54,16 +76,21 @@ std::optional<nif::MeshFile> load(const assets::AssetResolver& resolver, const S
   try {
     if (!generated && options.cache) {
       if (const auto cached = options.cache->mesh(key)) {
+        ++scene.stats.mesh_cache_hits;
         for (const auto& w : cached->warnings) issue(scene, "info", "MeshWarning", w, path);
         return *cached;
       }
     }
+    ++scene.stats.mesh_cache_misses;
+    const auto started = Clock::now();
     auto bytes = read_asset(resolver, options, path);
     if (!bytes) {
+      scene.stats.ms.mesh_read += ms_since(started);
       issue(scene, "warning", "MeshNotFound", "Mesh not found as loose file or in any loaded BSA: " + path, subject);
       return std::nullopt;
     }
     auto mesh = nif::load_mesh(*bytes, path);
+    scene.stats.ms.mesh_read += ms_since(started);
     for (const auto& w : mesh.warnings) issue(scene, "info", "MeshWarning", w, path);
     if (!generated && options.cache) options.cache->put_mesh(key, std::make_shared<const nif::MeshFile>(mesh));
     return mesh;
@@ -294,131 +321,6 @@ void ensure_uv_tangents(nif::Shape& shape) {
     shape.tangents[i] = ortho(tu[i]);
     shape.bitangents[i] = ortho(tv[i]);
   }
-}
-
-void apply_body_preset_morphs(nif::Shape& shape, const std::vector<BodySliderSetting>& sliders, float weight) {
-  if (shape.positions.empty() || sliders.empty()) return;
-
-  const float w_frac = std::clamp(weight / 100.0f, 0.0f, 1.0f);
-
-  float breast_val = 0.0f, butt_val = 0.0f, belly_val = 0.0f, waist_val = 0.0f, thigh_val = 0.0f;
-  int breast_cnt = 0, butt_cnt = 0, belly_cnt = 0, waist_cnt = 0, thigh_cnt = 0;
-
-  for (const auto& s : sliders) {
-    const float sm = s.small.value_or(s.big.value_or(0.0f));
-    const float bg = s.big.value_or(s.small.value_or(0.0f));
-    float val = sm + w_frac * (bg - sm);
-    if (std::abs(val) > 2.0f) val /= 100.0f;
-
-    const auto lname = text::to_lower_ascii(s.name);
-    if (lname.find("breast") != std::string::npos || lname.find("boob") != std::string::npos ||
-        lname.find("cleavage") != std::string::npos || lname.find("doublemelon") != std::string::npos ||
-        lname.find("7b upper") != std::string::npos) {
-      breast_val += val;
-      ++breast_cnt;
-    } else if (lname.find("butt") != std::string::npos || lname.find("glute") != std::string::npos ||
-               lname.find("7b lower") != std::string::npos) {
-      butt_val += val;
-      ++butt_cnt;
-    } else if (lname.find("belly") != std::string::npos || lname.find("pregnancy") != std::string::npos) {
-      belly_val += val;
-      ++belly_cnt;
-    } else if (lname.find("waist") != std::string::npos) {
-      waist_val += val;
-      ++waist_cnt;
-    } else if (lname.find("thigh") != std::string::npos || lname.find("leg") != std::string::npos ||
-               lname.find("hip") != std::string::npos || lname.find("calf") != std::string::npos) {
-      thigh_val += val;
-      ++thigh_cnt;
-    }
-  }
-
-  const float breast_delta = breast_cnt > 0 ? (breast_val / breast_cnt) * 3.0f : 0.0f;
-  const float butt_delta = butt_cnt > 0 ? (butt_val / butt_cnt) * 2.5f : 0.0f;
-  const float belly_delta = belly_cnt > 0 ? (belly_val / belly_cnt) * 2.0f : 0.0f;
-  const float waist_delta = waist_cnt > 0 ? (waist_val / waist_cnt) * 1.5f : 0.0f;
-  const float thigh_delta = thigh_cnt > 0 ? (thigh_val / thigh_cnt) * 1.5f : 0.0f;
-
-  if (std::abs(breast_delta) < 1e-4f && std::abs(butt_delta) < 1e-4f && std::abs(belly_delta) < 1e-4f &&
-      std::abs(waist_delta) < 1e-4f && std::abs(thigh_delta) < 1e-4f) {
-    return;
-  }
-
-  std::vector<std::string> bone_lower;
-  bone_lower.reserve(shape.bones.size());
-  for (const auto& b : shape.bones) bone_lower.push_back(text::to_lower_ascii(b));
-
-  const bool has_skinning = shape.skinned && !shape.influences.empty() && !shape.bones.empty();
-  const bool has_normals = shape.normals.size() == shape.positions.size();
-
-  for (std::size_t i = 0; i < shape.positions.size(); ++i) {
-    auto& pos = shape.positions[i];
-    float bw = 0.0f, buw = 0.0f, bew = 0.0f, ww = 0.0f, tw = 0.0f;
-
-    if (has_skinning && i < shape.influences.size()) {
-      const auto& inf = shape.influences[i];
-      for (int k = 0; k < 4; ++k) {
-        if (inf.weight[k] <= 0.0f || inf.bone[k] >= bone_lower.size()) continue;
-        const auto& b = bone_lower[inf.bone[k]];
-        const float w = inf.weight[k];
-        if (b.find("breast") != std::string::npos || b.find("boob") != std::string::npos) bw += w;
-        else if (b.find("butt") != std::string::npos || b.find("glute") != std::string::npos) buw += w;
-        else if (b.find("belly") != std::string::npos) bew += w;
-        else if (b.find("pelvis") != std::string::npos || b.find("waist") != std::string::npos || b.find("spine") != std::string::npos) ww += w;
-        else if (b.find("thigh") != std::string::npos || b.find("calf") != std::string::npos || b.find("leg") != std::string::npos) tw += w;
-      }
-    } else {
-      if (pos.z >= 95.0f && pos.z <= 125.0f && pos.y > 0.0f) {
-        const float z_factor = 1.0f - std::abs(pos.z - 110.0f) / 15.0f;
-        bw = std::max(0.0f, z_factor * std::clamp(pos.y / 10.0f, 0.0f, 1.0f));
-      }
-      if (pos.z >= 80.0f && pos.z <= 110.0f && pos.y < 0.0f) {
-        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 15.0f;
-        buw = std::max(0.0f, z_factor * std::clamp(-pos.y / 10.0f, 0.0f, 1.0f));
-      }
-      if (pos.z >= 85.0f && pos.z <= 105.0f && pos.y > 0.0f) {
-        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 10.0f;
-        bew = std::max(0.0f, z_factor * std::clamp(pos.y / 10.0f, 0.0f, 1.0f));
-      }
-      if (pos.z >= 85.0f && pos.z <= 105.0f) {
-        const float z_factor = 1.0f - std::abs(pos.z - 95.0f) / 10.0f;
-        ww = std::max(0.0f, z_factor);
-      }
-      if (pos.z >= 45.0f && pos.z <= 85.0f) {
-        const float z_factor = 1.0f - std::abs(pos.z - 65.0f) / 20.0f;
-        tw = std::max(0.0f, z_factor);
-      }
-    }
-
-    const float disp = bw * breast_delta + buw * butt_delta + bew * belly_delta + ww * waist_delta + tw * thigh_delta;
-    if (std::abs(disp) < 1e-5f) continue;
-
-    Vec3 norm = has_normals ? shape.normals[i] : Vec3{0, 0, 1};
-    Vec3 dir = norm;
-    if (bw > 0.1f) {
-      dir = normalized({pos.x * 0.3f, 0.9f, 0.2f});
-    } else if (buw > 0.1f) {
-      dir = normalized({pos.x * 0.3f, -0.9f, 0.1f});
-    } else if (bew > 0.1f) {
-      dir = normalized({pos.x * 0.2f, 0.9f, -0.1f});
-    } else if (ww > 0.1f) {
-      dir = normalized({pos.x, pos.y, 0.0f});
-    } else if (tw > 0.1f) {
-      dir = normalized({pos.x, 0.2f, 0.0f});
-    }
-
-    const Vec3 effective_dir = has_normals ? normalized({norm.x * 0.7f + dir.x * 0.3f, norm.y * 0.7f + dir.y * 0.3f, norm.z * 0.7f + dir.z * 0.3f}) : dir;
-
-    pos.x += effective_dir.x * disp;
-    pos.y += effective_dir.y * disp;
-    pos.z += effective_dir.z * disp;
-  }
-
-  recompute_smooth_normals(shape);
-  shape.tangents.clear();
-  shape.bitangents.clear();
-  shape.tangents_swapped = false;
-  ensure_uv_tangents(shape);
 }
 
 std::vector<float> bind_frames(const nif::Shape& shape) {
@@ -931,12 +833,159 @@ std::string hidden_reason(const nif::Shape& shape, const std::vector<std::string
   const bool untextured = std::all_of(shape.textures.begin(), shape.textures.end(), [](const auto& t) { return t.empty(); });
   const bool in_xml = std::any_of(collision.begin(), collision.end(), [&](const auto& n) { return text::iequals_ascii(n, shape.name); });
   if (untextured && in_xml) return "untextured SMP collision shape (physics proxy)";
+  if (shape.material_alpha <= 0.0f && in_xml) return "transparent SMP collision shape (physics proxy)";
   return {};
 }
+
+std::string outfit_reference_head_reason(const nif::Shape& shape, std::uint32_t addon_slots) {
+  if (shape.shader_type != nif::kShaderFaceTint || shape.partitions.empty()) return {};
+  for (const auto part : shape.partitions) {
+    if (part < 100) return {};  // body parts: not a head left behind
+    const int slot = part % 100;  // 130 and 230 are slot 30, 143 is slot 43
+    if (slot >= 30 && slot < 62 && (addon_slots & (1u << (slot - 30))) != 0) return {};
+  }
+  return "head left in a garment mesh: its partitions are in slots this addon does not claim";
+}
+
+namespace {
+
+// The TRI a mesh's BODYTRI names, read once per mesh.
+struct TriSource {
+  std::string body_tri;  // as stored in the NIF
+  std::string key;       // "meshes\..."
+  std::string provider;  // "" = not found
+  std::string error;     // unreadable
+  std::shared_ptr<const body::TriFile> file;
+  // The TRI names none of this mesh's shapes: it belongs to another mesh (e.g. a global femalebody.tri won by another body).
+  bool foreign = false;
+  std::string tri_shapes;  // the shapes it does have, for the explanation
+};
+
+std::string join_names(const std::vector<std::string>& names, std::size_t limit = 6) {
+  std::string out;
+  for (std::size_t i = 0; i < names.size() && i < limit; ++i) out += (i ? ", " : "") + names[i];
+  if (names.size() > limit) out += " (+" + std::to_string(names.size() - limit) + ")";
+  return out;
+}
+
+// Applies the preset to one shape with its real morphs, or says exactly why it cannot.
+ShapeMorphState morph_shape(nif::Shape& shape, const TriSource& tri, const std::string& mesh_provider,
+                            const std::vector<body::SliderSetting>& preset, float weight, bool family_accepted_by_body = false,
+                            const std::vector<std::string>* body_vocabulary = nullptr) {
+  ShapeMorphState st;
+  st.shape = shape.name;
+  st.mesh_provider = mesh_provider;
+  st.body_tri = tri.body_tri;
+  st.tri_path = tri.key;
+  st.tri_provider = tri.provider;
+  st.vertex_count = shape.positions.size();
+  st.preset_sliders = preset.size();
+  if (tri.body_tri.empty()) {
+    st.status = "missing-tri";
+    st.detail = "La malla no tiene BODYTRI: se construyó sin «Build Morphs». En el juego el preset no la deforma; hay que "
+                "reconstruirla en BodySlide con «Build Morphs» para que siga al cuerpo.";
+    return st;
+  }
+  if (tri.provider.empty()) {
+    st.status = "missing-tri";
+    st.detail = "La malla pide el TRI «" + tri.key + "», que no está en el perfil (ni suelto ni en BSA).";
+    return st;
+  }
+  if (!tri.file) {
+    st.status = "unverifiable";
+    st.detail = "El TRI «" + tri.key + "» no se pudo leer: " + tri.error;
+    return st;
+  }
+  const auto* morphs = tri.file->shape(shape.name);
+  if (tri.foreign) {
+    st.status = "missing-tri";
+    st.detail = "El TRI «" + tri.key + "» que gana en el perfil («" + tri.provider + "») es de otra malla: tiene las formas " +
+                tri.tri_shapes + " y ninguna de esta. RaceMenu tampoco deformará «" + shape.name +
+                "» en el juego; hace falta el TRI construido para esta malla (BodySlide «Build Morphs») ganando esa ruta.";
+    return st;
+  }
+  if (!morphs || morphs->position.empty()) {
+    st.status = "no-preview-data";
+    st.detail = "El TRI no tiene morphs para la forma «" + shape.name + "»: se muestra sin cambios (en el juego tampoco cambia).";
+    return st;
+  }
+  st.morphs_available = morphs->position.size();
+  for (const auto& m : morphs->position) st.morph_names.push_back(m.name);
+  if (preset.empty()) {
+    st.status = "available";
+    st.detail = std::to_string(st.morphs_available) + " morphs reales listos (TRI de «" + tri.provider + "»).";
+    if (!mesh_provider.empty() && mesh_provider != tri.provider) {
+      st.detail += " Atención: la malla viene de «" + mesh_provider + "»; malla y TRI son builds distintos de BodySlide.";
+    }
+    return st;
+  }
+  const auto positions_before = shape.positions;
+  const auto normals_before = shape.normals;
+  auto report = body::apply_tri_morphs(shape, *morphs, preset, weight);
+  const auto coverage = body::slider_coverage(report);
+  // Hands, feet, boots and buckles hold few of a body preset's sliders by nature: the body decides the family for them. A garment
+  // must also share the body's morph vocabulary, or the few names that match belong to another family.
+  const bool family_accepted = family_accepted_by_body &&
+      (!body_vocabulary || body::compare_vocabulary(*body_vocabulary, st.morph_names).verdict == "compatible");
+  if (!family_accepted && report.error.empty() && coverage.considered > 0 && coverage.ratio < body::kMinFamilyCoverage) {
+    // A preset of another body family: the few names that happen to match move other anatomy. Undo, never half-apply.
+    shape.positions = positions_before;
+    shape.normals = normals_before;
+    st.status = "incompatible-family";
+    st.morphs_available = report.morphs_available;
+    st.compatible = report.compatible;
+    st.missing = report.not_in_data;
+    st.detail = "Solo " + std::to_string(coverage.found) + " de " + std::to_string(coverage.considered) +
+                " sliders no nulos del preset existen en esta forma: el preset es de otra familia corporal. No se aplica.";
+    return st;
+  }
+  st.morphs_available = report.morphs_available;
+  st.compatible = report.compatible;
+  st.missing = report.not_in_data;
+  st.max_displacement = report.max_displacement;
+  for (const auto& a : report.applied) st.applied.push_back({a.slider, a.value, a.vertices, a.max_displacement});
+  if (!report.error.empty()) {
+    st.status = "tri-mismatch";
+    st.detail = "No aplicado: " + report.error + ".";
+    return st;
+  }
+  if (report.compatible == 0) {
+    st.status = "incompatible-family";
+    st.detail = "La forma tiene " + std::to_string(report.morphs_available) +
+                " morphs pero ninguno coincide con los sliders del preset: el preset es de otra familia corporal.";
+    return st;
+  }
+  if (report.applied.empty()) {
+    st.status = report.not_in_data.empty() ? "no-change" : "morph-not-found";
+    st.detail = report.not_in_data.empty() ? "Todos los valores del preset para esta forma son 0."
+                                           : "Ningún slider no nulo del preset tiene morph en esta forma: " + join_names(report.not_in_data);
+    return st;
+  }
+  st.status = report.not_in_data.empty() ? "applied" : "partial";
+  char max_text[32];
+  std::snprintf(max_text, sizeof(max_text), "%.2f", report.max_displacement);
+  st.detail = std::to_string(report.applied.size()) + " sliders aplicados con sus morphs reales (desplazamiento máximo " + max_text + " u).";
+  if (!report.not_in_data.empty()) st.detail += " Sin morph en esta forma: " + join_names(report.not_in_data) + ".";
+  if (!mesh_provider.empty() && mesh_provider != tri.provider) {
+    st.status = "needs-rebuild";
+    st.detail += " La malla viene de «" + mesh_provider + "» y su TRI de «" + tri.provider +
+                 "»: son builds distintos de BodySlide. El juego aplica estos morphs sobre una malla que quizá ya incluye un preset; "
+                 "reconstruye la prenda (Zeroed Sliders + Build Morphs) en un único proveedor.";
+  }
+  return st;
+}
+
+}  // namespace
 
 CharacterScene build_character_scene(const Appearance& appearance, const assets::AssetResolver& resolver,
                                      const SceneOptions& options) {
   CharacterScene scene;
+  const auto build_started = Clock::now();
+  auto phase_started = build_started;
+  std::vector<body::SliderSetting> preset;
+  if (options.body_preset) {
+    for (const auto& s : options.body_preset->sliders) preset.push_back({s.name, s.small, s.big});
+  }
   scene.scale = appearance.height * appearance.race_height;
   auto check_cancel = [&] {
     if (options.cancelled && options.cancelled()) throw Error(ErrorKind::Cancelled, "Scene loading cancelled");
@@ -946,11 +995,20 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   std::optional<nif::Skeleton> skeleton;
   if (!appearance.skeleton.empty()) {
     try {
-      if (auto bytes = read_asset(resolver, options, appearance.skeleton)) {
+      const auto skeleton_path = text::data_path_key(appearance.skeleton);
+      const auto skeleton_key = skeleton_path + "|pose:" + (options.pose_name.empty() ? std::string("reference") : options.pose_name);
+      const bool cacheable = options.cache && !overlaid(options, skeleton_path);
+      if (const auto cached = cacheable ? options.cache->skeleton(skeleton_key) : nullptr) {
+        skeleton = *cached;
+        ++scene.stats.skeleton_cache_hits;
+      } else if (auto bytes = read_asset(resolver, options, appearance.skeleton)) {
         skeleton = nif::load_skeleton(*bytes, appearance.skeleton);
         if (!options.pose_name.empty() && options.pose_name != "reference") {
           *skeleton = pose_skeleton(*skeleton, options.pose_name);
         }
+        if (cacheable) options.cache->put_skeleton(skeleton_key, std::make_shared<const nif::Skeleton>(*skeleton));
+      }
+      if (skeleton) {
         scene.skeleton_bones = skeleton->bones.size();
         if (options.include_skeleton) {
           for (const auto& bone : skeleton->bones) {
@@ -967,8 +1025,13 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       issue(scene, "warning", "SkeletonUnreadable", e.what(), appearance.skeleton);
     }
   }
+  scene.stats.ms.skeleton = ms_since(phase_started);
+  phase_started = Clock::now();
 
   // ---- 1. geometry --------------------------------------------------------------------------
+  constexpr std::uint32_t kSkinBodySlotBit = 1u << 2;  // slot 32
+  bool skin_body_accepted_preset = false;              // the skin's body took the preset: its hands, feet and garments follow
+  std::vector<std::string> skin_body_vocabulary;       // that body's morph names
   auto append_mesh = [&](const std::string& path, const std::string& group, const std::string& label,
                          const std::string& armor, const std::string& addon_key, std::uint32_t mask, bool slider,
                          bool hide_hair, const std::string& explicit_hidden_reason = "") {
@@ -1004,11 +1067,47 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         issue(scene, "warning", "PhysicsXmlMissing", "SMP physics file named by the mesh was not found: " + mesh->physics_xml, path);
       }
     }
+    // BodySlide preset preview: the TRI this mesh names, the same file RaceMenu BodyMorph reads in game.
+    const bool morph_mesh = group != "head";
+    TriSource tri;
+    if (morph_mesh) {
+      tri.body_tri = mesh->body_tri;
+      if (!tri.body_tri.empty()) {
+        tri.key = text::data_path_key(tri.body_tri);
+        if (tri.key.starts_with("data\\")) tri.key.erase(0, 5);
+        if (!tri.key.starts_with("meshes\\")) tri.key = "meshes\\" + tri.key;
+        const auto tri_location = resolver.locate(tri.key);
+        if (tri_location || overlaid(options, tri.key)) {
+          tri.provider = overlaid(options, tri.key) ? std::string("generated (draft)") : describe(tri_location);
+          // Cached per provider: another MO2 order (or profile) gets its own entry.
+          const auto cache_key = tri.key + "|" + tri.provider;
+          if (options.cache) tri.file = options.cache->tri(cache_key);
+          if (!tri.file) {
+            if (auto bytes = read_asset(resolver, options, tri.key)) {
+              try {
+                tri.file = std::make_shared<const body::TriFile>(body::parse_tri(*bytes, tri.key));
+                if (options.cache && !overlaid(options, tri.key)) options.cache->put_tri(cache_key, tri.file);
+              } catch (const std::exception& e) {
+                tri.error = e.what();
+              }
+            } else {
+              tri.provider.clear();
+            }
+          }
+        }
+        if (tri.file) {
+          tri.foreign = std::none_of(mesh->shapes.begin(), mesh->shapes.end(), [&](const auto& s) { return tri.file->shape(s.name) != nullptr; });
+          for (const auto& s : tri.file->shapes) tri.tri_shapes += (tri.tri_shapes.empty() ? "«" : ", «") + s.name + "»";
+        }
+      }
+    }
     std::vector<std::string> hidden, extra_bones, missing_bones;
     for (auto& shape : mesh->shapes) {
       check_cancel();
       if (shape.indices.empty() || shape.positions.empty()) continue;
       auto reason = hidden_reason(shape, collision);
+      if (reason.empty() && group == "outfit") reason = outfit_reference_head_reason(shape, mask);
+      const bool game_draws = reason.empty();
       if (!explicit_hidden_reason.empty()) {
         reason = explicit_hidden_reason;
       } else if (reason.empty() && hide_hair &&
@@ -1025,8 +1124,16 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         if (found != thin->shapes.end()) blended = blend_by_weight(shape, *found, appearance.weight);
         if (!blended) issue(scene, "warning", "WeightTopologyMismatch", "Weight meshes do not match; heavy mesh retained", path);
       }
-      if (group == "skin" && options.body_preset && !options.body_preset->sliders.empty()) {
-        apply_body_preset_morphs(shape, options.body_preset->sliders, appearance.weight);
+      // After the _0/_1 blend, like RaceMenu: the TRI offsets are weight-independent, the preset values are interpolated by weight.
+      std::optional<ShapeMorphState> morph_state;
+      const bool skin_body_slot = group == "skin" && (mask & kSkinBodySlotBit) != 0;
+      if (morph_mesh && game_draws) {
+        const bool follows_body = skin_body_accepted_preset && !skin_body_slot;
+        morph_state = morph_shape(shape, tri, location, preset, appearance.weight, follows_body, group == "skin" ? nullptr : &skin_body_vocabulary);
+        if (skin_body_slot && !morph_state->applied.empty()) {
+          skin_body_accepted_preset = true;
+          if (morph_state->morph_names.size() > skin_body_vocabulary.size()) skin_body_vocabulary = morph_state->morph_names;
+        }
       }
       // _msn: the frame the map is baked against is the bind pose, before skinning moves the vertices.
       std::vector<float> msn_frames;
@@ -1044,7 +1151,9 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       }
       SkinningReport skinning;
       if (shape.skinned && options.apply_skinning && skeleton && !shape.bones.empty()) {
+        const auto skin_started = Clock::now();
         skinning = apply_skinning(shape, *skeleton);
+        scene.stats.ms.skinning += ms_since(skin_started);
         for (const auto& b : skinning.from_mesh) {
           if (std::find(extra_bones.begin(), extra_bones.end(), b) == extra_bones.end()) extra_bones.push_back(b);
         }
@@ -1052,11 +1161,19 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
           if (std::find(missing_bones.begin(), missing_bones.end(), b) == missing_bones.end()) missing_bones.push_back(b);
         }
       }
-      std::string effective_label = label;
-      if (group == "skin" && options.body_preset && !options.body_preset->name.empty()) {
-        effective_label = label + " (" + options.body_preset->name + ")";
+      auto part = to_part(shape, std::to_string(scene.parts.size()), group, label);
+      if (morph_state) {
+        morph_state->part_id = part.id;
+        morph_state->group = group;
+        morph_state->slot_mask = mask;
+        morph_state->piece = label;
+        morph_state->mesh_path = path;
+        morph_state->shown = reason.empty();
+        if (options.body_preset && morph_state->status != "applied" && morph_state->status != "no-change") {
+          part.warnings.push_back("BodySlide: " + morph_state->detail);
+        }
+        scene.body_morphs.push_back(*morph_state);
       }
-      auto part = to_part(shape, std::to_string(scene.parts.size()), group, effective_label);
       if (!msn_frames.empty()) {
         part.msn_source = shape.textures[nif::Normal];
         part.msn_frames = std::move(msn_frames);
@@ -1149,6 +1266,14 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       if (!diag.meshes_exist) {
         diag.reason = "mesh missing from archives and loose files";
       }
+      if (outfit[i]->addons.empty()) {
+        diag.no_addon_for_race = true;
+        diag.reason = "no armor addon for this NPC's race and sex: the piece holds its slots and draws nothing";
+        issue(scene, "warning", "PieceNoAddonForRace",
+              outfit[i]->name + " has no armor addon for this NPC's race and sex: it holds slot(s) " + describe_slots(diag.slot_indices) +
+              " and draws nothing, so the skin on those slots is hidden too. The record needs an addon for this race (patch or conversion).",
+              outfit[i]->armor_form_key);
+      }
     } else {
       ++scene.stats.pieces_unequipped;
       for (std::size_t j = i + 1; j < outfit.size(); ++j) {
@@ -1171,6 +1296,46 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     scene.outfit_diagnostics.push_back(std::move(diag));
   }
 
+  // The body addons first: they decide the preset's family for the hands, feet and garments, whatever the order in the record.
+  for (const bool body_pass : {true, false})
+  for (const auto& piece : appearance.pieces) {
+    if (piece.source != "skin" || options.head_only) continue;
+    for (const auto& addon : piece.addons) {
+      if (((addon.slot_mask & kSkinBodySlotBit) != 0) != body_pass) continue;
+      if (is_covered(addon.slot_mask, covered)) {
+        CoveredBodyDiagnostic cbd;
+        cbd.piece_name = piece.name;
+        cbd.addon_form_key = addon.form_key;
+        cbd.slot_mask = addon.slot_mask;
+        cbd.slot_indices = slots_from_mask(addon.slot_mask);
+        cbd.mesh_path = addon.mesh;
+        if (!addon.mesh.empty()) {
+          const auto loc = resolver.locate(addon.mesh);
+          cbd.mesh_provider = describe(loc);
+          cbd.mesh_exists = loc.has_value();
+        }
+        bool covering_draws_nothing = false;
+        for (std::size_t j = 0; j < outfit.size(); ++j) {
+          if (equipped[j] && (outfit[j]->slot_mask & addon.slot_mask)) {
+            cbd.covered_by_piece = outfit[j]->name;
+            cbd.covered_by_form_key = outfit[j]->armor_form_key;
+            cbd.covering_slots = slots_from_mask(outfit[j]->slot_mask & addon.slot_mask);
+            covering_draws_nothing = outfit[j]->addons.empty();
+            break;
+          }
+        }
+        std::string hidden_msg = "covered by outfit (" + (cbd.covered_by_piece.empty() ? "armor" : cbd.covered_by_piece) + ") on slot(s) " + describe_slots(cbd.covering_slots.empty() ? cbd.slot_indices : cbd.covering_slots);
+        if (covering_draws_nothing) hidden_msg += "; that piece has no armor addon for this race, so nothing is drawn there";
+        scene.covered_body_diagnostics.push_back(std::move(cbd));
+        issue(scene, "info", "BodyPartCovered",
+              piece.name + " (" + describe_slots(slots_from_mask(addon.slot_mask)) + ") is covered by " + (cbd.covered_by_piece.empty() ? "outfit" : cbd.covered_by_piece),
+              addon.form_key);
+        append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false, hidden_msg);
+        continue;
+      }
+      append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);
+    }
+  }
   for (std::size_t i = 0; i < outfit.size() && !options.head_only; ++i) {
     if (!equipped[i]) {
       const auto& diag = scene.outfit_diagnostics[i];
@@ -1184,46 +1349,64 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     }
   }
 
-  for (const auto& piece : appearance.pieces) {
-    if (piece.source != "skin" || options.head_only) continue;
-    for (const auto& addon : piece.addons) {
-      if (is_covered(addon.slot_mask, covered)) {
-        CoveredBodyDiagnostic cbd;
-        cbd.piece_name = piece.name;
-        cbd.addon_form_key = addon.form_key;
-        cbd.slot_mask = addon.slot_mask;
-        cbd.slot_indices = slots_from_mask(addon.slot_mask);
-        cbd.mesh_path = addon.mesh;
-        if (!addon.mesh.empty()) {
-          const auto loc = resolver.locate(addon.mesh);
-          cbd.mesh_provider = describe(loc);
-          cbd.mesh_exists = loc.has_value();
-        }
-        for (std::size_t j = 0; j < outfit.size(); ++j) {
-          if (equipped[j] && (outfit[j]->slot_mask & addon.slot_mask)) {
-            cbd.covered_by_piece = outfit[j]->name;
-            cbd.covered_by_form_key = outfit[j]->armor_form_key;
-            cbd.covering_slots = slots_from_mask(outfit[j]->slot_mask & addon.slot_mask);
-            break;
-          }
-        }
-        std::string hidden_msg = "covered by outfit (" + (cbd.covered_by_piece.empty() ? "armor" : cbd.covered_by_piece) + ") on slot(s) " + describe_slots(cbd.covering_slots.empty() ? cbd.slot_indices : cbd.covering_slots);
-        scene.covered_body_diagnostics.push_back(std::move(cbd));
-        issue(scene, "info", "BodyPartCovered",
-              piece.name + " (" + describe_slots(slots_from_mask(addon.slot_mask)) + ") is covered by " + (cbd.covered_by_piece.empty() ? "outfit" : cbd.covered_by_piece),
-              addon.form_key);
-        append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false, hidden_msg);
-        continue;
-      }
-      append_mesh(addon.mesh, "skin", piece.name, piece.armor_form_key, addon.form_key, addon.slot_mask, addon.weight_slider, false);
+  append_mesh(appearance.face_geometry, "head", "FaceGen", "", "", 0, false, is_covered(kHairSlots, covered));
+  // Body family of every outfit piece, from the files: its morph names against the body's own TRI (the skin shape with the most
+  // morphs, i.e. the slot-32 body even when an outfit covers it).
+  // Prefer the slot-32 body addon; hands and feet only stand in when the skin has no body piece.
+  const ShapeMorphState* body_reference = nullptr;
+  const auto is_body = [](const ShapeMorphState& st) { return (st.slot_mask & (1u << 2)) != 0; };
+  for (const auto& st : scene.body_morphs) {
+    if (st.group != "skin") continue;
+    if (!body_reference || (is_body(st) && !is_body(*body_reference)) ||
+        (is_body(st) == is_body(*body_reference) && st.morph_names.size() > body_reference->morph_names.size())) {
+      body_reference = &st;
     }
   }
-  append_mesh(appearance.face_geometry, "head", "FaceGen", "", "", 0, false, is_covered(kHairSlots, covered));
-  if (options.body_preset && !options.body_preset->name.empty()) {
-    issue(scene, "info", "BodyPresetApplied",
-          "Preset de cuerpo aplicado en visor 3D: " + options.body_preset->name + " (" + options.body_preset->family + ")",
-          options.body_preset->name);
+  const std::vector<std::string> body_vocabulary = body_reference ? body_reference->morph_names : std::vector<std::string>{};
+  for (auto& st : scene.body_morphs) {
+    if (st.group == "skin") {
+      st.family_verdict = "body";
+      continue;
+    }
+    if (st.morph_names.empty()) continue;
+    const auto match = body::compare_vocabulary(body_vocabulary, st.morph_names);
+    st.family_verdict = match.verdict;
+    st.family_reason = match.reason;
   }
+
+  if (options.body_preset) {
+    // Only real, visible vertex changes count as "applied"; everything else is reported as what it is.
+    int visible = 0, hidden_changed = 0;
+    std::map<std::string, int> by_status;
+    for (const auto& st : scene.body_morphs) {
+      ++by_status[st.status];
+      const bool changed = st.status == "applied" || st.status == "partial" || st.status == "needs-rebuild";
+      if (changed && st.shown) ++visible;
+      else if (changed) ++hidden_changed;
+    }
+    std::string breakdown;
+    for (const auto& [status, count] : by_status) breakdown += (breakdown.empty() ? "" : ", ") + status + " " + std::to_string(count);
+    const auto& name = options.body_preset->name;
+    if (visible > 0) {
+      issue(scene, "info", "BodyPresetApplied",
+            "Preset «" + name + "»: morphs reales (TRI) aplicados a " + std::to_string(visible) + " forma(s) visible(s). Estados: " + breakdown, name);
+    } else {
+      issue(scene, "warning", "BodyPresetNotApplied",
+            "Preset «" + name + "»: ninguna forma visible se deformó con morphs reales" +
+                (hidden_changed > 0 ? " (" + std::to_string(hidden_changed) + " forma(s) deformadas están ocultas bajo la ropa)" : std::string()) +
+                ". Estados: " + (breakdown.empty() ? std::string("sin formas corporales") : breakdown),
+            name);
+    }
+    if (by_status.count("needs-rebuild")) {
+      issue(scene, "warning", "BodySlideStaleBuild",
+            "Hay prendas cuya malla y TRI vienen de proveedores distintos: el juego aplicará el preset sobre un build antiguo. "
+            "Reconstruye en BodySlide con Zeroed Sliders + Build Morphs.",
+            name);
+    }
+  }
+
+  scene.stats.ms.geometry = ms_since(phase_started);
+  phase_started = Clock::now();
 
   // ---- 2. textures, head first, smallest adequate stored mip -----------------------------------
   struct Request {
@@ -1275,10 +1458,13 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
         info.alpha = cached->alpha;
         scene.textures[req.key] = image;
         ++scene.stats.textures_loaded;
+        ++scene.stats.texture_cache_hits;
         scene.texture_info[req.key] = std::move(info);
         continue;
       }
     }
+    ++scene.stats.texture_cache_misses;
+    const auto decode_started = Clock::now();
     try {
       auto bytes = read_asset(resolver, options, req.key);
       if (!bytes) throw Error(ErrorKind::NotFound, "Texture not found as loose file or in any loaded BSA");
@@ -1317,8 +1503,30 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       info.error = e.what();
       issue(scene, "warning", "TextureUnreadable", e.what(), req.key);
     }
+    scene.stats.ms.texture_decode += ms_since(decode_started);
     scene.texture_info[req.key] = std::move(info);
   }
+  scene.stats.ms.textures = ms_since(phase_started);
+  phase_started = Clock::now();
+
+  // Composites reuse the cache only when computed from the very same decoded images (SceneCache::Derived).
+  using ImageList = std::vector<std::shared_ptr<const textures::DdsImage>>;
+  auto composite_of = [&](const std::string& key, ImageList inputs, const std::function<textures::DdsImage()>& make) {
+    if (options.cache) {
+      if (auto hit = options.cache->derived(key, inputs)) {
+        ++scene.stats.composite_cache_hits;
+        return std::move(*hit);
+      }
+    }
+    ++scene.stats.composite_cache_misses;
+    SceneCache::Derived made;
+    auto image = std::make_shared<const textures::DdsImage>(make());
+    made.alpha = textures::measure_alpha(*image);
+    made.image = std::move(image);
+    made.inputs = std::move(inputs);
+    if (options.cache) options.cache->put_derived(key, made);
+    return made;
+  };
 
   // ---- 3. FaceGen tint composition ------------------------------------------------------------
   for (auto& part : scene.parts) {
@@ -1333,15 +1541,18 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     const auto detail = part.detail.empty() ? scene.textures.end() : scene.textures.find(part.detail);
     const auto key = part.diffuse + "|facetint:" + part.face_tint;
     if (!scene.textures.contains(key)) {
-      auto composite = std::make_shared<textures::DdsImage>(
-          apply_face_tint(*base->second, *tint->second, detail == scene.textures.end() ? nullptr : detail->second.get()));
+      ImageList inputs{base->second, tint->second};
+      if (detail != scene.textures.end()) inputs.push_back(detail->second);
+      auto composite = composite_of(key, std::move(inputs), [&] {
+        return apply_face_tint(*base->second, *tint->second, detail == scene.textures.end() ? nullptr : detail->second.get());
+      });
       TextureInfo info = scene.texture_info[part.diffuse];
       info.path = key;
       info.location = "composite";
       info.derived_from = part.diffuse + " + " + part.face_tint + (detail == scene.textures.end() ? "" : " + " + part.detail);
-      info.alpha = textures::measure_alpha(*composite);
+      info.alpha = composite.alpha;
       scene.texture_info[key] = std::move(info);
-      scene.textures[key] = std::move(composite);
+      scene.textures[key] = std::move(composite.image);
     }
     part.diffuse = key;
   }
@@ -1358,14 +1569,15 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     std::snprintf(hex, sizeof(hex), "%.4f,%.4f,%.4f", part.tint->r, part.tint->g, part.tint->b);
     const auto key = part.diffuse + "|skintint:" + hex;
     if (!scene.textures.contains(key)) {
-      auto composite = std::make_shared<textures::DdsImage>(apply_skin_tint(*base->second, *part.tint));
+      const Rgb tone = *part.tint;
+      auto composite = composite_of(key, {base->second}, [&] { return apply_skin_tint(*base->second, tone); });
       TextureInfo info = scene.texture_info[part.diffuse];
       info.path = key;
       info.location = "composite";
       info.derived_from = part.diffuse + " + skin tone (QNAM) " + hex;
-      info.alpha = textures::measure_alpha(*composite);
+      info.alpha = composite.alpha;
       scene.texture_info[key] = std::move(info);
-      scene.textures[key] = std::move(composite);
+      scene.textures[key] = std::move(composite.image);
     }
     part.diffuse = key;
     part.tint.reset();  // applied in the texture: a material multiply on top would tint twice
@@ -1398,7 +1610,26 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       uvs[2 * v] = part.vertices[v * kFloatsPerVertex + 6];
       uvs[2 * v + 1] = part.vertices[v * kFloatsPerVertex + 7];
     }
-    part.msn_agreement = model_space_normal_agreement(*msn->second, uvs, part.msn_frames);
+    // The bake depends on the shape's geometry as built (BodySlide morphs and weight change it under the same
+    // mesh path), so the cache key carries a hash of what the bake reads.
+    const auto key = part.msn_source + "|tangent:" + part.mesh_path + "|" + part.shape_name;
+    const auto cache_key = key + "|geometry:" + std::to_string(content_hash(uvs, part.msn_frames, part.indices));
+    std::optional<SceneCache::Derived> bake;
+    if (options.cache) bake = options.cache->derived(cache_key, {msn->second});
+    if (bake) {
+      ++scene.stats.composite_cache_hits;
+    } else {
+      ++scene.stats.composite_cache_misses;
+      bake.emplace();
+      bake->inputs = {msn->second};
+      bake->agreement = model_space_normal_agreement(*msn->second, uvs, part.msn_frames);
+      if (bake->agreement >= 0.5f) {
+        if (const auto it = scene.textures.find(key); it != scene.textures.end()) bake->image = it->second;
+        else bake->image = std::make_shared<const textures::DdsImage>(bake_model_space_normals(*msn->second, uvs, part.msn_frames, part.indices));
+      }
+      if (options.cache) options.cache->put_derived(cache_key, *bake);
+    }
+    part.msn_agreement = bake->agreement;
     if (part.msn_agreement < 0.5f) {
       char text[160];
       std::snprintf(text, sizeof(text), "model-space normal map does not match this mesh (agreement %.2f): vertex normals are used",
@@ -1408,9 +1639,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       part.msn_frames.clear();
       continue;
     }
-    const auto key = part.msn_source + "|tangent:" + part.mesh_path + "|" + part.shape_name;
     if (!scene.textures.contains(key)) {
-      auto baked = std::make_shared<textures::DdsImage>(bake_model_space_normals(*msn->second, uvs, part.msn_frames, part.indices));
       TextureInfo info = scene.texture_info[part.msn_source];
       info.path = key;
       info.location = "composite";
@@ -1419,7 +1648,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       info.derived_from = part.msn_source + text;
       info.normal_map = true;
       scene.texture_info[key] = std::move(info);
-      scene.textures[key] = std::move(baked);
+      scene.textures[key] = bake->image;
     }
     part.normal = key;
     part.msn_frames.clear();
@@ -1457,6 +1686,7 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
     part.alpha_mode = translation.mode;
     part.alpha_reason = translation.reason;
   }
+  scene.stats.ms.composite = ms_since(phase_started);
 
   scene.stats.shapes = static_cast<int>(scene.parts.size());
   // Bounds (camera framing) cover what is drawn; physics helpers such as a 160-unit ground plane
@@ -1481,6 +1711,11 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
   }
   issue(scene, "info", "PreviewFidelity",
         "Reference pose preview; Skyrim shaders, animations and SMP physics are not reproduced", appearance.npc_form_key);
+  if (options.cache) {
+    scene.stats.cache_texture_bytes = options.cache->texture_bytes();
+    scene.stats.cache_evictions = options.cache->evictions();
+  }
+  scene.stats.ms.total = ms_since(build_started);
   return scene;
 }
 
@@ -1501,26 +1736,122 @@ std::optional<SceneCache::Texture> SceneCache::texture(const std::string& key) c
   std::lock_guard lock(mutex_);
   const auto it = textures_.find(key);
   if (it == textures_.end()) return std::nullopt;
-  return it->second;
+  it->second.used = ++clock_;
+  return it->second.value;
 }
 
 void SceneCache::put_texture(const std::string& key, Texture texture) {
   if (!texture.image) return;
   std::lock_guard lock(mutex_);
-  const auto size = texture.image->data.size();
-  if (texture_bytes_ + size > budget_) {
-    textures_.clear();  // simple and predictable: start over rather than evicting piecemeal
-    texture_bytes_ = 0;
+  if (const auto it = textures_.find(key); it != textures_.end()) {
+    texture_bytes_ -= it->second.value.image->data.size();
+    drop_derived_of(it->second.value.image.get());
+    textures_.erase(it);
   }
-  if (const auto it = textures_.find(key); it != textures_.end()) texture_bytes_ -= it->second.image->data.size();
+  const auto size = texture.image->data.size();
+  make_room(size);
   texture_bytes_ += size;
-  textures_[key] = std::move(texture);
+  textures_[key] = Slot<Texture>{std::move(texture), ++clock_};
+}
+
+void SceneCache::drop_derived_of(const textures::DdsImage* image) {
+  for (auto it = derived_.begin(); it != derived_.end();) {
+    const auto& inputs = it->second.value.inputs;
+    if (std::any_of(inputs.begin(), inputs.end(), [image](const auto& input) { return input.get() == image; })) {
+      if (it->second.value.image) texture_bytes_ -= it->second.value.image->data.size();
+      it = derived_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void SceneCache::make_room(std::uint64_t size) {
+  // Least recently used first, textures and composites alike. A composite can never hit again once one of its
+  // inputs is gone (the input comes back as another decoded image), so it leaves with that input.
+  while (texture_bytes_ + size > budget_ && (!textures_.empty() || !derived_.empty())) {
+    auto oldest_texture = textures_.end();
+    for (auto it = textures_.begin(); it != textures_.end(); ++it) {
+      if (oldest_texture == textures_.end() || it->second.used < oldest_texture->second.used) oldest_texture = it;
+    }
+    auto oldest_derived = derived_.end();
+    for (auto it = derived_.begin(); it != derived_.end(); ++it) {
+      if (oldest_derived == derived_.end() || it->second.used < oldest_derived->second.used) oldest_derived = it;
+    }
+    ++evictions_;
+    if (oldest_derived == derived_.end() ||
+        (oldest_texture != textures_.end() && oldest_texture->second.used < oldest_derived->second.used)) {
+      const auto image = oldest_texture->second.value.image;
+      texture_bytes_ -= image->data.size();
+      textures_.erase(oldest_texture);
+      drop_derived_of(image.get());
+    } else {
+      if (oldest_derived->second.value.image) texture_bytes_ -= oldest_derived->second.value.image->data.size();
+      derived_.erase(oldest_derived);
+    }
+  }
+}
+
+std::uint64_t SceneCache::texture_bytes() const {
+  std::lock_guard lock(mutex_);
+  return texture_bytes_;
+}
+
+std::uint64_t SceneCache::evictions() const {
+  std::lock_guard lock(mutex_);
+  return evictions_;
+}
+
+std::shared_ptr<const nif::Skeleton> SceneCache::skeleton(const std::string& key) const {
+  std::lock_guard lock(mutex_);
+  const auto it = skeletons_.find(key);
+  return it == skeletons_.end() ? nullptr : it->second;
+}
+
+void SceneCache::put_skeleton(const std::string& key, std::shared_ptr<const nif::Skeleton> skeleton) {
+  std::lock_guard lock(mutex_);
+  skeletons_[key] = std::move(skeleton);
+}
+
+std::optional<SceneCache::Derived> SceneCache::derived(const std::string& key,
+                                                       const std::vector<std::shared_ptr<const textures::DdsImage>>& inputs) const {
+  std::lock_guard lock(mutex_);
+  const auto it = derived_.find(key);
+  if (it == derived_.end() || it->second.value.inputs != inputs) return std::nullopt;
+  it->second.used = ++clock_;
+  return it->second.value;
+}
+
+void SceneCache::put_derived(const std::string& key, Derived derived) {
+  const std::uint64_t size = derived.image ? derived.image->data.size() : 0;
+  std::lock_guard lock(mutex_);
+  if (const auto it = derived_.find(key); it != derived_.end()) {
+    if (it->second.value.image) texture_bytes_ -= it->second.value.image->data.size();
+    derived_.erase(it);
+  }
+  make_room(size);
+  texture_bytes_ += size;
+  derived_[key] = Slot<Derived>{std::move(derived), ++clock_};
+}
+
+std::shared_ptr<const body::TriFile> SceneCache::tri(const std::string& key) const {
+  std::lock_guard lock(mutex_);
+  const auto it = tris_.find(key);
+  return it == tris_.end() ? nullptr : it->second;
+}
+
+void SceneCache::put_tri(const std::string& key, std::shared_ptr<const body::TriFile> tri) {
+  std::lock_guard lock(mutex_);
+  tris_[key] = std::move(tri);
 }
 
 void SceneCache::clear() {
   std::lock_guard lock(mutex_);
   meshes_.clear();
   textures_.clear();
+  tris_.clear();
+  skeletons_.clear();
+  derived_.clear();
   texture_bytes_ = 0;
 }
 

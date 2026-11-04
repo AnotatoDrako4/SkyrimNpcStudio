@@ -1,0 +1,23 @@
+{
+  "schema": "sns.character-forge.qa/1",
+  "cases": [
+    { "id": "static-valid", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:Blender to Character Forge to verified NIF" },
+    { "id": "blend-compressed", "status": "covered", "evidence": "docs/plans/CHARACTER_FORGE_BLENDER_TO_SKYRIM.md:compressed BLEND regression" },
+    { "id": "blend-other-drive", "status": "covered", "evidence": "docs/plans/CHARACTER_FORGE_BLENDER_TO_SKYRIM.md:cross-volume path fix" },
+    { "id": "missing-texture", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:missing texture" },
+    { "id": "no-uv", "status": "covered", "evidence": "tests/unit/engines/test_skyrim_conversion.cpp:no UV" },
+    { "id": "degenerate-geometry", "status": "gap", "evidence": "no dedicated executable Character Forge regression found" },
+    { "id": "custom-armature", "status": "partial", "evidence": "skinned custom_bone test exists but fixture-gated" },
+    { "id": "unnormalized-weights", "status": "partial", "evidence": "skinned unweightedVertices test exists but fixture-gated" },
+    { "id": "incompatible-skeleton", "status": "partial", "evidence": "boneUnrecognized is covered; full incompatible skeleton fixture remains absent" },
+    { "id": "large-model", "status": "partial", "evidence": "vertex limit exists; no large-model fixture or resource budget test" },
+    { "id": "blender-cancel", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:Blender Skyrim job can be cancelled" },
+    { "id": "timeout", "status": "gap", "evidence": "timeout is documented but lacks a dedicated bounded test" },
+    { "id": "corrupt-nif", "status": "covered", "evidence": "tests/unit/engines/test_skyrim_conversion.cpp:corrupt bytes" },
+    { "id": "incomplete-zip", "status": "partial", "evidence": "ZIP is relearned; truncated ZIP rejection is not isolated" },
+    { "id": "interrupted-export", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:missing staged texture interrupts export" },
+    { "id": "unsafe-paths", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:unsafe reports and projects" },
+    { "id": "blender-missing", "status": "covered", "evidence": "tests/app/test_forge_skyrim.cpp:unsafe Blender job arguments" },
+    { "id": "skinned-contract", "status": "partial", "evidence": "skinned tests are present; real fixtures/contract remain Claude-owned and fixture-gated" }
+  ]
+}

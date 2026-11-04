@@ -18,6 +18,9 @@
 namespace sns::assets {
 class AssetResolver;
 }
+namespace sns::body {
+struct TriFile;
+}
 
 namespace sns::rendering {
 
@@ -195,6 +198,28 @@ struct SceneStats {
   int textures_reduced = 0;    // a smaller stored mip (or a box-filtered copy) was used
   int hidden_shapes = 0;       // parts listed but not drawn by default (see RenderPart::hidden_reason)
   int pieces_unequipped = 0;   // outfit pieces replaced by a later piece in the same slot
+  // Wall time (ms) of each build phase, so a slow NPC switch can be told apart: parsing vs decoding vs compositing.
+  // mesh_read and skinning are part of geometry; texture_decode is part of textures.
+  struct Timings {
+    double skeleton = 0;
+    double geometry = 0;
+    double mesh_read = 0;       // read + parse of NIFs not found in the cache
+    double skinning = 0;        // CPU skinning to the pose (once per build, not per frame)
+    double textures = 0;
+    double texture_decode = 0;  // read + parse + decode of DDS not found in the cache
+    double composite = 0;       // tints, model-space normal bakes, alpha translation
+    double total = 0;
+  };
+  Timings ms;
+  int mesh_cache_hits = 0;
+  int mesh_cache_misses = 0;   // read from MO2/BSA (also every read when no cache is given)
+  int texture_cache_hits = 0;
+  int texture_cache_misses = 0;
+  int skeleton_cache_hits = 0;
+  int composite_cache_hits = 0;    // tints and _msn bakes reused
+  int composite_cache_misses = 0;  // computed (also every composite when no cache is given)
+  std::uint64_t cache_texture_bytes = 0;  // held by the cache after this build (0 without a cache)
+  std::uint64_t cache_evictions = 0;      // cumulative evictions of the cache after this build
 };
 
 // In-memory files that replace Data paths for one build (the regenerated FaceGen NIF and tint of
@@ -216,15 +241,50 @@ class SceneCache {
   void put_mesh(const std::string& key, std::shared_ptr<const nif::MeshFile> mesh);
   [[nodiscard]] std::optional<Texture> texture(const std::string& key) const;
   void put_texture(const std::string& key, Texture texture);
+  // Parsed BodySlide TRI files (RaceMenu morphs), keyed like meshes.
+  [[nodiscard]] std::shared_ptr<const body::TriFile> tri(const std::string& key) const;
+  void put_tri(const std::string& key, std::shared_ptr<const body::TriFile> tri);
+  // Parsed (and posed) skeletons, keyed by Data path + pose.
+  [[nodiscard]] std::shared_ptr<const nif::Skeleton> skeleton(const std::string& key) const;
+  void put_skeleton(const std::string& key, std::shared_ptr<const nif::Skeleton> skeleton);
+  // Images computed from decoded textures (FaceGen / skin tint composites, _msn bakes). An entry only
+  // answers when `inputs` are the very same decoded images (pointer identity; the entry keeps them
+  // alive, so an address is never reused): a draft tint, a reduced mip or another provider's file is a
+  // different image and recomputes. Counted in, and evicted with, the texture budget.
+  struct Derived {
+    std::vector<std::shared_ptr<const textures::DdsImage>> inputs;
+    std::shared_ptr<const textures::DdsImage> image;  // null: nothing to draw (e.g. _msn that does not match)
+    textures::AlphaStats alpha;
+    float agreement = 0;  // _msn bakes: agreement with the vertex normals
+  };
+  [[nodiscard]] std::optional<Derived> derived(const std::string& key,
+                                               const std::vector<std::shared_ptr<const textures::DdsImage>>& inputs) const;
+  void put_derived(const std::string& key, Derived derived);
   void clear();
   [[nodiscard]] std::size_t mesh_count() const;
   [[nodiscard]] std::size_t texture_count() const;
+  [[nodiscard]] std::uint64_t texture_bytes() const;  // decoded textures + composites held, against the budget
+  [[nodiscard]] std::uint64_t evictions() const;      // textures and composites dropped for the budget so far
 
  private:
+  // Textures and composites share the budget and are evicted least recently used first (a lookup or a put
+  // counts as a use), so images several NPCs share — body, hands, feet — stay while the oldest NPC goes.
+  template <typename T>
+  struct Slot {
+    T value;
+    mutable std::uint64_t used = 0;
+  };
   mutable std::mutex mutex_;
   std::unordered_map<std::string, std::shared_ptr<const nif::MeshFile>> meshes_;
-  std::unordered_map<std::string, Texture> textures_;
+  std::unordered_map<std::string, Slot<Texture>> textures_;
+  std::unordered_map<std::string, std::shared_ptr<const body::TriFile>> tris_;
+  std::unordered_map<std::string, std::shared_ptr<const nif::Skeleton>> skeletons_;
+  std::unordered_map<std::string, Slot<Derived>> derived_;
+  void make_room(std::uint64_t size);  // caller holds mutex_
+  void drop_derived_of(const textures::DdsImage* image);  // caller holds mutex_
+  mutable std::uint64_t clock_ = 0;
   std::uint64_t texture_bytes_ = 0;
+  std::uint64_t evictions_ = 0;
   std::uint64_t budget_;
 };
 
@@ -269,6 +329,7 @@ struct OutfitPieceDiagnostic {
   std::vector<std::string> mesh_paths;
   std::vector<std::string> mesh_providers;
   bool meshes_exist = true;
+  bool no_addon_for_race = false;  // equipped, but no ARMA fits the NPC's race and sex: it holds its slots and draws nothing
   std::string reason;
 };
 
@@ -285,8 +346,59 @@ struct CoveredBodyDiagnostic {
   bool mesh_exists = true;
 };
 
+// What happened to one shape when a BodySlide preset was previewed. The deformation is the game's own: the TRI that the mesh's
+// BODYTRI names (BodySlide "Build Morphs"), each morph times the preset value at the NPC weight, as RaceMenu BodyMorph applies it
+// for Body Change NG. Nothing is estimated from slider names; a shape without real morph data is left as it is and says why.
+struct MorphSliderInfo {
+  std::string slider;
+  float value = 0.0f;           // multiplier applied (preset percent / 100, interpolated by weight)
+  std::size_t vertices = 0;
+  float max_displacement = 0.0f;
+};
+
+struct ShapeMorphState {
+  // "applied"                 compatible and applied (every non-zero preset slider found)
+  // "partial"                 applied, but some non-zero preset sliders have no morph for this shape ("Morph no encontrado")
+  // "morph-not-found"         none of the non-zero preset sliders exists for this shape
+  // "incompatible-family"     the shape has morphs but shares no slider name with the preset
+  // "no-preview-data"         the TRI does not cover this shape (accessory, helper): left unchanged
+  // "missing-tri"             the mesh has no BODYTRI (built without "Build Morphs") or the TRI it names is not installed
+  // "tri-mismatch"            the TRI's vertex indices do not fit this mesh: nothing applied
+  // "needs-rebuild"           applied as the game would, but mesh and TRI come from different providers/builds (stale BodySlide output)
+  // "unverifiable"            the TRI could not be read
+  // "no-change"               the preset's values for this shape are all zero
+  // "available"               no preset selected: the shape has real morphs ready to use
+  std::string status;
+  std::string part_id;
+  std::string group;       // "skin" / "outfit"
+  std::uint32_t slot_mask = 0;  // biped slots of the addon (bit 2 = slot 32, the body)
+  std::string piece;
+  std::string shape;
+  std::string mesh_path;
+  std::string mesh_provider;
+  std::string body_tri;     // BODYTRI as stored ("" = none)
+  std::string tri_path;     // "meshes\..."
+  std::string tri_provider; // "" = not found
+  bool shown = true;        // the part is drawn by default (a covered body is morphed but not visible)
+  std::size_t vertex_count = 0;
+  std::size_t morphs_available = 0;
+  std::size_t preset_sliders = 0;
+  std::size_t compatible = 0;
+  std::vector<MorphSliderInfo> applied;
+  std::vector<std::string> missing;  // non-zero preset sliders without a morph for this shape
+  std::vector<std::string> morph_names;  // position morphs the TRI has for this shape
+  float max_displacement = 0.0f;
+  std::string detail;  // plain language (Spanish), shown in the inspector
+  // Outfit shapes: their morph vocabulary against the NPC's visible body TRI (body::compare_vocabulary), the evidence of the body
+  // family the piece was built for. "body" for the body shapes themselves, "" when there is nothing to compare.
+  std::string family_verdict;
+  std::string family_reason;
+};
+
 struct CharacterScene {
   std::vector<RenderPart> parts;
+  // Every non-head shape the game draws, with its BodySlide morph data; deformed only when SceneOptions::body_preset is set.
+  std::vector<ShapeMorphState> body_morphs;
   std::vector<OutfitPieceDiagnostic> outfit_diagnostics;
   std::vector<CoveredBodyDiagnostic> covered_body_diagnostics;
   std::vector<float> skeleton_lines;  // pairs of view-space points
@@ -315,9 +427,6 @@ std::string weight_variant(std::string_view mesh_path, int variant);
 // Returns false when the meshes do not match vertex for vertex (heavy is kept as is).
 bool blend_by_weight(nif::Shape& heavy, const nif::Shape& thin, float weight);
 
-// Deforms body/skin vertices according to BodySlide slider settings (small/big interpolated with NPC weight)
-// along bone influences (breasts, butt, belly, waist, thighs) or spatial fallback, rebuilding normals and tangents.
-void apply_body_preset_morphs(nif::Shape& shape, const std::vector<BodySliderSetting>& sliders, float weight);
 
 // Moves skinned vertices to the skeleton's pose: v' = sum_i w_i * boneToGlobal_i(skinToBone_i(globalToSkin(v))).
 // Bones the race skeleton lacks but the NIF defines itself (SMP/physics "A-S-..." bones) use the
@@ -367,8 +476,12 @@ std::vector<bool> resolve_equipped(const std::vector<std::uint32_t>& slot_masks)
 std::vector<std::string> smp_collision_shapes(std::string_view xml);
 
 // Why the game would not draw `shape` ("" = it is drawn). `collision` lists the SMP collision
-// shape names of its mesh: such a shape with no texture at all is a physics proxy.
+// shape names of its mesh: such a shape with no texture at all or a material alpha of 0 is a physics proxy.
 std::string hidden_reason(const nif::Shape& shape, const std::vector<std::string>& collision);
+
+// A garment mesh that still carries the head it was fitted on (a face shape with head partitions only, in an
+// addon that claims none of those slots). "" = not that case. Not observed in the game: the app says it hid it.
+std::string outfit_reference_head_reason(const nif::Shape& shape, std::uint32_t addon_slots);
 
 // Slot rules: a skin addon is hidden by any outfit piece sharing a slot; hair hides under 31/41.
 bool is_covered(std::uint32_t slots, std::uint32_t covered);

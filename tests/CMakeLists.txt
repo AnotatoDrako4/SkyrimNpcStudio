@@ -26,6 +26,13 @@ add_executable(sns_engine_tests
 target_sources(sns_engine_tests PRIVATE unit/engines/test_assets_rendering.cpp unit/engines/test_gltf_inspect.cpp)
 # Audit F-10/F-12: damaged NIFs refused before nifly; one bad mesh never empties the preview.
 target_sources(sns_engine_tests PRIVATE unit/engines/test_nif_safe_load.cpp)
+# Real BodySlide geometry (TRI/OSD/OSP) and its use by the 3D scene: body and outfit morphs, weight, families.
+target_sources(sns_engine_tests PRIVATE unit/engines/test_bodyslide_morphs.cpp)
+target_sources(sns_engine_tests PRIVATE unit/engines/test_bodyslide_build.cpp)
+# Outfit Fit Doctor: Serana outfit fit diagnosis, compatibility alternatives and repair
+target_sources(sns_engine_tests PRIVATE unit/engines/test_outfit_fit_doctor.cpp)
+# Character Forge -> Skyrim: diagnosis of the Blender report and re-reading of the PyNifly NIF with nifly
+target_sources(sns_engine_tests PRIVATE unit/engines/test_skyrim_conversion.cpp)
 target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
@@ -55,20 +62,23 @@ endif()
 
 # ---- Desktop app: the crash handler writes a report and a minidump ----------------------------
 if(SNS_BUILD_APP AND WIN32)
-  find_package(Qt6 6.11 REQUIRED COMPONENTS Core)
+  find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui)
   add_executable(sns_forge_asset_tests
     app/test_forge_asset_library.cpp
     app/test_forge_blender_bridge.cpp
+    app/test_forge_skyrim.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_blender_bridge.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_skyrim_package.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_asset_library.cpp)
   set_target_properties(sns_forge_asset_tests PROPERTIES AUTOMOC ON)
   set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
+  set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py PROPERTIES QT_RESOURCE_ALIAS forge_skyrim.py)
   qt_add_resources(sns_forge_asset_tests forge_bridge_test_script PREFIX "/forge"
-    FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py)
+    FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py)
   target_include_directories(sns_forge_asset_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
   target_compile_definitions(sns_forge_asset_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
   target_link_libraries(sns_forge_asset_tests PRIVATE
-    Qt6::Core sns::creation sns::gltf sns::compile_options Catch2::Catch2WithMain)
+    Qt6::Core Qt6::Gui sns::creation sns::gltf sns::textures sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_forge_asset_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
 
   # Workbench preferences (interface scale, fonts, panel layouts): pure Qt Core, no window needed.

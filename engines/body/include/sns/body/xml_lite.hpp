@@ -10,12 +10,15 @@ namespace sns::body {
 
 // The minimal XML the BodySlide files need (SliderPresets, SliderGroups): elements, attributes, the five
 // predefined entities and numeric character references. Comments, the XML declaration, processing
-// instructions, CDATA and DOCTYPE are skipped. Text content is not kept. Malformed input throws
-// sns::Error(Parse) with the byte offset; nothing is guessed.
+// instructions and DOCTYPE are skipped. Malformed input throws sns::Error(Parse) with the byte offset;
+// nothing is guessed.
 struct XmlElement {
   std::string name;
   std::vector<std::pair<std::string, std::string>> attributes;
   std::vector<XmlElement> children;
+  // Character data directly inside this element (entities decoded, CDATA kept verbatim), in document order and not trimmed:
+  // BodySlide slider sets keep file and shape names here (<SourceFile>, <Shape>, <Data>).
+  std::string text;
 
   [[nodiscard]] std::optional<std::string_view> attribute(std::string_view key) const;  // case-sensitive, like XML
 };

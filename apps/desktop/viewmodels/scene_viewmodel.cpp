@@ -218,6 +218,139 @@ int setting_ms(const char* key, int fallback) {
   const int value = QSettings().value(QString::fromLatin1(key), fallback).toInt(&ok);
   return ok ? std::clamp(value, 0, 5000) : fallback;
 }
+
+// The states of the Cuerpo panel, in the owner's words. Only "applied", "partial" and "needs-rebuild" moved vertices.
+QString morph_status_label(const std::string& status) {
+  if (status == "applied") return QStringLiteral("Compatible y aplicado");
+  if (status == "partial") return QStringLiteral("Aplicado en parte · morph no encontrado");
+  if (status == "morph-not-found") return QStringLiteral("Morph no encontrado");
+  if (status == "incompatible-family") return QStringLiteral("Familia incompatible");
+  if (status == "no-preview-data") return QStringLiteral("Compatible, sin datos para previsualización exacta");
+  if (status == "missing-tri") return QStringLiteral("Falta TRI");
+  if (status == "needs-rebuild") return QStringLiteral("Requiere reconstrucción BodySlide");
+  if (status == "tri-mismatch" || status == "unverifiable") return QStringLiteral("No verificable");
+  if (status == "no-change") return QStringLiteral("Sin cambios (valores 0)");
+  if (status == "available") return QStringLiteral("Morphs disponibles");
+  return qs(status);
+}
+
+bool morph_changed(const std::string& status) { return status == "applied" || status == "partial" || status == "needs-rebuild"; }
+
+// Per-shape rows and the summary the Cuerpo panel shows (see SceneViewModel::bodyMorphSummary).
+void morph_views(const rendering::CharacterScene& scene, const QString& preset, const QString& mode, const QString& family, float weight,
+                 float record_weight, bool show_outfit, const QString& skeleton, const QString& skeleton_provider, QVariantList& rows,
+                 QVariantMap& summary) {
+  rows.clear();
+  summary.clear();
+  QVariantMap counts;
+  int visible_changed = 0, hidden_changed = 0;
+  const rendering::ShapeMorphState* body = nullptr;
+  for (const auto& st : scene.body_morphs) {
+    QVariantList applied;
+    for (const auto& a : st.applied) {
+      applied << QVariantMap{{"slider", qs(a.slider)}, {"value", a.value}, {"vertices", static_cast<qulonglong>(a.vertices)},
+                             {"maxDisplacement", a.max_displacement}};
+    }
+    QStringList missing;
+    for (const auto& m : st.missing) missing << qs(m);
+    rows << QVariantMap{{"partId", qs(st.part_id)}, {"group", qs(st.group)}, {"slotMask", static_cast<qulonglong>(st.slot_mask)},
+                        {"piece", qs(st.piece)}, {"shape", qs(st.shape)},
+                        {"status", qs(st.status)}, {"statusLabel", morph_status_label(st.status)}, {"shown", st.shown},
+                        {"meshPath", qs(st.mesh_path)}, {"meshProvider", qs(st.mesh_provider)}, {"bodyTri", qs(st.body_tri)},
+                        {"triPath", qs(st.tri_path)}, {"triProvider", qs(st.tri_provider)},
+                        {"vertices", static_cast<qulonglong>(st.vertex_count)}, {"morphs", static_cast<qulonglong>(st.morphs_available)},
+                        {"presetSliders", static_cast<qulonglong>(st.preset_sliders)}, {"compatible", static_cast<qulonglong>(st.compatible)},
+                        {"applied", applied}, {"appliedCount", static_cast<int>(st.applied.size())}, {"missing", missing},
+                        {"maxDisplacement", st.max_displacement}, {"detail", qs(st.detail)},
+                        {"familyVerdict", qs(st.family_verdict)}, {"familyReason", qs(st.family_reason)}};
+    counts[qs(st.status)] = counts.value(qs(st.status)).toInt() + 1;
+    if (morph_changed(st.status)) (st.shown ? visible_changed : hidden_changed) += 1;
+    // The body: the skin's slot-32 addon (what the inspector reads too); hands/feet only when the skin has none.
+    const auto is_body = [](const rendering::ShapeMorphState& s) { return (s.slot_mask & (1u << 2)) != 0; };
+    if (st.group == "skin" && (!body || (is_body(st) && !is_body(*body)) ||
+                               (is_body(st) == is_body(*body) && st.vertex_count > body->vertex_count))) {
+      body = &st;
+    }
+  }
+  // Outfit pieces: one line per armor, worst state of its drawn shapes.
+  QVariantList outfit;
+  QStringList order;
+  QMap<QString, QVariantMap> pieces;
+  for (const auto& st : scene.body_morphs) {
+    if (st.group != "outfit") continue;
+    const auto key = qs(st.piece);
+    if (!pieces.contains(key)) {
+      order << key;
+      pieces[key] = QVariantMap{{"piece", key}, {"shapes", 0}, {"withMorphs", 0}, {"changed", 0}, {"needsRefit", false},
+                                {"family", QString()}, {"familyReason", QString()}, {"statuses", QStringList{}}, {"details", QStringList{}}};
+    }
+    auto& p = pieces[key];
+    p["shapes"] = p["shapes"].toInt() + 1;
+    if (st.morphs_available > 0) p["withMorphs"] = p["withMorphs"].toInt() + 1;
+    if (morph_changed(st.status)) p["changed"] = p["changed"].toInt() + 1;
+    auto statuses = p["statuses"].toStringList();
+    if (!statuses.contains(morph_status_label(st.status))) statuses << morph_status_label(st.status);
+    p["statuses"] = statuses;
+    // A piece needs a refit when the game cannot make it follow the body: no morph data on a drawn shape that has a body
+    // counterpart, data from another build, data that does not fit, or another family's sliders.
+    const bool refit = st.status == "missing-tri" || st.status == "needs-rebuild" || st.status == "tri-mismatch" ||
+                       st.status == "incompatible-family" || st.family_verdict == "incompatible";
+    if (refit) {
+      p["needsRefit"] = true;
+      auto details = p["details"].toStringList();
+      details << qs(st.shape) + ": " + qs(st.detail);
+      p["details"] = details;
+    }
+    static const QStringList rank = {"", "unknown", "compatible", "partial", "incompatible"};
+    if (rank.indexOf(qs(st.family_verdict)) > rank.indexOf(p["family"].toString())) {
+      p["family"] = qs(st.family_verdict);
+      p["familyReason"] = qs(st.family_reason);
+    }
+  }
+  for (const auto& key : order) outfit << pieces[key];
+
+  summary["preset"] = preset;
+  summary["presetMode"] = mode;
+  summary["presetFamily"] = family;
+  summary["weight"] = weight;
+  summary["recordWeight"] = record_weight;
+  summary["showOutfit"] = show_outfit;
+  summary["skeleton"] = skeleton;
+  summary["skeletonProvider"] = skeleton_provider;
+  summary["visibleChanged"] = visible_changed;
+  summary["hiddenChanged"] = hidden_changed;
+  summary["counts"] = counts;
+  summary["outfit"] = outfit;
+  if (body) {
+    QStringList missing;
+    for (const auto& m : body->missing) missing << qs(m);
+    summary["body"] = QVariantMap{{"meshPath", qs(body->mesh_path)}, {"provider", qs(body->mesh_provider)}, {"shape", qs(body->shape)},
+                                  {"shown", body->shown}, {"triPath", qs(body->tri_path)}, {"triProvider", qs(body->tri_provider)},
+                                  {"status", qs(body->status)}, {"statusLabel", morph_status_label(body->status)},
+                                  {"morphs", static_cast<qulonglong>(body->morphs_available)},
+                                  {"presetSliders", static_cast<qulonglong>(body->preset_sliders)},
+                                  {"compatible", static_cast<qulonglong>(body->compatible)},
+                                  {"applied", static_cast<int>(body->applied.size())}, {"missing", missing},
+                                  {"detail", qs(body->detail)}};
+  }
+  if (preset.isEmpty()) {
+    summary["verdict"] = QStringLiteral("none");
+    summary["label"] = QStringLiteral("Sin preset: cuerpo y vestuario tal como están construidos en el perfil.");
+  } else if (visible_changed == 0) {
+    summary["verdict"] = QStringLiteral("not-applied");
+    summary["label"] = hidden_changed > 0
+                           ? QStringLiteral("Preset «%1»: el cuerpo se deformó con sus morphs reales, pero está oculto bajo la ropa y ninguna "
+                                            "prenda visible tiene morphs aplicables.").arg(preset)
+                           : QStringLiteral("Preset «%1»: ninguna forma visible se deformó con morphs reales.").arg(preset);
+  } else {
+    bool refit = false;
+    for (const auto& o : outfit) refit = refit || o.toMap().value("needsRefit").toBool();
+    summary["verdict"] = refit ? QStringLiteral("partial") : QStringLiteral("applied");
+    summary["label"] = refit ? QStringLiteral("Preset «%1»: morphs reales aplicados en %2 forma(s) visible(s); hay prendas que necesitan refit.")
+                                   .arg(preset).arg(visible_changed)
+                             : QStringLiteral("Preset «%1»: morphs reales aplicados en %2 forma(s) visible(s).").arg(preset).arg(visible_changed);
+  }
+}
 }  // namespace
 
 // A built scene plus what install() needs from it, all computed on the build thread so the GUI
@@ -233,6 +366,12 @@ struct SceneViewModel::Prepared {
   FacePreview preview;
   QString npc;
   QString assigned_body_name;
+  QString preset_mode = QStringLiteral("none");  // "preview" | "assigned" | "none"
+  QString preset_family;
+  float record_weight = 50.0f;
+  float weight = 50.0f;
+  bool show_outfit = true;
+  QString skeleton, skeleton_provider;
   QColor record_hair;
 };
 
@@ -286,6 +425,7 @@ void SceneViewModel::cancel() {
 void SceneViewModel::clear() {
   cancel(); parts_.clear(); issues_.clear(); stats_.clear(); skin_match_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
   outfit_diagnostics_.clear(); covered_body_diagnostics_.clear();
+  body_morphs_.clear(); body_morph_summary_.clear();
   status_.clear();
   last_appearance_ = nullptr;
   last_request_key_.clear();
@@ -340,6 +480,9 @@ void SceneViewModel::set_body_director(BodyDirector* body) {
       }
     });
     connect(body_, &BodyDirector::draftChanged, this, [this] {
+      schedule(30);
+    });
+    connect(body_, &BodyDirector::previewChanged, this, [this] {
       schedule(30);
     });
   }
@@ -419,6 +562,19 @@ void SceneViewModel::reload() {
   const int serial = serial_;
   cancel_ = std::make_shared<std::atomic<bool>>(false);
   loading_ = true; status_ = tr("Cargando recursos 3D..."); emit loadingChanged();
+  // Body preview (Cuerpo tab): the preset to deform with (preview of this NPC first, else its assigned rule), the NPC weight to
+  // show and whether the outfit is worn. The armor preview and "Original" keep the profile as it is.
+  std::optional<BodyDirector::AssignedPresetInfo> assigned_preset;
+  bool preset_is_preview = false;
+  std::optional<float> weight_override;
+  bool show_outfit = true;
+  if (body_ && !original_) {
+    assigned_preset = body_->scene_preset_for(effective, &preset_is_preview);
+    if (!armor_preview_) {
+      weight_override = body_->weight_override_for(effective);
+      show_outfit = body_->show_outfit_for(effective);
+    }
+  }
   Json params{{"npcFormKey", ss(effective)}};
   const QString selected_mesh = armor_preview_ ? selected_mesh_ : QString();
   const bool is_mesh = !selected_mesh.isEmpty();
@@ -447,24 +603,21 @@ void SceneViewModel::reload() {
     params["armorFormKeys"] = Json::array();
     for (const auto& p : outfit_->pieces()) params["armorFormKeys"].push_back(ss(p.toMap().value("formKey").toString()));
   }
+  if (!show_outfit && !armor_preview_) params["armorFormKeys"] = Json::array();  // the skin alone: "cuerpo sin ropa"
   // "Original" shows the profile as it is: no face overlay, record weight/height/colors. The face
   // draft only applies to the NPC it belongs to.
   const FacePreview preview = current_preview();
   const QString display_mode = armor_preview_ ? preview_mode_ : QString();
   const QString current_pose = pose_;
   const auto task = diag::next_task_id();
-  std::optional<BodyDirector::AssignedPresetInfo> assigned_preset;
-  if (body_ && !original_) {
-    assigned_preset = body_->assigned_preset_for(effective);
-  }
   diag::record("scene", QStringLiteral("reload #%1 npc=%2 %3 face=%4 geometryRevision=%5 body=%6")
                             .arg(task).arg(effective, armor_preview_ ? "armor-preview" : "main",
                                            preview.npc_form_key.empty() ? "record" : "draft")
                             .arg(preview.geometry_revision)
                             .arg(assigned_preset ? assigned_preset->name : QStringLiteral("none")).toStdString());
-  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_, portrait_overlay = portrait_overlay_](const Json& data) {
+  auto build = [this, snapshot, serial, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, preset_is_preview, weight_override, show_outfit, cancel = cancel_, own_cache = own_cache_, portrait = portrait_mode_, portrait_overlay = portrait_overlay_](const Json& data) {
     QPointer<SceneViewModel> self(this);
-    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, own_cache, portrait, portrait_overlay] {
+    pool_.start([self, snapshot, data, serial, cancel, preview, display_mode, current_pose, task, effective, selected_mesh, assigned_preset, preset_is_preview, weight_override, show_outfit, own_cache, portrait, portrait_overlay] {
       auto prepared = std::make_shared<Prepared>();
       prepared->task = task;
       prepared->preview = preview;
@@ -509,6 +662,18 @@ void SceneViewModel::reload() {
           else appearance.hair_color.reset();
           appearance.skin_tone = rendering::Rgb{preview.skin_tone.r / 255.0f, preview.skin_tone.g / 255.0f, preview.skin_tone.b / 255.0f};
         }
+        prepared->record_weight = appearance.weight;
+        if (weight_override) appearance.weight = *weight_override;
+        prepared->weight = appearance.weight;
+        prepared->show_outfit = show_outfit;
+        prepared->skeleton = qs(appearance.skeleton);
+        if (!appearance.skeleton.empty()) {
+          const auto where = context->resolver->locate(appearance.skeleton);
+          prepared->skeleton_provider = where ? qs(where->kind == assets::AssetLocation::Kind::Archive
+                                                       ? "bsa:" + where->provider + " (" + where->archive_provider + ")"
+                                                       : "loose:" + where->provider)
+                                              : QStringLiteral("no está en el perfil");
+        }
         rendering::SceneOptions options;
         options.apply_skinning = true;
         options.pose_name = current_pose.toStdString();
@@ -529,6 +694,8 @@ void SceneViewModel::reload() {
           }
           options.body_preset = std::move(bpo);
           prepared->assigned_body_name = assigned_preset->name;
+          prepared->preset_mode = preset_is_preview ? QStringLiteral("preview") : QStringLiteral("assigned");
+          prepared->preset_family = assigned_preset->family;
         }
         op.stage("build_character_scene");
         scene = rendering::build_character_scene(appearance, *context->resolver, options);
@@ -568,10 +735,26 @@ void SceneViewModel::reload() {
         if (!self || serial != self->serial_) return;
         self->loading_ = false;
         if (prepared->error.isEmpty()) {
+          QElapsedTimer install_timer; install_timer.start();
           self->install(*prepared);
+          const qint64 install_ms = install_timer.elapsed();
           self->stats_["elapsedMs"] = prepared->elapsed;
+          self->stats_["installMs"] = install_ms;  // GUI thread: GPU objects + QML notify
           self->stats_["generatedFaceGen"] = prepared->preview.overlay != nullptr;
           const auto& s = prepared->scene.stats;
+          diag::record("scene", QStringLiteral("timings #%1 npc=%2 build=%3 skeleton=%4 geometry=%5 (meshRead=%6 skinning=%7) "
+                                               "textures=%8 (decode=%9) composite=%10 worker=%11 install=%12 ms; "
+                                               "cache mesh %13/%14 texture %15/%16 composite %17/%18 hit/miss, skeleton hit %19; cache %20 MB, %21 evictions")
+                                    .arg(prepared->task).arg(prepared->npc)
+                                    .arg(s.ms.total, 0, 'f', 1).arg(s.ms.skeleton, 0, 'f', 1).arg(s.ms.geometry, 0, 'f', 1)
+                                    .arg(s.ms.mesh_read, 0, 'f', 1).arg(s.ms.skinning, 0, 'f', 1).arg(s.ms.textures, 0, 'f', 1)
+                                    .arg(s.ms.texture_decode, 0, 'f', 1).arg(s.ms.composite, 0, 'f', 1)
+                                    .arg(prepared->elapsed).arg(install_ms)
+                                    .arg(s.mesh_cache_hits).arg(s.mesh_cache_misses).arg(s.texture_cache_hits).arg(s.texture_cache_misses)
+                                    .arg(s.composite_cache_hits).arg(s.composite_cache_misses).arg(s.skeleton_cache_hits)
+                                    .arg(static_cast<double>(s.cache_texture_bytes) / (1024.0 * 1024.0), 0, 'f', 0)
+                                    .arg(static_cast<qulonglong>(s.cache_evictions))
+                                    .toStdString());
           if (!selected_mesh.isEmpty() && s.meshes_loaded == 0) {
             QString diag_msg = tr("No se pudo cargar la malla NIF: %1").arg(selected_mesh);
             for (const auto& iss : prepared->scene.issues) {
@@ -585,7 +768,11 @@ void SceneViewModel::reload() {
             self->status_ = tr("%1 mallas, %2 geometrías, %3 texturas (%4 ms)%5%6").arg(s.meshes_loaded).arg(s.shapes)
                                 .arg(s.textures_loaded).arg(prepared->elapsed)
                                 .arg(prepared->preview.overlay ? tr(" · cabeza regenerada del borrador") : QString())
-                                .arg(!prepared->assigned_body_name.isEmpty() ? tr(" · cuerpo: %1").arg(prepared->assigned_body_name) : QString());
+                                .arg(!prepared->assigned_body_name.isEmpty()
+                                         ? tr(" · preset %1: %2 forma(s) visible(s) con morphs reales")
+                                               .arg(prepared->assigned_body_name)
+                                               .arg(self->body_morph_summary_.value("visibleChanged").toInt())
+                                         : QString());
           }
         } else {
           self->clear();
@@ -693,7 +880,17 @@ void SceneViewModel::install(Prepared& prepared) {
   stats_ = {{"shapes", scene.stats.shapes}, {"triangles", static_cast<qlonglong>(scene.stats.triangles)},
     {"textures", scene.stats.textures_loaded}, {"missingTextures", scene.stats.textures_missing},
     {"skinnedShapes", scene.stats.skinned_shapes}, {"bones", static_cast<qlonglong>(scene.skeleton_bones)}, {"missingBones", scene.stats.bones_missing},
-    {"hiddenShapes", scene.stats.hidden_shapes}, {"texturesReduced", scene.stats.textures_reduced}, {"piecesUnequipped", scene.stats.pieces_unequipped}};
+    {"hiddenShapes", scene.stats.hidden_shapes}, {"texturesReduced", scene.stats.textures_reduced}, {"piecesUnequipped", scene.stats.pieces_unequipped},
+    {"timingsMs", QVariantMap{{"skeleton", scene.stats.ms.skeleton}, {"geometry", scene.stats.ms.geometry}, {"meshRead", scene.stats.ms.mesh_read},
+                              {"skinning", scene.stats.ms.skinning}, {"textures", scene.stats.ms.textures},
+                              {"textureDecode", scene.stats.ms.texture_decode}, {"composite", scene.stats.ms.composite},
+                              {"build", scene.stats.ms.total}}},
+    {"cache", QVariantMap{{"meshHits", scene.stats.mesh_cache_hits}, {"meshMisses", scene.stats.mesh_cache_misses},
+                          {"textureHits", scene.stats.texture_cache_hits}, {"textureMisses", scene.stats.texture_cache_misses},
+                          {"skeletonHits", scene.stats.skeleton_cache_hits}, {"compositeHits", scene.stats.composite_cache_hits},
+                          {"compositeMisses", scene.stats.composite_cache_misses},
+                          {"textureMB", static_cast<double>(scene.stats.cache_texture_bytes) / (1024.0 * 1024.0)},
+                          {"evictions", static_cast<qulonglong>(scene.stats.cache_evictions)}}}};
 
   outfit_diagnostics_.clear();
   for (const auto& diag : scene.outfit_diagnostics) {
@@ -714,6 +911,7 @@ void SceneViewModel::install(Prepared& prepared) {
         {"meshPaths", paths},
         {"meshProviders", providers},
         {"meshesExist", diag.meshes_exist},
+        {"noAddonForRace", diag.no_addon_for_race},
         {"reason", qs(diag.reason)},
     });
   }
@@ -737,6 +935,8 @@ void SceneViewModel::install(Prepared& prepared) {
     });
   }
 
+  morph_views(scene, prepared.assigned_body_name, prepared.preset_mode, prepared.preset_family, prepared.weight, prepared.record_weight,
+              prepared.show_outfit, prepared.skeleton, prepared.skeleton_provider, body_morphs_, body_morph_summary_);
   skin_match_ = skin_match_of(scene);
   installed_ = true;
   installed_npc_ = prepared.npc;

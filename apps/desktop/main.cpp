@@ -9,6 +9,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -278,7 +279,7 @@ int main(int argc, char* argv[]) {
   QObject::connect(&studio, &sns::app::StudioController::loaded, &app, [&] {
     if (cli.isSet(npc_opt)) {
       studio.selectNpc(cli.value(npc_opt));
-    } else if (automated) {
+    } else if (automated && !cli.isSet(forge_preview_opt)) {  // the Forge check loads a profile itself and finishes on its own
       QTimer::singleShot(1500, &app, [&] { finish(0); });
     }
   });
@@ -336,7 +337,9 @@ int main(int argc, char* argv[]) {
     if (automated && studio.phase() == sns::app::StudioController::Phase::Error)
       QTimer::singleShot(100, &app, [&] { std::fprintf(stderr, "load error: %s\n", qPrintable(studio.progress_text())); finish(3); });
   });
-  if (automated) QTimer::singleShot(10 * 60 * 1000, &app, [&] { finish(4); });
+  // Watchdog of automated runs (exit 4): 10 minutes, or SNS_AUTOMATION_TIMEOUT_MIN for long real-profile scenarios.
+  const int watchdog_min = std::clamp(qEnvironmentVariableIntValue("SNS_AUTOMATION_TIMEOUT_MIN") > 0 ? qEnvironmentVariableIntValue("SNS_AUTOMATION_TIMEOUT_MIN") : 10, 1, 120);
+  if (automated) QTimer::singleShot(watchdog_min * 60 * 1000, &app, [&] { finish(4); });
 
   return QGuiApplication::exec();
 }

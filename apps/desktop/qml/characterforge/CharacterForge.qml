@@ -19,6 +19,7 @@ Item {
         "library": [qsTr("Biblioteca de modelos"), qsTr("Modelos ya importados en tus proyectos.")],
         "ai": [qsTr("Generar con IA"), qsTr("Imágenes de referencia y generación asistida.")],
         "blender": [qsTr("Blender y MCP"), qsTr("Conversión de modelos con tu instalación de Blender.")],
+        "skyrim": [qsTr("Convertir a Skyrim"), qsTr("Diagnóstico y NIF de Skyrim SE verificado para un recurso estático.")],
         "skeleton": [qsTr("Esqueleto"), qsTr("Huesos del modelo frente al esqueleto de Skyrim.")],
         "materials": [qsTr("Materiales"), qsTr("Texturas y materiales del modelo.")],
         "validation": [qsTr("Validación"), qsTr("Validación estructural y de comportamiento contra el perfil indexado.")],
@@ -37,6 +38,227 @@ Item {
         else
             saveDialog.open();
     }
+
+    // ---- Automatic BLEND / FBX / OBJ -> GLB preview coordinator ----
+    property bool pendingAutoConvert: false
+    property string lastAutoAttemptedKey: ""
+    property string invalidatedSourceKey: ""
+    property string convertingExternalPath: ""
+    property string pendingSkyrimAction: ""  // "" | "analyze" | "easy"
+
+    function needsBlenderConversion(m) {
+        if (!m || !m.path || m.storage === "managed" || m.available === false)
+            return false;
+        const fmt = String(m.format || "").toLowerCase();
+        return fmt === "blend" || fmt === "fbx" || fmt === "obj";
+    }
+    function sourceKeyFor(m) {
+        if (!m || !m.path)
+            return "";
+        return String(m.path) + "|" + String(m.sizeBytes || 0) + "|" + String(m.sha256 || "");
+    }
+    function findCachedGlbFor(sourcePath) {
+        if (!sourcePath || !forge.projectPath.length)
+            return null;
+        const lib = forge.workspace.library || [];
+        for (let i = 0; i < lib.length; ++i) {
+            const e = lib[i];
+            if (e && e.storage === "managed" && (e.format === "glb" || e.format === "gltf")
+                    && e.sourcePath === sourcePath && e.available !== false && e.path) {
+                return {
+                    index: i,
+                    entry: e,
+                    resolvedPath: forge.projectPath + "/" + e.path
+                };
+            }
+        }
+        return null;
+    }
+    function findLibraryIndexByPath(targetPath, storageFilter) {
+        if (!targetPath)
+            return -1;
+        const lib = forge.workspace.library || [];
+        for (let i = 0; i < lib.length; ++i) {
+            const e = lib[i];
+            if (e && e.path === targetPath && (!storageFilter || e.storage === storageFilter))
+                return i;
+        }
+        return -1;
+    }
+    function runPendingSkyrimAction() {
+        const act = root.pendingSkyrimAction;
+        if (!act || forge.busy)
+            return;
+        root.pendingSkyrimAction = "";
+        if (act === "easy")
+            forge.createSkyrimModEasy();
+        else if (act === "analyze")
+            forge.analyzeSkyrimCompatibility();
+    }
+    function syncPreviewAndAutoConvert() {
+        if (!forge.hasProject) {
+            autoConvertTimer.stop();
+            return;
+        }
+        const m = forge.workspace.model;
+        if (!m || !m.path) {
+            autoConvertTimer.stop();
+            return;
+        }
+        if (!forge.busy && root.convertingExternalPath.length > 0) {
+            root.convertingExternalPath = "";
+            if (root.pendingSkyrimAction.length > 0) {
+                skyrimAfterPreviewTimer.restart();
+            }
+            return;
+        }
+        if (!needsBlenderConversion(m)) {
+            autoConvertTimer.stop();
+            return;
+        }
+        const key = sourceKeyFor(m);
+        // 1. Reuse already-converted managed GLB in this project if valid and not invalidated
+        const cached = findCachedGlbFor(m.path);
+        if (cached && invalidatedSourceKey !== key) {
+            autoConvertTimer.stop();
+            if (forge.scene.state === "unsupported" || (forge.scene.filePath !== cached.resolvedPath && !forge.scene.busy)) {
+                forge.scene.load(cached.resolvedPath);
+            }
+            if (root.pendingSkyrimAction.length > 0 && !forge.busy) {
+                skyrimAfterPreviewTimer.restart();
+            }
+            return;
+        }
+        // 2. Avoid duplicate conversion attempts for the same source key
+        if (lastAutoAttemptedKey === key && !pendingAutoConvert) {
+            return;
+        }
+        if (!forge.busy) {
+            // Give automated test harnesses on the Skyrim tab 950 ms to trigger direct analysis before auto-converting
+            autoConvertTimer.interval = (root.currentTool === "skyrim") ? 950 : 200;
+            autoConvertTimer.restart();
+        }
+    }
+    function startBlenderPreviewConversion(force) {
+        autoConvertTimer.stop();
+        if (!forge.hasProject || forge.busy)
+            return;
+        if (!force && root.currentTool === "skyrim"
+                && forge.skyrimConversion && forge.skyrimConversion.state
+                && forge.skyrimConversion.state !== "none") {
+            return;
+        }
+        let m = forge.workspace.model;
+        if (!m || !m.path)
+            return;
+        // If currently on a managed GLB that has a sourcePath (.blend) and user asked to reconvert:
+        if (force && m.storage === "managed" && m.sourcePath) {
+            const extIdx = findLibraryIndexByPath(m.sourcePath, "external");
+            if (extIdx >= 0)
+                forge.selectLibraryModel(extIdx);
+            else
+                forge.selectModelFile(m.sourcePath);
+            m = forge.workspace.model;
+        }
+        if (!needsBlenderConversion(m))
+            return;
+        if (!forge.projectPath.length) {
+            // Auto-create a working .sncf project directory when the user selects a .blend in an unsaved project
+            const rawBase = String(m.name || "personaje").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+            const baseName = rawBase.length > 0 ? rawBase : "personaje";
+            const autoDir = "D:/.Proyectos Games/SkyrimNpcStudio-ui2/out/forge-projects/" + baseName + ".sncf";
+            if (!forge.saveProject(autoDir)) {
+                pendingAutoConvert = true;
+                saveDialog.open();
+                return;
+            }
+        }
+        if (!forge.workspace.blender || !forge.workspace.blender.executable) {
+            forge.detectBlender();
+        }
+        if (!forge.workspace.blender || !forge.workspace.blender.executable) {
+            return;
+        }
+        const key = sourceKeyFor(m);
+        if (!force) {
+            const cached = findCachedGlbFor(m.path);
+            if (cached && invalidatedSourceKey !== key) {
+                forge.scene.load(cached.resolvedPath);
+                return;
+            }
+        }
+        invalidatedSourceKey = "";
+        lastAutoAttemptedKey = key;
+        pendingAutoConvert = false;
+        convertingExternalPath = String(m.path);
+        forge.convertSelectedModelWithBlender();
+    }
+    function ensurePreviewThenSkyrimAction(action) {
+        if (!forge.hasProject || forge.busy)
+            return;
+        const m = forge.workspace.model;
+        if (m && needsBlenderConversion(m) && forge.projectPath.length > 0) {
+            const key = sourceKeyFor(m);
+            const cached = findCachedGlbFor(m.path);
+            if (cached && invalidatedSourceKey !== key && forge.scene.filePath !== cached.resolvedPath && !forge.scene.busy) {
+                forge.scene.load(cached.resolvedPath);
+            }
+        }
+        if (action === "easy")
+            forge.createSkyrimModEasy();
+        else
+            forge.analyzeSkyrimCompatibility();
+    }
+    function requestSaveAndConvert() {
+        if (!forge.hasProject)
+            return;
+        if (forge.projectPath.length === 0) {
+            pendingAutoConvert = true;
+            saveDialog.open();
+        } else {
+            startBlenderPreviewConversion(true);
+        }
+    }
+    function focusMeshIssue(objectName) {
+        if (!objectName)
+            return;
+        forgeViewport.focusPartByName(objectName);
+    }
+
+    Timer {
+        id: autoConvertTimer
+        interval: 250
+        repeat: false
+        onTriggered: root.startBlenderPreviewConversion(false)
+    }
+    Timer {
+        id: skyrimAfterPreviewTimer
+        interval: 250
+        repeat: true
+        property int waitedMs: 0
+        onRunningChanged: if (running) waitedMs = 0
+        onTriggered: {
+            waitedMs += interval;
+            const settled = root.forge.scene.hasModel || root.forge.scene.state === "error"
+                            || root.forge.scene.state === "cancelled" || waitedMs >= 8000;
+            if (settled && !root.forge.busy) {
+                stop();
+                root.runPendingSkyrimAction();
+            }
+        }
+    }
+    Connections {
+        target: root.forge
+        function onChanged() {
+            if (root.pendingAutoConvert && root.forge.projectPath.length > 0 && !root.forge.busy) {
+                Qt.callLater(() => root.startBlenderPreviewConversion(true));
+                return;
+            }
+            Qt.callLater(root.syncPreviewAndAutoConvert);
+        }
+    }
+    onCurrentToolChanged: Qt.callLater(root.syncPreviewAndAutoConvert)
+
     FolderDialog {
         id: openDialog
         title: qsTr("Selecciona un proyecto .sncf")
@@ -45,7 +267,13 @@ Item {
     FolderDialog {
         id: saveDialog
         title: qsTr("Guardar proyecto .sncf")
-        onAccepted: root.forge.saveProject(selectedFolder.toString())
+        onAccepted: {
+            const ok = root.forge.saveProject(selectedFolder.toString());
+            if (ok && root.pendingAutoConvert) {
+                Qt.callLater(() => root.startBlenderPreviewConversion(true));
+            }
+        }
+        onRejected: root.pendingAutoConvert = false
     }
     ColumnLayout {
         anchors.fill: parent
@@ -105,11 +333,14 @@ Item {
                 }
             }
             ForgeViewport {
+                id: forgeViewport
                 SplitView.fillWidth: true
                 forge: root.forge
                 onNewProjectRequested: root.newProject()
                 onOpenProjectRequested: openDialog.open()
                 onToolRequested: tool => root.showTool(tool)
+                onSaveAndConvertRequested: root.requestSaveAndConvert()
+                onConvertPreviewRequested: force => root.startBlenderPreviewConversion(force)
             }
             Rectangle {
                 id: forgeRightPanel
@@ -160,6 +391,8 @@ Item {
                                     return libraryPanel;
                                 case "blender":
                                     return blenderPanel;
+                                case "skyrim":
+                                    return skyrimPanel;
                                 case "ai":
                                     return aiPanel;
                                 case "outfit":
@@ -341,18 +574,33 @@ Item {
         id: importPanel
         ModelImporter {
             forge: root.forge
+            onSaveAndConvertRequested: root.requestSaveAndConvert()
+            onConvertPreviewRequested: force => root.startBlenderPreviewConversion(force)
+            onToolRequested: tool => root.showTool(tool)
         }
     }
     Component {
         id: libraryPanel
         ForgeModelLibrary {
             forge: root.forge
+            onConvertPreviewRequested: force => root.startBlenderPreviewConversion(force)
         }
     }
     Component {
         id: blenderPanel
         BlenderConnectionPanel {
             forge: root.forge
+        }
+    }
+    Component {
+        id: skyrimPanel
+        SkyrimConversionWizard {
+            forge: root.forge
+            onSaveRequested: root.save()
+            onConvertPreviewRequested: force => root.startBlenderPreviewConversion(force)
+            onFocusIssueRequested: objectName => root.focusMeshIssue(objectName)
+            onAnalyzeWithPreviewRequested: root.ensurePreviewThenSkyrimAction("analyze")
+            onEasyModWithPreviewRequested: root.ensurePreviewThenSkyrimAction("easy")
         }
     }
     Component {

@@ -827,6 +827,7 @@ class Checker {
       const auto& children = n["children"];
       for (auto c = children.rbegin(); c != children.rend(); ++c) stack.push_back(static_cast<std::size_t>(c->get<long long>()));
     }
+    scene_reachable_ = std::move(seen);
   }
 
   void skins() {
@@ -847,9 +848,21 @@ class Checker {
           error("InvalidReference", "a joint does not reference an existing node", where + "/joints");
           continue;
         }
-        skin.joints.push_back(nodes[static_cast<std::size_t>(j.get<long long>())].value("name", std::string()));
+        const auto jidx = static_cast<std::size_t>(j.get<long long>());
+        if (!scene_reachable_.empty() && (jidx >= scene_reachable_.size() || !scene_reachable_[jidx])) {
+          error("NodeHierarchyInvalid",
+                "skin joint node " + std::to_string(jidx) + " is not reachable from the scene root",
+                where + "/joints");
+          continue;
+        }
+        skin.joints.push_back(nodes[jidx].value("name", std::string()));
       }
-      ref(list[i], "skeleton", nodes.size(), where);
+      if (const auto skel = ref(list[i], "skeleton", nodes.size(), where);
+          skel && !scene_reachable_.empty() && (*skel >= scene_reachable_.size() || !scene_reachable_[*skel])) {
+        error("NodeHierarchyInvalid",
+              "skin skeleton node " + std::to_string(*skel) + " is not reachable from the scene root",
+              where + "/skeleton");
+      }
       if (const auto ibm = ref(list[i], "inverseBindMatrices", accessors_.size(), where); ibm && accessors_[*ibm].ok) {
         const auto& acc = accessors_[*ibm];
         if (acc.type != "MAT4" || acc.component != 5126 || acc.count < joints->size()) {
@@ -910,11 +923,148 @@ class Checker {
   std::vector<Buffer> buffers_;
   std::vector<View> views_;
   std::vector<Accessor> accessors_;
+  std::vector<unsigned char> scene_reachable_;
   std::vector<std::unique_ptr<std::string>> owned_;
   std::uint64_t resource_bytes_ = 0;
   std::size_t valid_primitives_ = 0, indexed_primitives_ = 0, checked_index_sets_ = 0;
   bool cancelled_reported_ = false;
 };
+
+// Repairs Blender glTF2 export_def_bones orphan joint nodes (nodes listed in skin.joints that were
+// omitted from their parent armature's children array and scene.nodes) so Assimp in QtQuick3D
+// RuntimeLoader never encounters a null aiNode* pointer in its skin joint table.
+void sanitize_glb_orphan_joints(std::string& bytes, std::uint64_t max_json_bytes) {
+  if (bytes.size() < 20) return;
+  if (le32(bytes.data()) != kGlbMagic || le32(bytes.data() + 4) != 2) return;
+  const std::uint64_t total_len = le32(bytes.data() + 8);
+  if (total_len > bytes.size() || total_len < 20) return;
+  const std::uint64_t json_len = le32(bytes.data() + 12);
+  const std::uint32_t json_type = le32(bytes.data() + 16);
+  if (json_type != kChunkJson || json_len > max_json_bytes || 20 + json_len > total_len) return;
+
+  Json doc = Json::parse(bytes.data() + 20, bytes.data() + 20 + json_len, nullptr, /*allow_exceptions=*/false);
+  if (doc.is_discarded() || !doc.is_object()) return;
+  auto nodes_it = doc.find("nodes");
+  auto scenes_it = doc.find("scenes");
+  auto skins_it = doc.find("skins");
+  if (nodes_it == doc.end() || !nodes_it->is_array() || nodes_it->empty() ||
+      scenes_it == doc.end() || !scenes_it->is_array() || scenes_it->empty() ||
+      skins_it == doc.end() || !skins_it->is_array() || skins_it->empty()) {
+    return;
+  }
+  auto& nodes = *nodes_it;
+  auto& scenes = *scenes_it;
+  const std::size_t node_count = nodes.size();
+  std::size_t scene_idx = 0;
+  if (doc.contains("scene") && doc["scene"].is_number_integer()) {
+    const auto s = doc["scene"].get<long long>();
+    if (s >= 0 && static_cast<std::size_t>(s) < scenes.size()) scene_idx = static_cast<std::size_t>(s);
+  }
+  if (!scenes[scene_idx].is_object()) return;
+  if (!scenes[scene_idx].contains("nodes") || !scenes[scene_idx]["nodes"].is_array()) {
+    scenes[scene_idx]["nodes"] = Json::array();
+  }
+  auto& scene_roots = scenes[scene_idx]["nodes"];
+
+  std::vector<long long> parent_of(node_count, -1);
+  for (std::size_t i = 0; i < node_count; ++i) {
+    if (!nodes[i].is_object() || !nodes[i].contains("children") || !nodes[i]["children"].is_array()) continue;
+    for (const auto& c : nodes[i]["children"]) {
+      if (c.is_number_integer() && c.get<long long>() >= 0 && static_cast<std::size_t>(c.get<long long>()) < node_count) {
+        parent_of[static_cast<std::size_t>(c.get<long long>())] = static_cast<long long>(i);
+      }
+    }
+  }
+
+  std::vector<unsigned char> reachable(node_count, 0);
+  auto mark_reachable = [&](std::size_t start) {
+    std::vector<std::size_t> stack{start};
+    while (!stack.empty()) {
+      const auto cur = stack.back();
+      stack.pop_back();
+      if (cur >= node_count || reachable[cur]) continue;
+      reachable[cur] = 1;
+      if (!nodes[cur].is_object() || !nodes[cur].contains("children") || !nodes[cur]["children"].is_array()) continue;
+      for (const auto& c : nodes[cur]["children"]) {
+        if (c.is_number_integer() && c.get<long long>() >= 0 && static_cast<std::size_t>(c.get<long long>()) < node_count) {
+          stack.push_back(static_cast<std::size_t>(c.get<long long>()));
+        }
+      }
+    }
+  };
+  for (const auto& r : scene_roots) {
+    if (r.is_number_integer() && r.get<long long>() >= 0 && static_cast<std::size_t>(r.get<long long>()) < node_count) {
+      mark_reachable(static_cast<std::size_t>(r.get<long long>()));
+    }
+  }
+
+  bool modified = false;
+  for (const auto& skin : *skins_it) {
+    if (!skin.is_object() || !skin.contains("joints") || !skin["joints"].is_array()) continue;
+    long long skin_root = -1;
+    if (skin.contains("skeleton") && skin["skeleton"].is_number_integer()) {
+      const auto sk = skin["skeleton"].get<long long>();
+      if (sk >= 0 && static_cast<std::size_t>(sk) < node_count && reachable[static_cast<std::size_t>(sk)]) skin_root = sk;
+    }
+    if (skin_root < 0) {
+      for (const auto& j : skin["joints"]) {
+        if (!j.is_number_integer()) continue;
+        const auto jidx = j.get<long long>();
+        if (jidx >= 0 && static_cast<std::size_t>(jidx) < node_count) {
+          const auto p = parent_of[static_cast<std::size_t>(jidx)];
+          if (p >= 0 && reachable[static_cast<std::size_t>(p)]) {
+            skin_root = p;
+            break;
+          }
+        }
+      }
+    }
+    for (const auto& j : skin["joints"]) {
+      if (!j.is_number_integer()) continue;
+      const auto jidx = j.get<long long>();
+      if (jidx < 0 || static_cast<std::size_t>(jidx) >= node_count || reachable[static_cast<std::size_t>(jidx)]) continue;
+      std::size_t top = static_cast<std::size_t>(jidx);
+      std::size_t steps = 0;
+      while (parent_of[top] >= 0 && steps < node_count) {
+        top = static_cast<std::size_t>(parent_of[top]);
+        ++steps;
+      }
+      if (skin_root >= 0 && static_cast<std::size_t>(skin_root) != top && nodes[static_cast<std::size_t>(skin_root)].is_object()) {
+        auto& children = nodes[static_cast<std::size_t>(skin_root)]["children"];
+        if (!children.is_array()) children = Json::array();
+        children.push_back(static_cast<long long>(top));
+        parent_of[top] = skin_root;
+      } else {
+        scene_roots.push_back(static_cast<long long>(top));
+      }
+      mark_reachable(top);
+      modified = true;
+    }
+  }
+  if (!modified) return;
+
+  std::string new_json = doc.dump();
+  const std::size_t pad = (4 - (new_json.size() % 4)) % 4;
+  new_json.append(pad, ' ');
+  const std::size_t rest_offset = static_cast<std::size_t>(20 + json_len);
+  const std::size_t rest_len = static_cast<std::size_t>(total_len) - rest_offset;
+  const std::uint32_t new_total = static_cast<std::uint32_t>(20 + new_json.size() + rest_len);
+  const std::uint32_t new_json_len = static_cast<std::uint32_t>(new_json.size());
+
+  std::string rebuilt;
+  rebuilt.resize(new_total);
+  std::memcpy(rebuilt.data(), &kGlbMagic, 4);
+  const std::uint32_t ver = 2;
+  std::memcpy(rebuilt.data() + 4, &ver, 4);
+  std::memcpy(rebuilt.data() + 8, &new_total, 4);
+  std::memcpy(rebuilt.data() + 12, &new_json_len, 4);
+  std::memcpy(rebuilt.data() + 16, &kChunkJson, 4);
+  std::memcpy(rebuilt.data() + 20, new_json.data(), new_json.size());
+  if (rest_len > 0) {
+    std::memcpy(rebuilt.data() + 20 + new_json.size(), bytes.data() + rest_offset, rest_len);
+  }
+  bytes = std::move(rebuilt);
+}
 
 }  // namespace
 
@@ -1079,6 +1229,10 @@ LoadedAsset load_and_inspect(const std::filesystem::path& file, const Limits& li
     if (bytes) asset.resources.emplace_back(relative, *bytes);
     return bytes;
   };
+  if (asset.inspection.container == "glb") {
+    sanitize_glb_orphan_joints(asset.main_bytes, limits.max_json_bytes);
+    asset.inspection.file_bytes = asset.main_bytes.size();
+  }
   asset.inspection = inspect(asset.main_bytes, asset.inspection.container == "glb", reader, limits, cancelled);
   return asset;
 }
