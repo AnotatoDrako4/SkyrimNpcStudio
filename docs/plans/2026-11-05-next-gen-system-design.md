@@ -136,6 +136,30 @@ Errores: reutilizar `ErrorCodes` del worker; clasificar subprocesos (Blender/Bod
 - **Diagnóstico cuerpo/armadura:** `outfit_fit_doctor` + `body_analysis` sobre el ganador MO2 del cuerpo y de cada ARMA.
 - **Riesgo:** Serana tiene scripts y outfits que otros mods sobrescriben **[Inferencia]**; el kit debe registrar el plugin ganador.
 
+#### A.1 Contrato verificado en el código (iteración 2)
+
+**[Confirmado]** El MVP de outfit + peluca **no necesita código nuevo en el worker** si la peluca ya es un ARMO del perfil:
+
+| Pieza | Dónde | Qué garantiza |
+| --- | --- | --- |
+| `OutfitAssignment { NpcFormKey, ArmorFormKeys, OutfitEditorId?, AlsoSetSleepingOutfit, … }` | `Contracts/OutfitDtos.cs:44` | Un OTFT nuevo por NPC con las piezas dadas (peluca incluida) |
+| `OutfitPatchBuilder.Build` (modo A) | `PatchBuilder/OutfitPatchBuilder.cs:64` | Override mínimo copiado del registro **ganador**; nunca modifica plugins existentes; relectura independiente (masters, rango ESL `0x800–0xFFF`, referencias) |
+| `NpcSafePatch.AllowedForOutfit(alsoSleeping, alsoInventory)` | `PatchBuilder/NpcSafePatch.cs:114` | Máscara: solo `DOFT` (+`SOFT`, +`CNTO` opcionales); cualquier otro campo cambiado aborta la instalación |
+| `SlotConflict` | `OutfitPatchBuilder.cs:129` | Rechaza peluca (slot 31/41) + capucha que ocupe el mismo slot |
+| `AddonSlotReleases` | `OutfitPatchBuilder.cs:232` | Libera slots reclamados solo por ARMA (p. ej. capucha que oculta pelo) creando ARMO/ARMA nuevos |
+| `SaveGamePersistence` (Info) | `Validation/OutfitValidator.cs:170` | Ya avisa que un NPC cargado en una partida puede conservar su equipo |
+
+Consecuencias de diseño:
+
+1. **FaceGen intacto por construcción**: la máscara no permite `PNAM`, `NAM9`, `NAMA`, `FTST`, `NAM7` en una operación de outfit.
+2. **[Probable]** Una pieza con slot 31 (Hair) oculta el HDPT de pelo horneado y muestra la peluca; es el mecanismo de los mods de
+   pelucas. Debe confirmarse en juego con el kit M2 (acta), no por inferencia.
+3. **Prueba en juego**: el aviso `SaveGamePersistence` implica que el kit debe probarse en **partida nueva o guardado limpio**
+   anterior al primer encuentro con Serana; un guardado avanzado puede dar un falso FAIL. **[Supuesto]** Qué comando de consola
+   reaplica el outfit sin efectos secundarios en un seguidor con scripts: no verificado; no incluir `recycleactor` en el kit.
+4. **Hueco real**: si el perfil no tiene ningún ARMO de peluca, hace falta **crear** uno a partir de una malla de pelo
+   (ARMO+ARMA con slot 31, modelo por raza/sexo). Eso es código nuevo en el worker → sección 10.
+
 ### B — Character Forge avanzado
 
 Orden de incrementos (dependencias reales, no deseos):
@@ -216,8 +240,8 @@ Cada ejecución programada amplía **una** sección con evidencia nueva del repo
 | Iteración | Fecha | Cambio |
 | --- | --- | --- |
 | 1 | 2026-11-05 | Diseño inicial |
-| 2 (siguiente) | — | Producto A: contrato exacto de `NpcSafePatch` para outfit + peluca, leyendo `NpcSafePatch.cs` y `OutfitPatchBuilder.cs` |
-| 3 | — | Producto B: diseño de `geometry.partition` en `engines/nif` con prueba de 70 000 vértices |
+| 2 | 2026-11-05 | Producto A: §4.A.1 contrato outfit + peluca verificado en `NpcSafePatch.cs`, `OutfitPatchBuilder.cs`, `OutfitValidator.cs`. Sin cambios de código. A-MVP usa código existente; en juego: `PENDIENTE_SKYRIM` |
+| 3 (siguiente) | — | Producto B: diseño de `geometry.partition` en `engines/nif` con prueba de 70 000 vértices |
 | 4 | — | Producto C: qué detecta hoy `body_analysis` y qué falta para CBBE/3BA/UBE |
 
 Tras la iteración 4 el loop pasa a **modo mejora**: un incremento por ejecución, solo si es verificable en Linux (Python/pytest,
@@ -229,3 +253,4 @@ lógica pura con prueba, documentación con fuentes); lo demás va a la sección
 | --- | --- | --- |
 | Arreglar `ProtocolContractTests.cs:38` (7→8) y renombrar el test a `1_8` | M2 local | El cambio a 1.8 solo existe en el checkout local del propietario |
 | `geometry.partition` en `engines/nif` | B, fase 2 | C++; requiere build Windows |
+| Crear ARMO/ARMA de peluca (slot 31) desde una malla de pelo, si el perfil no tiene pelucas | A | Código nuevo en el worker .NET; probar con `OutfitPatchBuilder` existente |
