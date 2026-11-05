@@ -202,7 +202,10 @@ La corrección del cierre de Sarah demuestra robustez de **carga**, no de **anim
 ## 8. Datos no verificados
 
 - Estado real de las ejecuciones de CI de `windows.yml` (no consultado).
-- Versión de Qt usada en el build (no aparece fijada en `CMakeLists.txt`/`CMakePresets.json`); afecta a la viabilidad de MorphTarget.
+- ~~Versión de Qt~~ → **[Confirmado]** la app requiere Qt 6.11 (`CMakeLists.txt:50`), así que MorphTarget de Qt Quick 3D está
+  disponible en la versión objetivo; falta medir latencia.
+- **[Confirmado]** El build solo configura en Windows x64 (`CMakeLists.txt:9`); en el contenedor Linux de esta sesión no hay Qt,
+  .NET ni Blender. Todo cambio C++/.NET hecho aquí sería `IMPLEMENTADO_NO_COMPILADO`.
 - Compatibilidad PyNifly 30.x y motor M2: solo en el checkout local del propietario.
 - FormKey de Serana y su plugin ganador en el perfil real.
 
@@ -216,3 +219,13 @@ Cada ejecución programada amplía **una** sección con evidencia nueva del repo
 | 2 (siguiente) | — | Producto A: contrato exacto de `NpcSafePatch` para outfit + peluca, leyendo `NpcSafePatch.cs` y `OutfitPatchBuilder.cs` |
 | 3 | — | Producto B: diseño de `geometry.partition` en `engines/nif` con prueba de 70 000 vértices |
 | 4 | — | Producto C: qué detecta hoy `body_analysis` y qué falta para CBBE/3BA/UBE |
+
+Tras la iteración 4 el loop pasa a **modo mejora**: un incremento por ejecución, solo si es verificable en Linux (Python/pytest,
+lógica pura con prueba, documentación con fuentes); lo demás va a la sección 10.
+
+## 10. Backlog para Windows (requiere compilar C++/.NET o probar en Skyrim)
+
+| Propuesta | Producto/fase | Por qué no se hizo en el loop |
+| --- | --- | --- |
+| Arreglar `ProtocolContractTests.cs:38` (7→8) y renombrar el test a `1_8` | M2 local | El cambio a 1.8 solo existe en el checkout local del propietario |
+| `geometry.partition` en `engines/nif` | B, fase 2 | C++; requiere build Windows |
