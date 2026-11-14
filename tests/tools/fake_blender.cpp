@@ -89,7 +89,8 @@ int main(int argc, char** argv) {
 
   QString temp_dir;
   if (qEnvironmentVariableIntValue("SNS_FAKE_BLENDER_TEMPDIR") == 1) {  // like forge_resources.announce_tempdir()
-    temp_dir = QDir::temp().filePath(QStringLiteral("blender_fake%1").arg(QCoreApplication::applicationPid()));
+    const auto tag = qEnvironmentVariable("SNS_FAKE_BLENDER_TAG");
+    temp_dir = QDir::temp().filePath(QStringLiteral("blender_fake%1x%2").arg(tag).arg(QCoreApplication::applicationPid()));
     QDir().mkpath(temp_dir);
     write(temp_dir + "/session.tmp", "x");
     out("SNS_FORGE_TEMPDIR " + QDir::toNativeSeparators(temp_dir).toUtf8() + "\\");

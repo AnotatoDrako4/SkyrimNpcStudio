@@ -48,11 +48,15 @@ struct App {
 struct Scenario {
   explicit Scenario(const char* name, bool session_temp = false) {
     qputenv("SNS_FAKE_BLENDER_SCENARIO", name);
-    if (session_temp) qputenv("SNS_FAKE_BLENDER_TEMPDIR", "1");
+    if (session_temp) {
+      qputenv("SNS_FAKE_BLENDER_TEMPDIR", "1");
+      qputenv("SNS_FAKE_BLENDER_TAG", QByteArray::number(QCoreApplication::applicationPid()));
+    }
   }
   ~Scenario() {
     qunsetenv("SNS_FAKE_BLENDER_SCENARIO");
     qunsetenv("SNS_FAKE_BLENDER_TEMPDIR");
+    qunsetenv("SNS_FAKE_BLENDER_TAG");
     qunsetenv("SNS_FAKE_BLENDER_GLB");
   }
 };
@@ -96,10 +100,16 @@ Outcome convert(ForgeBlenderBridge& bridge, const QString& source = triangle()) 
   return wait_for(bridge, [&] { bridge.convert(fake(), source); });
 }
 
-// Staging folders of this test process.
+// Staging folders and synthetic Blender session folders of this test process.
 int stages() {
   return static_cast<int>(QDir::temp().entryList({QStringLiteral("sns-forge-blender-%1-*").arg(QCoreApplication::applicationPid())},
                                                  QDir::Dirs | QDir::NoDotAndDotDot).size());
+}
+
+int fake_session_dirs() {
+  return static_cast<int>(QDir::temp()
+      .entryList({QStringLiteral("blender_fake%1x*").arg(QCoreApplication::applicationPid())}, QDir::Dirs | QDir::NoDotAndDotDot)
+      .size());
 }
 
 // sns_fake_blender processes started by this test process that are still running.
@@ -205,7 +215,7 @@ TEST_CASE("Blender crash after a verified result is offered for recovery, never 
   CHECK(run.value("message").toString().contains("0xC0000005"));
   CHECK(stages() == 1);  // kept until the decision
   // Blender's own session folder that the crash left behind is removed.
-  CHECK(QDir::temp().entryList({QStringLiteral("blender_fake*")}, QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+  CHECK(fake_session_dirs() == 0);
 
   const auto accepted = wait_for(bridge, [&] { bridge.acceptRecovered(); });
   REQUIRE(accepted.completed);
@@ -364,7 +374,7 @@ TEST_CASE("Blender cancellation kills the process and leaves nothing behind", "[
   CHECK(running_fakes() == 0);
   CHECK(stages() == 0);
   // Killed before any report: the folder announced on the first line is removed anyway.
-  CHECK(QDir::temp().entryList({QStringLiteral("blender_fake*")}, QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+  CHECK(fake_session_dirs() == 0);
 }
 
 TEST_CASE("Real Blender cancelled mid-conversion leaves no session folder or stage", "[forge][blender][process][local]") {
