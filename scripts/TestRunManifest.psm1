@@ -52,11 +52,11 @@ function Read-SnsMO2Instance([string]$Instance, [string]$ProfileName) {
         }
     }
     $base = if ($values.ContainsKey('base_directory')) { $values['base_directory'] } else { Split-Path -Parent $Instance }
-    $profiles = if ($values.ContainsKey('profiles_directory')) { $values['profiles_directory'].Replace('%BASE_DIR%', $base) } else { Join-Path $base 'profiles' }
+    $profiles = if ($values.ContainsKey('profiles_directory')) { $values['profiles_directory'].Replace('%BASE_DIR%', $base) } else { [IO.Path]::Combine($base, 'profiles') }
     $name = if ($ProfileName) { $ProfileName } elseif ($values.ContainsKey('selected_profile')) { $values['selected_profile'] } else { 'Default' }
     [pscustomobject]@{
         Profile    = $name
-        ProfileDir = [IO.Path]::GetFullPath((Join-Path $profiles $name))
+        ProfileDir = [IO.Path]::GetFullPath([IO.Path]::Combine($profiles, $name))
         GameDir    = if ($values.ContainsKey('gamePath')) { $values['gamePath'] } else { $null }
     }
 }
