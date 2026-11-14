@@ -54,7 +54,13 @@ jobs:
         run: dotnet test --solution SkyrimNpcStudio.slnx
 
       - name: C++ tests (local MO2 tests skip themselves)
-        run: ctest --preset debug -j 4
+        shell: pwsh
+        env:
+          SNS_QT_DIR: ${{ runner.temp }}/Qt/6.11.2/msvc2022_64
+          SNS_DOTNET_ROOT: ${{ env.DOTNET_ROOT }}
+        run: |
+          $env:PATH = "$env:SNS_QT_DIR\bin;$env:PATH"
+          ctest --preset debug -j 4 --output-on-failure
 
       - name: UI smoke test (offscreen, no MO2)
         shell: pwsh
