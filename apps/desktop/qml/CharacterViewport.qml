@@ -135,6 +135,8 @@ Rectangle {
             if (AppSettings.autoFitOnNpc || !root.framedOnce) root.reset()
             root.framedOnce = true
         }
+        // Panels that isolate parts (Fidelidad) ask the view to frame them.
+        function onFrameRequested(center, radius) { root.frame(center, radius, 0) }
     }
     property bool framedOnce: false
 
@@ -777,16 +779,12 @@ Rectangle {
             border.width: 1
             visible: root.scene.parts.length > 0 && !root.scene.loading
 
-            readonly property int totalTriangles: {
-                let sum = 0
-                for (let i = 0; i < root.scene.parts.length; ++i) {
-                    sum += (root.scene.parts[i].triangles ?? 0)
-                }
-                return sum
-            }
+            // Triangles the game would draw (shapes shown by default), as the scene counts them; the per-part counts and the SMP
+            // flag live in each part's inspector map, not on the row.
+            readonly property int totalTriangles: root.scene.stats.triangles ?? 0
             readonly property bool hasPhysics: {
                 for (let i = 0; i < root.scene.parts.length; ++i) {
-                    if (root.scene.parts[i].physicsDetected) return true
+                    if ((root.scene.parts[i].inspector || {}).physicsDetected) return true
                 }
                 return false
             }

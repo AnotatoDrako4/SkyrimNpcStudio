@@ -60,7 +60,7 @@ class AssetResolver {
 
   [[nodiscard]] std::optional<AssetLocation> locate(std::string_view data_path) const;
   // Bytes of the winning copy, or nullopt if no loose file or archive has it.
-  [[nodiscard]] std::optional<std::string> read(std::string_view data_path) const;
+  [[nodiscard]] std::optional<std::string> read(std::string_view data_path, std::uint64_t max_bytes = BsaArchive::kMaxFileBytes) const;
 
   [[nodiscard]] const std::vector<OpenIssue>& issues() const noexcept { return issues_; }
   [[nodiscard]] std::size_t archive_count() const noexcept { return archives_.size(); }

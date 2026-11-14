@@ -15,6 +15,7 @@
 #include "scene_viewmodel.hpp"
 #include "studio_controller.hpp"
 #include "worker_client.hpp"
+#include "sns/ipc/protocol.hpp"
 #include "sns/outfit/outfit_draft.hpp"
 
 namespace sns::app {
@@ -75,6 +76,7 @@ void OutfitFitDoctorViewModel::scheduleDiagnosis() {
 void OutfitFitDoctorViewModel::init(QObject* studio_obj) {
   if (auto* sc = qobject_cast<StudioController*>(studio_obj)) {
     set_dependencies([sc] { return sc->snapshot(); }, sc->outfit(), sc->scene(), sc->worker());
+    sc->set_fit_doctor(this);  // the Character Forge Modo Fácil reads its last diagnosis
   }
 }
 
@@ -251,85 +253,51 @@ void OutfitFitDoctorViewModel::executeDiagnosis() {
   if (!snapshot_) return;
   const auto snap = snapshot_();
   if (!snap) return;
-
   const int serial = ++diagnosis_serial_;
+  if (!outfit_ || outfit_->npc_form_key().isEmpty() || !worker_ || worker_->state() != WorkerClient::State::Ready) {
+    // Nothing real to diagnose: no report, never a stand-in NPC.
+    report_ = {};
+    analyzing_ = false;
+    emit analyzingChanged();
+    emit diagnosisChanged();
+    return;
+  }
   analyzing_ = true;
   emit analyzingChanged();
 
-  nlohmann::json npc_details;
-  if (outfit_ && !outfit_->npc_form_key().isEmpty()) {
-    npc_details["formKey"] = outfit_->npc_form_key().toStdString();
-    npc_details["name"] = outfit_->npc_label().toStdString();
-
-    nlohmann::json outfit_obj;
-    outfit_obj["formKey"] = outfit_->target().form_key;
-    outfit_obj["outfit"] = outfit_->npc_label().toStdString();
-
-    nlohmann::json armors_arr = nlohmann::json::array();
-    for (const auto& p : outfit_->current_pieces()) {
-      nlohmann::json a;
-      a["formKey"] = p.form_key;
-      a["name"] = p.name;
-      a["addonFormKey"] = p.form_key;
-      a["slots"] = outfit::slots_of(p.slot_mask);
-      armors_arr.push_back(a);
-    }
-    outfit_obj["armors"] = armors_arr;
-    npc_details["defaultOutfit"] = outfit_obj;
+  // The body and the garments the game equips: the worker's appearance of this NPC with the pieces being edited (the same
+  // query the 3D viewer makes), so the diagnosis reads the effective skin ARMA and each piece's ARMA mesh.
+  nlohmann::json params{{"npcFormKey", outfit_->npc_form_key().toStdString()}, {"armorFormKeys", nlohmann::json::array()}};
+  std::map<std::string, std::string> piece_names;  // the names the outfit editor shows (the worker answers with EditorIDs)
+  for (const auto& p : outfit_->current_pieces()) {
+    params["armorFormKeys"].push_back(p.form_key);
+    if (!p.name.empty()) piece_names[p.form_key] = p.name;
   }
-
-  // If no outfit pieces loaded from editor yet, fallback to Serana target if match
-  if (npc_details.empty() || !npc_details.contains("defaultOutfit") || npc_details["defaultOutfit"]["armors"].empty()) {
-    npc_details["formKey"] = "002B6C:Dawnguard.esm";
-    npc_details["name"] = "Serana";
-    npc_details["sex"] = "Female";
-    npc_details["race"] = "NordRaceVampire";
-    npc_details["skinAddons"] = nlohmann::json::array({
-        {{"bodySlots", {32}}, {"femaleModel", "Priscilla body\\Body\\femalebody_1.nif"}},
-        {{"bodySlots", {33}}, {"femaleModel", "Priscilla body\\Body\\femalehands_1.nif"}},
-        {{"bodySlots", {37}}, {"femaleModel", "Priscilla body\\Body\\femalefeet_1.nif"}}});
-
-    nlohmann::json default_outfit;
-    default_outfit["outfitFormKey"] = "000814:Priscilla.Serana.Replacer.esp";
-    default_outfit["outfit"] = "01_PriscilaSuit";
-    default_outfit["armors"] = nlohmann::json::array({
-        {{"formKey", "0008AE:Twilight Princess Armor.esp"},
-         {"name", "Twilight Princess Billowing Cloak - Black - Armored"},
-         {"slots", {46}},
-         {"femaleModel", "Twilight Princess Armor\\F\\TwilightPrincess_Cloak_Armored_SMP_1.nif"}},
-        {{"formKey", "000D63:Obi's Crimson Outfit.esp"},
-         {"name", "Crimson Boots"},
-         {"slots", {37}},
-         {"femaleModel", "Obicnii\\Crimson Outfit\\Boots_1.nif"}},
-        {{"formKey", "000D65:Obi's Crimson Outfit.esp"},
-         {"name", "Crimson Gloves"},
-         {"slots", {33}},
-         {"femaleModel", "Obicnii\\Crimson Outfit\\Hands_1.nif"}},
-        {{"formKey", "000803:Obi's Crimson Outfit.esp"},
-         {"name", "Crimson Pants"},
-         {"slots", {49}},
-         {"femaleModel", "Obicnii\\Crimson Outfit\\Legs_1.nif"}},
-        {{"formKey", "000DB2:DD - Temio Cloth.esp"},
-         {"name", "Temio Corset Red"},
-         {"slots", {45}},
-         {"femaleModel", "armor\\DD - Temio Cloth\\DD - Temio Cloth Corset R_1.nif"}},
-        {{"formKey", "000810:DD - Temio Cloth.esp"},
-         {"name", "Temio Shirt Red"},
-         {"slots", {32}},
-         {"femaleModel", "armor\\DD - Temio Cloth\\DD - Temio Cloth Shirt RED_1.nif"}}});
-    npc_details["defaultOutfit"] = default_outfit;
-  }
-
-  QThreadPool::globalInstance()->start([self = QPointer<OutfitFitDoctorViewModel>(this), snap, npc_details, serial] {
-    const auto report = outfit::OutfitFitDoctor::analyze(snap->vfs, npc_details, nullptr);
-    QMetaObject::invokeMethod(self, [self, report, serial] {
+  const auto name = outfit_->npc_label().toStdString();
+  worker_->call(ipc::protocol::method::kGetAppearance, params, std::chrono::seconds(30), this,
+    [self = QPointer<OutfitFitDoctorViewModel>(this), snap, serial, name, piece_names](const nlohmann::json& appearance) {
       if (!self || self->diagnosis_serial_ != serial) return;
-      self->report_ = report;
+      auto npc_details = outfit::OutfitFitDoctor::npc_details_from_appearance(appearance, name);
+      for (auto& armor : npc_details["defaultOutfit"]["armors"])
+        if (const auto it = piece_names.find(armor.value("formKey", std::string{})); it != piece_names.end()) armor["name"] = it->second;
+      QThreadPool::globalInstance()->start([self, snap, npc_details, serial] {
+        const auto report = outfit::OutfitFitDoctor::analyze(snap->vfs, npc_details, nullptr);
+        QMetaObject::invokeMethod(self, [self, report, serial] {
+          if (!self || self->diagnosis_serial_ != serial) return;
+          self->report_ = report;
+          self->analyzing_ = false;
+          emit self->analyzingChanged();
+          emit self->diagnosisChanged();
+        }, Qt::QueuedConnection);
+      });
+    },
+    [self = QPointer<OutfitFitDoctorViewModel>(this), serial](int, const QString&, const nlohmann::json&) {
+      if (!self || self->diagnosis_serial_ != serial) return;
+      self->report_ = {};
       self->analyzing_ = false;
       emit self->analyzingChanged();
       emit self->diagnosisChanged();
-    }, Qt::QueuedConnection);
-  });
+    });
 }
 
 void OutfitFitDoctorViewModel::setComparisonMode(const QString& mode) {
@@ -515,7 +483,7 @@ bool OutfitFitDoctorViewModel::exportDoctorMod(const QString& target_dir_or_url,
     readme += QStringLiteral(
         "\n## Instrucciones de Instalación en MO2\n"
         "1. Instala esta carpeta como un nuevo mod en Mod Organizer 2.\n"
-        "2. Colócala con prioridad superior al replacer de Serana y al mod original de la prenda.\n"
+        "2. Colócala con prioridad superior a los mods del cuerpo y de la prenda de este NPC.\n"
         "3. Comprueba el ajuste del vestuario directamente dentro de Skyrim.\n");
 
     readmeFile.write(readme.toUtf8());

@@ -16,6 +16,13 @@ Dialog {
     readonly property var plan: studio.appearance.easyModPlan
     readonly property var summary: studio.npc.summary || ({})
     readonly property var compat: studio.appearance.faceCompatibility
+    // Fidelity report of the 3D view (SceneViewModel.fidelity): confirmed data errors block the export; other errors need a review.
+    readonly property var fidelity: studio.scene.fidelity
+    readonly property bool fidelityForThisNpc: fidelity.npcFormKey !== undefined && !!summary.formKey
+                                               && String(fidelity.npcFormKey).toLowerCase() === String(summary.formKey).toLowerCase()
+    readonly property var fidelityBlockers: fidelityForThisNpc ? (fidelity.exportBlockers || []) : []
+    readonly property var fidelityWarnings: fidelityForThisNpc ? (fidelity.exportWarnings || []) : []
+    readonly property bool fidelityClear: fidelityBlockers.length === 0 && (fidelityWarnings.length === 0 || fidelityReviewed.checked)
     property int step: 0
     property bool waitingResult: false
     property var modResult: null
@@ -344,6 +351,28 @@ Dialog {
                                   : qsTr("El FaceGen actual está dentro de un BSA (%1): el archivo suelto de este mod siempre lo sustituye, sea cual sea su prioridad.")
                                         .arg(prov.faceGen ? (prov.faceGen.archiveProvider || prov.faceGen.provider || "") : "")
                         }
+                        Text {
+                            objectName: "exportFidelityCheck"
+                            width: checksColumn.width
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.small
+                            color: !root.fidelityForThisNpc ? Theme.warn : root.fidelityBlockers.length > 0 ? Theme.error
+                                 : root.fidelityWarnings.length > 0 ? Theme.warn : Theme.ok
+                            text: !root.fidelityForThisNpc
+                                  ? qsTr("⚠ Fidelidad: el informe del visor de este NPC aún no está listo (pestaña «Fidelidad»).")
+                                  : root.fidelityBlockers.length > 0
+                                  ? qsTr("✖ Fidelidad: errores en los datos que el juego mostraría rotos:") + root.fidelityBlockers.map(function (b) { return "\n     " + b }).join("")
+                                  : root.fidelityWarnings.length > 0
+                                  ? qsTr("⚠ Fidelidad: revisa estos problemas antes de exportar:") + root.fidelityWarnings.map(function (b) { return "\n     " + b }).join("")
+                                  : qsTr("✔ Fidelidad: sin errores en lo que el visor puede comprobar (%1).")
+                                        .arg(root.studio.scene.original ? qsTr("vista original") : qsTr("vista con tus cambios"))
+                        }
+                        CheckBox {
+                            id: fidelityReviewed
+                            objectName: "exportFidelityReviewed"
+                            visible: root.fidelityForThisNpc && root.fidelityBlockers.length === 0 && root.fidelityWarnings.length > 0
+                            text: qsTr("Los he revisado")
+                        }
                         Repeater {
                             model: root.plan.checks || []
                             delegate: Text {
@@ -389,7 +418,7 @@ Dialog {
                                    + "en MO2 ni se toca Skyrim/Data.")
                     }
                     Text {
-                        visible: !root.plan.canExport && !root.busy
+                        visible: (!root.plan.canExport || !root.fidelityClear) && !root.busy
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         color: Theme.warn
@@ -399,7 +428,7 @@ Dialog {
                     Button {
                         text: root.busy ? qsTr("Creando…") : qsTr("Crear mod")
                         highlighted: true
-                        enabled: root.plan.canExport && !root.busy && pluginName.acceptableInput && outputDir.text.trim().length > 0
+                        enabled: root.plan.canExport && root.fidelityClear && !root.busy && pluginName.acceptableInput && outputDir.text.trim().length > 0
                         onClicked: root.createMod()
                     }
 

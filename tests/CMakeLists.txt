@@ -2,6 +2,7 @@ include(Catch)
 
 # ---- Unit tests: engines, no external processes, synthetic data only ---------------------------
 add_executable(sns_engine_tests
+  unit/engines/test_integrity_guard.cpp
   unit/engines/test_text.cpp
   unit/engines/test_framing.cpp
   unit/engines/test_json_rpc_client.cpp
@@ -9,6 +10,7 @@ add_executable(sns_engine_tests
   unit/engines/test_instance_profile.cpp
   unit/engines/test_plugin_header.cpp
   unit/engines/test_vfs_load_order.cpp
+  unit/engines/test_ingame_test_kit.cpp
   unit/engines/test_projects_outfit.cpp
   unit/engines/test_character_forge.cpp
   unit/engines/test_appearance_draft.cpp
@@ -29,15 +31,28 @@ target_sources(sns_engine_tests PRIVATE unit/engines/test_nif_safe_load.cpp)
 # Real BodySlide geometry (TRI/OSD/OSP) and its use by the 3D scene: body and outfit morphs, weight, families.
 target_sources(sns_engine_tests PRIVATE unit/engines/test_bodyslide_morphs.cpp)
 target_sources(sns_engine_tests PRIVATE unit/engines/test_bodyslide_build.cpp)
+# NPC fidelity report: game vs viewer per piece, garment fit, hidden skin exposure, dismember partitions
+target_sources(sns_engine_tests PRIVATE unit/engines/test_fidelity.cpp)
 # Outfit Fit Doctor: Serana outfit fit diagnosis, compatibility alternatives and repair
 target_sources(sns_engine_tests PRIVATE unit/engines/test_outfit_fit_doctor.cpp)
 # Character Forge -> Skyrim: diagnosis of the Blender report and re-reading of the PyNifly NIF with nifly
 target_sources(sns_engine_tests PRIVATE unit/engines/test_skyrim_conversion.cpp)
+# Character Forge Modo Fácil: actions, guided flow and diagnosis states computed from backend facts
+target_sources(sns_engine_tests PRIVATE unit/engines/test_forge_easy_mode.cpp)
+# NPC Health & Beauty Center: coded appearance audit (HAIR/FACE/NPC) over the control map
+target_sources(sns_engine_tests PRIVATE unit/engines/test_npc_audit.cpp)
+# P0: NPC Hair SMP Forensics & Runtime Inspector
+target_sources(sns_engine_tests PRIVATE unit/engines/test_hair_smp_forensics.cpp)
+# NPC Runtime Inspector: versioned runtime report contract, session log reader, static/runtime correlator
+target_sources(sns_engine_tests PRIVATE
+  unit/engines/test_runtime_report.cpp
+  unit/engines/test_runtime_correlator.cpp
+  unit/engines/test_runtime_logs.cpp)
 target_compile_definitions(sns_engine_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
 target_include_directories(sns_engine_tests PRIVATE support)
 target_link_libraries(sns_engine_tests PRIVATE
   sns::core sns::ipc sns::mo2 sns::projects sns::creation sns::outfit sns::appearance sns::presets sns::face sns::rendering
-  sns::gltf sns::nif sns::body nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
+  sns::runtime sns::gltf sns::nif sns::body nlohmann_json::nlohmann_json nifly lz4 sns::compile_options Catch2::Catch2WithMain)
 catch_discover_tests(sns_engine_tests TEST_PREFIX "unit:" DISCOVERY_MODE PRE_TEST)
 
 # ---- Tool: loads one NIF in a process of its own and reports outcome, time and peak memory (audit F-10) --
@@ -63,20 +78,31 @@ endif()
 # ---- Desktop app: the crash handler writes a report and a minidump ----------------------------
 if(SNS_BUILD_APP AND WIN32)
   find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui)
+  # Stand-in for blender.exe: ends a run the way SNS_FAKE_BLENDER_SCENARIO says (crash, hang, truncated GLB...).
+  add_executable(sns_fake_blender tools/fake_blender.cpp)
+  target_link_libraries(sns_fake_blender PRIVATE Qt6::Core sns::compile_options)
   add_executable(sns_forge_asset_tests
     app/test_forge_asset_library.cpp
     app/test_forge_blender_bridge.cpp
+    app/test_forge_blender_process.cpp
     app/test_forge_skyrim.cpp
+    app/test_forge_projects_folder.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_projects_folder.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/export_destination.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_blender_bridge.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_skyrim_package.cpp
     ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/forge_asset_library.cpp)
   set_target_properties(sns_forge_asset_tests PROPERTIES AUTOMOC ON)
   set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
   set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py PROPERTIES QT_RESOURCE_ALIAS forge_skyrim.py)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_resources.py PROPERTIES QT_RESOURCE_ALIAS forge_resources.py)
   qt_add_resources(sns_forge_asset_tests forge_bridge_test_script PREFIX "/forge"
-    FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py)
+    FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py
+    ${PROJECT_SOURCE_DIR}/tools/blender/forge_resources.py)
   target_include_directories(sns_forge_asset_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
-  target_compile_definitions(sns_forge_asset_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models")
+  target_compile_definitions(sns_forge_asset_tests PRIVATE SNS_TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/models"
+    SNS_FAKE_BLENDER_EXE="$<TARGET_FILE:sns_fake_blender>")
+  add_dependencies(sns_forge_asset_tests sns_fake_blender)
   target_link_libraries(sns_forge_asset_tests PRIVATE
     Qt6::Core Qt6::Gui sns::creation sns::gltf sns::textures sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_forge_asset_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
@@ -121,6 +147,26 @@ if(SNS_BUILD_APP AND WIN32)
   target_link_libraries(sns_export_destination_tests PRIVATE Qt6::Core sns::compile_options Catch2::Catch2WithMain)
   catch_discover_tests(sns_export_destination_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
 
+  # M2: "Preparar prueba en Skyrim" decides the in-game test kit request (manifest, installed plugin hash, destination).
+  add_executable(sns_ingame_test_request_tests
+    app/test_ingame_test_request.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/ingame_test_request.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/export_destination.cpp)
+  target_include_directories(sns_ingame_test_request_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_ingame_test_request_tests PRIVATE
+    Qt6::Core sns::mo2 nlohmann_json::nlohmann_json sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_ingame_test_request_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
+  # NPC Beauty Lab Next-Gen: Hair Studio NIF/DDS audit, Face Workshop capabilities, Comparator, Styles, Quality Check & Library.
+  add_executable(sns_beauty_lab_tests
+    app/test_beauty_lab.cpp
+    ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels/beauty_lab_engine.cpp)
+  target_include_directories(sns_beauty_lab_tests PRIVATE support ${PROJECT_SOURCE_DIR}/apps/desktop/viewmodels)
+  target_link_libraries(sns_beauty_lab_tests PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Qml sns::core sns::mo2 sns::assets sns::face sns::appearance sns::presets sns::nif sns::rendering
+    nifly nlohmann_json::nlohmann_json sns::compile_options Catch2::Catch2WithMain)
+  catch_discover_tests(sns_beauty_lab_tests TEST_PREFIX "app:" DISCOVERY_MODE PRE_TEST)
+
   foreach(kind access-violation terminate abort)
     add_test(NAME "app:crash report and minidump (${kind})"
       COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:SkyrimNpcStudio> -DKIND=${kind}
@@ -150,7 +196,7 @@ if(SNS_BUILD_WORKER)
   add_executable(sns_synthetic_mo2 tools/synthetic_mo2.cpp)
   target_include_directories(sns_synthetic_mo2 PRIVATE support)
   target_compile_definitions(sns_synthetic_mo2 PRIVATE SNS_FIXTURE_GEN_EXE="${SNS_FIXTURE_GEN_EXE}")
-  target_link_libraries(sns_synthetic_mo2 PRIVATE sns::core nifly nlohmann_json::nlohmann_json sns::compile_options)
+  target_link_libraries(sns_synthetic_mo2 PRIVATE sns::core sns::textures nifly nlohmann_json::nlohmann_json sns::compile_options)
   add_dependencies(sns_synthetic_mo2 fixture_gen)
 
   add_executable(sns_integration_tests
@@ -166,4 +212,16 @@ if(SNS_BUILD_WORKER)
   add_dependencies(sns_integration_tests bethesda_worker fixture_gen)
   catch_discover_tests(sns_integration_tests TEST_PREFIX "integration:" DISCOVERY_MODE PRE_TEST
     PROPERTIES TIMEOUT 600)
+endif()
+
+# Catch2 test executables get the UTF-8 process code page: CTest passes test names with "—" and accents on the command
+# line, and the default ANSI conversion of argv made them match no test (see support/utf8.manifest).
+if(MSVC)
+  foreach(sns_catch_target IN ITEMS sns_engine_tests sns_forge_asset_tests sns_workbench_tests sns_settings_tests
+                                    sns_portrait_cache_tests sns_export_destination_tests sns_ingame_test_request_tests
+                                    sns_beauty_lab_tests sns_integration_tests)
+    if(TARGET ${sns_catch_target})
+      target_sources(${sns_catch_target} PRIVATE support/utf8.manifest)
+    endif()
+  endforeach()
 endif()

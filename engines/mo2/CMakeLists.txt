@@ -6,9 +6,10 @@ add_library(sns_mo2 STATIC
   src/plugin_header.cpp
   src/vfs.cpp
   src/confined_file.cpp
-  src/load_order.cpp)
+  src/load_order.cpp
+  src/ingame_test_kit.cpp)
 add_library(sns::mo2 ALIAS sns_mo2)
 target_include_directories(sns_mo2 PUBLIC include)
 target_link_libraries(sns_mo2
   PUBLIC sns::core
-  PRIVATE sns::compile_options version shell32 ole32 advapi32)
+  PRIVATE sns::compile_options nlohmann_json::nlohmann_json version shell32 ole32 advapi32)

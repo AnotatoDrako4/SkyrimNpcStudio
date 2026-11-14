@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -159,4 +160,60 @@ TEST_CASE("Blender bridge cancellation reports failure and returns idle", "[forg
   CHECK_FALSE(completed);
   CHECK_FALSE(failure.isEmpty());
   CHECK_FALSE(bridge.busy());
+}
+
+TEST_CASE("Blender bridge preview relinks moved textures and lightens a heavy scene", "[forge][blender][local]") {
+  const auto executable = qEnvironmentVariable("SNS_LOCAL_BLENDER");
+  const auto folder = qEnvironmentVariable("SNS_LOCAL_BLENDER_FIXTURES");
+  const fs::path source = fs::path(folder.toStdWString()) / "bridge_resources" / "heavy_resources.blend";
+  if (executable.isEmpty() || !QFileInfo(executable).isExecutable() || folder.isEmpty() || !fs::is_regular_file(source))
+    SKIP("Set SNS_LOCAL_BLENDER and SNS_LOCAL_BLENDER_FIXTURES (make_test_models.py bridge_resources)");
+
+  char name[] = "sns_forge_asset_tests";
+  char* args[] = {name, nullptr};
+  int count = 1;
+  QCoreApplication app(count, args);
+  const auto before = fs::last_write_time(source);
+  const auto bytes = fs::file_size(source);
+
+  sns::app::ForgeBlenderBridge bridge;
+  QEventLoop loop;
+  QTimer watchdog;
+  watchdog.setSingleShot(true);
+  QString failure;
+  QVariantMap report;
+  QObject::connect(&watchdog, &QTimer::timeout, &loop, [&] { failure = "timed out"; bridge.cancel(); loop.quit(); });
+  QObject::connect(&bridge, &sns::app::ForgeBlenderBridge::failed, &loop, [&](const QString& m) { failure = m; loop.quit(); });
+  QObject::connect(&bridge, &sns::app::ForgeBlenderBridge::completed, &loop, [&](const QString&, const QVariantMap& r) {
+    report = r;
+    loop.quit();
+  });
+  bridge.convert(executable, qs(source));
+  watchdog.start(240000);
+  loop.exec();
+  watchdog.stop();
+  INFO(failure.toStdString());
+  REQUIRE(failure.isEmpty());
+
+  // The texture that exists once below the model is relinked; the name found twice in non-matching folders is not guessed.
+  const auto relink = report.value("images").toMap().value("relink").toMap();
+  CHECK(relink.value("missingBefore").toInt() == 2);
+  const auto relinked = relink.value("relinked").toList();
+  REQUIRE(relinked.size() == 1);
+  CHECK(QDir::fromNativeSeparators(relinked.front().toMap().value("to").toString()).endsWith("moved/textures/heavy_diffuse.png"));
+  const auto ambiguous = relink.value("ambiguous").toList();
+  REQUIRE(ambiguous.size() == 1);
+  CHECK(ambiguous.front().toMap().value("candidates").toList().size() == 2);
+
+  // Over the budget: the preview is reduced (and says so), never above the budget
+  const auto reduction = report.value("previewReduction").toMap();
+  CHECK(reduction.value("applied").toBool());
+  CHECK(reduction.value("trianglesBefore").toLongLong() > 300000);
+  CHECK(reduction.value("trianglesAfter").toLongLong() <= 300000);
+  CHECK(reduction.value("trianglesAfter").toLongLong() > 100000);
+  CHECK(report.value("timings").toMap().contains("reduce"));
+
+  // The user's file is never written
+  CHECK(fs::last_write_time(source) == before);
+  CHECK(fs::file_size(source) == bytes);
 }

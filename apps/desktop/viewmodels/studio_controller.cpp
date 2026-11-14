@@ -1,4 +1,5 @@
 #include "studio_controller.hpp"
+#include "outfit_fit_doctor_viewmodel.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -16,6 +17,7 @@
 #include <QGuiApplication>
 #include <QDateTime>
 #include <QFile>
+#include <QJsonObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -26,6 +28,8 @@
 #include <algorithm>
 #include <set>
 #include "diagnostics/crash_diagnostics.hpp"
+#include "ingame_test_request.hpp"
+#include "npc_health_audit.hpp"
 #include "resource_context.hpp"
 #include "sns/appearance/control_map.hpp"
 #include "sns/core/error.hpp"
@@ -140,6 +144,7 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
   scene_->set_body_director(body_);
   armor_preview_->set_body_director(body_);
   loose_resources_ = new LooseResourceLibrary(worker_, this);
+  beauty_lab_ = new BeautyLabViewModel(appearance_, outfit_, scene_, history_, console_, [this] { return snapshot_; }, this);
   forge_ =new CharacterForgeViewModel([this] {
     creation::ForgeEnvironment env;
     env.instance_name = ss(instance_name_);
@@ -148,6 +153,14 @@ StudioController::StudioController(QString worker_executable, QObject* parent)
     if (snapshot_) env.game_edition = mo2::to_string(snapshot_->game.edition);
     return env;
   }, worker_, this);
+  // Modo Fácil: no project folder inside the game or MO2, and whether the Character Creator has an NPC loaded.
+  forge_->set_forbidden_roots([this] { return snapshot_ ? forbidden_roots_of(*snapshot_) : std::vector<ForbiddenRoot>{}; });
+  connect(outfit_, &OutfitEditor::targetChanged, forge_, [this] { forge_->set_npc_loaded(!outfit_->npc_form_key().isEmpty()); });
+  forge_->set_npc_facts_provider([this] { return easy_npc_facts(); });
+  for (auto signal : {&BodyDirector::npcChanged, &BodyDirector::presetsChanged, &BodyDirector::environmentChanged})
+    connect(body_, signal, forge_, &CharacterForgeViewModel::easyModeChanged);
+  for (auto signal : {&OutfitEditor::targetChanged, &OutfitEditor::changed, &OutfitEditor::validationChanged})
+    connect(outfit_, signal, forge_, &CharacterForgeViewModel::easyModeChanged);
 
   // Project save/open: the face travels with the outfit in the same .snps.
   outfit_->set_face_provider([this](const std::string& form_key) -> std::optional<projects::FaceConfig> {
@@ -659,6 +672,97 @@ QVariantMap StudioController::installModToMo2(const QString& mod_dir) {
                        "de Mod Organizer 2 (o copia la carpeta a mano); el estudio no escribe en mods/.")}};
 }
 
+void StudioController::prepareInGameTest(const QString& export_dir_or_manifest) {
+  const int serial = ++in_game_test_serial_;
+  auto fail = [this](const QStringList& errors) {
+    in_game_test_ = {{"state", "error"}, {"errors", errors}, {"inGame", "PENDIENTE_SKYRIM"}};
+    for (const auto& e : errors) console_->append("error", "ingame-test", e);
+    emit inGameTestChanged();
+  };
+  if (!snapshot_) return fail({tr("Carga primero el perfil MO2 (de prueba) donde instalaste la exportación.")});
+
+  in_game_test_ = {{"state", "preparing"}, {"source", export_dir_or_manifest}};
+  emit inGameTestChanged();
+  console_->append("info", "ingame-test", tr("Preparando la prueba en Skyrim de %1").arg(export_dir_or_manifest));
+
+  // Hashing the plugin the profile loads can take a moment for a big plugin: off the UI thread. The snapshot is an
+  // immutable shared_ptr, safe to read there; the result comes back to this thread.
+  const auto snapshot = snapshot_;
+  QPointer<StudioController> self(this);
+  QThreadPool::globalInstance()->start([self, snapshot, serial, input = export_dir_or_manifest] {
+    auto plan = std::make_shared<InGameTestPlan>(plan_ingame_test(input, qs(snapshot->profile.name), snapshot->load_order,
+                                                                  forbidden_roots_of(*snapshot), QDateTime::currentDateTimeUtc()));
+    QMetaObject::invokeMethod(qApp, [self, serial, plan] {
+      if (!self || serial != self->in_game_test_serial_) return;  // closed, or a newer request superseded this one
+      self->send_ingame_test(serial, *plan);
+    });
+  });
+}
+
+void StudioController::send_ingame_test(int serial, const InGameTestPlan& plan) {
+  if (!plan.ok()) {
+    in_game_test_ = {{"state", "error"}, {"errors", plan.errors}, {"exportFolder", plan.export_folder}, {"inGame", "PENDIENTE_SKYRIM"}};
+    for (const auto& e : plan.errors) console_->append("error", "ingame-test", e);
+    emit inGameTestChanged();
+    return;
+  }
+  QVariantList lines;
+  for (const auto& l : plan.kit.lines) {
+    lines << QVariantMap{{"formKey", qs(l.record.form_key)},     {"recordType", qs(l.record.record_type)},
+                         {"editorId", qs(l.record.editor_id)},   {"runtimeFormId", qs(l.runtime_form_id)},
+                         {"command", qs(l.command)},             {"note", qs(l.note)}};
+  }
+  QVariantMap base{{"kitName", qs(plan.kit.kit_name)},
+                   {"batchCommand", QStringLiteral("bat ") + qs(plan.kit.kit_name)},
+                   {"batchFile", qs(plan.kit.batch_file)},
+                   {"reportFile", qs(plan.kit.report_file)},
+                   {"modName", plan.mod_name},
+                   {"outputDirectory", plan.output_directory},
+                   {"exportFolder", plan.export_folder},
+                   {"pluginSha256", plan.installed_sha256},
+                   {"lines", lines},
+                   {"inGame", "PENDIENTE_SKYRIM"}};
+  in_game_test_ = base;
+  in_game_test_["state"] = QStringLiteral("exporting");
+  emit inGameTestChanged();
+  worker_->call(
+      method::kExportBodyDistribution, plan.params, 120s, this,
+      [this, serial, base](const Json& r) {
+        if (serial != in_game_test_serial_) return;
+        QVariantList files;
+        for (const auto& f : r.value("files", Json::array())) {
+          files << QVariantMap{{"path", qs(f.value("path", ""))}, {"bytes", static_cast<qlonglong>(f.value("bytes", 0ll))},
+                               {"sha256", qs(f.value("sha256", ""))}};
+        }
+        QStringList verification;
+        for (const auto& v : r.value("verification", Json::array())) {
+          if (v.is_string()) verification << qs(v.get<std::string>());
+        }
+        in_game_test_ = base;
+        in_game_test_["state"] = QStringLiteral("done");
+        in_game_test_["modDirectory"] = qs(r.value("modDirectory", ""));
+        in_game_test_["zipPath"] = r.contains("zipPath") && r["zipPath"].is_string() ? qs(r["zipPath"].get<std::string>()) : QString();
+        in_game_test_["manifestPath"] = qs(r.value("manifestPath", ""));
+        in_game_test_["files"] = files;
+        in_game_test_["verification"] = verification;
+        in_game_test_["status"] = QStringLiteral("PAQUETE_MO2_VERIFICADO");
+        console_->append("info", "ingame-test",
+                         tr("Kit de prueba listo: %1. Instálalo en MO2, entra en una partida de prueba y escribe «%2» en la consola.")
+                             .arg(in_game_test_.value("zipPath").toString().isEmpty() ? in_game_test_.value("modDirectory").toString()
+                                                                                      : in_game_test_.value("zipPath").toString(),
+                                  base.value("batchCommand").toString()));
+        emit inGameTestChanged();
+      },
+      [this, serial, base](int, const QString& message, const Json&) {
+        if (serial != in_game_test_serial_) return;
+        in_game_test_ = base;
+        in_game_test_["state"] = QStringLiteral("error");
+        in_game_test_["errors"] = QStringList{message};
+        console_->append("error", "ingame-test", message);
+        emit inGameTestChanged();
+      });
+}
+
 // ------------------------------------------------------------------ NPCs and armors
 
 QVariantMap StudioController::npc_row(const QVariantMap& item) const {
@@ -1078,6 +1182,14 @@ struct StudioController::AppearanceScan {
   QMap<QString, int> counts;
   QMap<QString, int> codes;
   QVariantList rows;
+  // NPC Health & Beauty Center (scanNpcHealth): every NPC goes through getNpc and the appearance audit.
+  bool health = false;
+  QVariantList health_rows;            // one per audited NPC (clean ones included: "SIN ERROR DETECTADO")
+  QMap<QString, int> health_status;    // CONFIRMADO / SOSPECHOSO / SIN_ERROR_DETECTADO -> NPCs
+  QMap<QString, int> health_codes;     // HAIR_001 ... -> NPCs with that code
+  QMap<QString, int> health_confirmed; // code -> NPCs where it is CONFIRMADO
+  int health_exempt = 0;               // template / creature / CharGen preset NPCs
+  int health_facegen_parsed = 0;       // NPCs whose effective FaceGen shapes and hair textures were checked
 };
 
 QVariantMap StudioController::appearance_scan() const {
@@ -1086,7 +1198,18 @@ QVariantMap StudioController::appearance_scan() const {
   QVariantMap counts, codes;
   for (auto it = s.counts.begin(); it != s.counts.end(); ++it) counts.insert(it.key(), it.value());
   for (auto it = s.codes.begin(); it != s.codes.end(); ++it) codes.insert(it.key(), it.value());
-  return {{"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
+  QVariantMap health;
+  if (s.health) {
+    QVariantMap status, by_code, confirmed;
+    for (auto it = s.health_status.begin(); it != s.health_status.end(); ++it) status.insert(it.key(), it.value());
+    for (auto it = s.health_codes.begin(); it != s.health_codes.end(); ++it) by_code.insert(it.key(), it.value());
+    for (auto it = s.health_confirmed.begin(); it != s.health_confirmed.end(); ++it) confirmed.insert(it.key(), it.value());
+    health = {{"audited", static_cast<int>(s.health_rows.size())}, {"status", status}, {"codes", by_code}, {"confirmedCodes", confirmed},
+              {"exempt", s.health_exempt}, {"faceGenParsed", s.health_facegen_parsed},
+              {"rows", s.running ? QVariantList{} : s.health_rows}};
+  }
+  return {{"health", health},
+          {"running", s.running},     {"stage", s.stage},       {"listed", s.listed},     {"analysed", s.analysed},
           {"total", s.total},         {"pending", static_cast<int>(s.pending.size())},       {"rpcCalls", s.rpc_calls},
           {"errors", s.errors},       {"listingMs", s.listing_ms},
           {"maxBlockMs", s.max_block_us / 1000.0}, {"maxBlockWhere", s.max_block_where}, {"listingPages", s.listing_pages}, {"analysisMs", s.analysis_us / 1000},  {"resolutions", s.resolutions},
@@ -1254,6 +1377,125 @@ void StudioController::scanAppearanceControl() {
   scan_page(0);
 }
 
+void StudioController::scanNpcHealth() {
+  if (phase_ != Phase::Ready || !snapshot_ || (scan_ && scan_->running)) return;
+  diag::record("studio", "npc health scan");
+  scan_ = std::make_shared<AppearanceScan>();
+  scan_->health = true;
+  scan_states_.clear();
+  scan_->timer.start();
+  emit appearanceScanChanged();
+  scan_page(0);
+}
+
+void StudioController::exportNpcHealthRepair(const QString& output_directory) {
+  const auto fail = [this, &output_directory](const QString& message) {
+    health_repair_ = {{"state", "failed"}, {"message", message}, {"outputDirectory", output_directory}};
+    log("error", tr("Reparación de NPC: %1").arg(message));
+    emit npcHealthRepairChanged();
+  };
+  if (health_repair_.value("state").toString() == QLatin1String("exporting")) return;
+  if (phase_ != Phase::Ready || !snapshot_ || !scan_ || scan_->running || !scan_->health || scan_->stage != QLatin1String("done")) {
+    fail(tr("primero completa un análisis de salud de NPC."));
+    return;
+  }
+  if (output_directory.trimmed().isEmpty() || !QDir().mkpath(output_directory)) {
+    fail(tr("no se puede crear la carpeta de salida %1.").arg(output_directory));
+    return;
+  }
+  // Decisions from facts of the scan row: a hair-slot armor with no addon for the race (HAIR_SMP_007) or with a missing
+  // mesh (HAIR_SMP_001), both confirmed by the audit; the plan itself is the engine's (tested) rule.
+  QVariantList decisions;
+  Json assignments = Json::array();
+  Json providers = Json::object();
+  for (const auto& r : scan_->health_rows) {
+    const auto row = r.toMap();
+    appearance::WigRepairCandidate c;
+    c.form_key = ss(row.value("formKey").toString());
+    for (const auto& a : row.value("outfitArmors").toStringList()) c.outfit_armors.push_back(ss(a));
+    c.outfit_other_entries = row.value("outfitOtherEntries").toInt();
+    c.facegen_hair_vertices = row.value("faceGenHairVertices").toInt();
+    const auto findings = row.value("findings").toList();
+    const auto confirmed = [&findings](const char* code) {
+      return std::any_of(findings.begin(), findings.end(), [code](const QVariant& f) {
+        const auto m = f.toMap();
+        return m.value("code").toString() == QLatin1String(code) && m.value("status").toString() == QLatin1String(appearance::kStatusConfirmed);
+      });
+    };
+    const bool smp001 = confirmed("HAIR_SMP_001"), smp007 = confirmed("HAIR_SMP_007");
+    for (const auto& w : row.value("hairArmors").toList()) {
+      const auto wig = w.toMap();
+      const auto meshes = wig.value("meshes").toList();
+      const bool no_addon = wig.value("addonsForRace").isValid() && wig.value("addonsForRace").toInt() == 0;
+      const bool missing_mesh = std::any_of(meshes.begin(), meshes.end(), [](const QVariant& m) { return !m.toMap().value("found").toBool(); });
+      if ((no_addon && smp007) || (missing_mesh && smp001)) c.broken_wigs.push_back(ss(wig.value("formKey").toString()));
+    }
+    if (c.broken_wigs.empty()) continue;
+    const auto d = appearance::plan_wig_repair(c);
+    decisions << QVariantMap{{"formKey", qs(d.form_key)},
+                             {"name", row.value("name")},
+                             {"repair", d.repair},
+                             {"removed", string_list(d.removed)},
+                             {"keepArmors", string_list(d.keep_armors)},
+                             {"reason", qs(d.reason)},
+                             {"faceGenHairVertices", c.facegen_hair_vertices},
+                             {"references", row.value("references")}};
+    if (!d.repair) continue;
+    assignments.push_back(Json{{"npcFormKey", d.form_key}, {"armorFormKeys", d.keep_armors}});
+    // Masters documented with their MO2 mod (the NPC's winning plugin and every plugin of the kept armors).
+    std::vector<std::string> plugins{ss(row.value("winningPlugin").toString())};
+    for (const auto& a : d.keep_armors) plugins.push_back(a.substr(a.find(':') + 1));
+    for (const auto& p : plugins) {
+      if (const auto mod = providerOf(qs(p)); !mod.isEmpty()) providers[p] = ss(mod);
+    }
+  }
+  // The plan is written before anything is exported: what would change, and why each NPC is or is not repaired.
+  {
+    QFile plan(QDir(output_directory).filePath("hair-repair-plan.json"));
+    if (plan.open(QIODevice::WriteOnly)) {
+      plan.write(QJsonDocument(QJsonObject{{"generatedUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                                           {"profile", qs(snapshot_->profile.name)},
+                                           {"decisions", QJsonArray::fromVariantList(decisions)}})
+                     .toJson());
+    }
+  }
+  if (assignments.empty()) {
+    health_repair_ = {{"state", "nothing"}, {"decisions", decisions}, {"outputDirectory", output_directory},
+                      {"message", tr("Ningún NPC con peluca rota se puede reparar sin la dependencia (ver motivos).")}};
+    emit npcHealthRepairChanged();
+    return;
+  }
+  health_repair_ = {{"state", "exporting"}, {"decisions", decisions}, {"outputDirectory", output_directory}};
+  emit npcHealthRepairChanged();
+  log("info", tr("Reparación de NPC: exportando %1 NPC en %2…").arg(assignments.size()).arg(output_directory));
+  const Json request{{"pluginName", "SkyrimNpcStudio - NPC Appearance Repair.esp"},
+                     {"outputDirectory", ss(output_directory)},
+                     {"eslFlag", true},
+                     {"createZip", true},
+                     {"author", "Skyrim NPC Studio"},
+                     {"description", "NPC Health: quita pelucas rotas del atuendo por defecto para que se vea el cabello del FaceGen. "
+                                     "Reversible: desactiva este mod."},
+                     {"pluginProviders", providers},
+                     {"assignments", assignments}};
+  worker_->call(
+      method::kExportOutfitPatch, request, 5min, this,
+      [this](const Json& r) {
+        health_repair_["state"] = "exported";
+        health_repair_["result"] = to_map(r);
+        log("info", tr("Reparación de NPC exportada: %1 (SHA-256 %2…). No se ha instalado: actívala tú en un perfil de prueba.")
+                        .arg(health_repair_.value("result").toMap().value("zipPath").toString(),
+                             health_repair_.value("result").toMap().value("pluginSha256").toString().left(12)));
+        emit npcHealthRepairChanged();
+      },
+      [this](int, const QString& message, const Json& data) {
+        health_repair_["state"] = "failed";
+        health_repair_["message"] = message;
+        health_repair_["issues"] = to_list(data.is_object() ? data.value("issues", Json::array()) : Json::array());
+        log("error", tr("Reparación de NPC: %1").arg(message));
+        emit npcHealthRepairChanged();
+      });
+}
+
 void StudioController::cancelAppearanceScan() {
   if (!scan_ || !scan_->running) return;
   scan_->stage = QStringLiteral("cancelled");
@@ -1304,7 +1546,8 @@ void StudioController::scan_list_slice(const std::shared_ptr<AppearanceScan>& sc
     const bool has_facegen = !geometry.isEmpty() && ctx && ctx->resolver && ctx->resolver->locate(ss(geometry));
     scan->page.locate_ns += part.nsecsElapsed();
     if (has_facegen) scan->races.insert(summary.value("raceFormKey").toString().toLower());
-    if (summary.value("overrideCount").toInt() > 1) {
+    // The health audit needs the head parts, which only getNpc returns: every NPC goes to the worker.
+    if (summary.value("overrideCount").toInt() > 1 || scan->health) {
       scan->pending << form_key;
       continue;
     }
@@ -1380,35 +1623,53 @@ void StudioController::scan_next() {
 }
 
 void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& scan, const QString& form_key) {
-  worker_->call(method::kGetNpc, Json{{"formKey", ss(form_key)}}, 30s, this, [this, scan](const Json& r) {
+  worker_->call(method::kGetNpc, Json{{"formKey", ss(form_key)}}, 30s, this, [this, scan, form_key](const Json& r) {
     if (scan != scan_ || !scan->running) return;
     QElapsedTimer block;
     block.start();
-    auto details = to_map(r);
-    QVariantList overrides;
-    for (const auto& o : details.value("overrides").toList()) {
-      auto entry = o.toMap();
-      entry["mod"] = providerOf(entry.value("plugin").toString());
-      overrides << entry;
-    }
-    details["overrides"] = overrides;
+    // Only a copy of the answer is made on this thread: converting it to QVariant (an NPC with a large inventory
+    // and many locations) blocked the interface up to ~96 ms in the health scan, which reads every NPC.
+    auto answer = std::make_shared<const Json>(r);
     scan->note_block(block, "getNpc answer");
+    // `appearance`: the getAppearance answer for NPCs that wear a Hair-slot armor (health scan), else null.
+    const auto analyse = [this, scan, answer](std::shared_ptr<const Json> appearance) {
+    if (scan != scan_ || !scan->running) return;
     // The analysis (which may read a FaceGen out of a BSA) runs on a worker thread; the row is recorded
     // back on this thread. The request stays "in flight" until then, so the scan cannot finish early.
-    QThreadPool::globalInstance()->start([self = QPointer<StudioController>(this), scan, details, snapshot = snapshot_,
+    QThreadPool::globalInstance()->start([self = QPointer<StudioController>(this), scan, answer, appearance, snapshot = snapshot_,
                                           races = races_with_facegen_] {
       QElapsedTimer analysis;
       analysis.start();
+      auto details = to_map(*answer);
+      if (appearance) details["hairArmorAppearance"] = to_map(*appearance);
+      QVariantList overrides;
+      for (const auto& o : details.value("overrides").toList()) {
+        auto entry = o.toMap();
+        // providerOf(), but from the snapshot this job started with (the controller's may be replaced meanwhile).
+        QString mod;
+        if (snapshot) {
+          const auto it = snapshot->plugin_provider.find(text::to_lower_ascii(ss(entry.value("plugin").toString())));
+          if (it != snapshot->plugin_provider.end()) mod = qs(it->second);
+        }
+        entry["mod"] = mod;
+        overrides << entry;
+      }
+      details["overrides"] = overrides;
       // Audit F-11: an exception must not leave a pool thread (std::terminate closes the app). Reading the
       // NPC's FaceGen (a damaged BSA entry, a loose file gone, a malformed NIF) may throw: that NPC becomes
       // one error of the scan, like a failed getNpc, and the rest of the profile is still analysed.
       std::shared_ptr<const appearance::ControlReport> report;
+      std::shared_ptr<const QVariantMap> health_row;  // health scan only (scan->health never changes once started)
       QString digest, failure;
       try {
         const auto inputs = build_control_inputs(snapshot, races, details);
         report = std::make_shared<const appearance::ControlReport>(appearance::analyze_appearance_control(inputs));
         if (report->resolution)
           digest = review_digest(ss(details.value("summary").toMap().value("formKey").toString()), inputs, *report->resolution);
+        if (scan->health) {
+          const auto entry = audit_npc_health(snapshot, races, details, inputs, *report);
+          health_row = std::make_shared<const QVariantMap>(npc_health_row(entry, details, inputs));
+        }
       } catch (const std::exception& e) {
         failure = QString::fromUtf8(e.what());
       } catch (...) {
@@ -1431,18 +1692,51 @@ void StudioController::request_scan_npc(const std::shared_ptr<AppearanceScan>& s
       const qint64 us = analysis.nsecsElapsed() / 1000;
       QMetaObject::invokeMethod(
           self.data(),
-          [self, scan, details, report, digest, us] {
+          [self, scan, details, report, digest, us, health_row] {
             if (!self || scan != self->scan_ || !scan->running) return;
             --scan->in_flight;
             QElapsedTimer record;
             record.start();
             self->scan_record_report(details, *report, digest);
+            if (health_row) {
+              const auto& row = *health_row;
+              ++scan->health_status[row.value("status").toString()];
+              for (const auto& f : row.value("findings").toList()) {
+                const auto m = f.toMap();
+                const auto c = m.value("code").toString();
+                ++scan->health_codes[c];
+                if (m.value("status").toString() == QLatin1String(appearance::kStatusConfirmed)) ++scan->health_confirmed[c];
+              }
+              const auto exemptions = row.value("exemptions").toStringList();
+              if (std::any_of(exemptions.begin(), exemptions.end(), [](const QString& e) { return e != QLatin1String("calvo-intencional"); }))
+                ++scan->health_exempt;
+              if (row.value("faceGenParsed").toBool()) ++scan->health_facegen_parsed;
+              scan->health_rows << row;
+            }
             scan->analysis_us += us;
             scan->note_block(record, "recording a row");
             self->scan_next();
           },
           Qt::QueuedConnection);
     });
+    };
+    // Health scan: a default-outfit armor in the Hair slot (31) hides the NPC's hair, and only getAppearance says what
+    // it draws for this NPC's race and sex. One extra call, only for those NPCs; a failed call is audited as unresolved.
+    const auto wears_hair_slot_armor = [](const Json& npc) {
+      const auto outfit = npc.find("defaultOutfit");
+      if (outfit == npc.end() || !outfit->is_object()) return false;
+      const auto armors = outfit->find("armors");
+      if (armors == outfit->end() || !armors->is_array()) return false;
+      return std::any_of(armors->begin(), armors->end(), [](const Json& a) { return (a.value("slotMask", 0u) & (1u << (31 - 30))) != 0; });
+    };
+    if (scan->health && wears_hair_slot_armor(*answer)) {
+      ++scan->rpc_calls;
+      worker_->call(method::kGetAppearance, Json{{"npcFormKey", ss(form_key)}}, 30s, this,
+                    [analyse](const Json& a) { analyse(std::make_shared<const Json>(a)); },
+                    [analyse](int, const QString& message, const Json&) { analyse(std::make_shared<const Json>(Json{{"error", ss(message)}})); });
+      return;
+    }
+    analyse(nullptr);
   }, [this, scan, form_key](int, const QString& message, const Json&) {
     if (scan != scan_ || !scan->running) return;
     --scan->in_flight;
@@ -1539,6 +1833,22 @@ void StudioController::scan_finish() {
     if (wa != wb) return wa;
     return ma.value("name").toString().compare(mb.value("name").toString(), Qt::CaseInsensitive) < 0;
   });
+  if (scan.health) {
+    // Confirmed first, then suspected, then clean; by name inside each group.
+    const auto rank = [](const QVariantMap& m) {
+      const auto st = m.value("status").toString();
+      return st == QLatin1String(appearance::kStatusConfirmed) ? 0 : st == QLatin1String(appearance::kStatusSuspected) ? 1 : 2;
+    };
+    std::stable_sort(scan.health_rows.begin(), scan.health_rows.end(), [&](const QVariant& a, const QVariant& b) {
+      const auto ma = a.toMap(), mb = b.toMap();
+      if (rank(ma) != rank(mb)) return rank(ma) < rank(mb);
+      return ma.value("name").toString().compare(mb.value("name").toString(), Qt::CaseInsensitive) < 0;
+    });
+    log("info", tr("Salud de NPC (%1): %2 auditados, %3 confirmados, %4 sospechosos, %5 sin error detectado, %6 exentos")
+                    .arg(scan.stage).arg(scan.health_rows.size()).arg(scan.health_status.value(appearance::kStatusConfirmed))
+                    .arg(scan.health_status.value(appearance::kStatusSuspected)).arg(scan.health_status.value(appearance::kStatusClean))
+                    .arg(scan.health_exempt));
+  }
   diag::record("studio", ("appearance scan " + scan.stage).toStdString());
   log("info", tr("Análisis del perfil (%1): %2 NPC únicos, %3 con avisos, %4 con notas, %5 errores, %6 s")
                   .arg(scan.stage).arg(scan.analysed).arg(scan.counts.value("warning")).arg(scan.counts.value("info"))
@@ -1669,6 +1979,42 @@ void StudioController::copyToClipboard(const QString& text) {
   if (auto* cb = QGuiApplication::clipboard()) {
     cb->setText(text);
   }
+}
+
+void StudioController::set_fit_doctor(OutfitFitDoctorViewModel* doctor) {
+  fit_doctor_ = doctor;
+  if (doctor) {
+    connect(doctor, &OutfitFitDoctorViewModel::diagnosisChanged, forge_, &CharacterForgeViewModel::easyModeChanged);
+    connect(doctor, &OutfitFitDoctorViewModel::analyzingChanged, forge_, &CharacterForgeViewModel::easyModeChanged);
+  }
+  emit forge_->easyModeChanged();
+}
+
+nlohmann::json StudioController::easy_npc_facts() const {
+  Json facts{{"indexed", phase_ == Phase::Ready}};
+  if (body_) {
+    facts["npc"] = to_json(body_->npc());
+    facts["environment"] = to_json(body_->environment());
+    facts["presets"] = to_json(body_->presets());
+    facts["presetCounts"] = to_json(body_->preset_verdicts());
+  }
+  if (outfit_) {
+    facts["outfit"] = {{"formKey", ss(outfit_->npc_form_key())},
+                       {"pieces", to_json(outfit_->pieces())},
+                       {"localConflicts", to_json(outfit_->local_conflicts())},
+                       {"validating", outfit_->validating()},
+                       {"validation", to_json(outfit_->validation())}};
+  }
+  if (fit_doctor_) {
+    facts["fit"] = {{"formKey", ss(fit_doctor_->npc_form_key())},
+                    {"bodyFamily", ss(fit_doctor_->body_family())},
+                    {"bodyMeshPath", ss(fit_doctor_->body_mesh_path())},
+                    {"bodyConfidence", ss(fit_doctor_->body_confidence())},
+                    {"analyzing", fit_doctor_->analyzing()},
+                    {"fixableAlternatives", fit_doctor_->fixable_alternatives_count()},
+                    {"pieces", to_json(fit_doctor_->pieces())}};
+  }
+  return facts;
 }
 
 }  // namespace sns::app

@@ -14,8 +14,10 @@ public static class Protocol
     /// <summary>
     /// Additive changes (new optional fields, new methods) bump the minor version.
     /// 1.7: body.inspectNpcs and export.bodyDistribution (Universal Body Director).
+    /// 1.8: export.bodyDistribution accepts an optional kind ("ingame-test-kit": in-game test kit)
+    ///      and catalog.getIntegrityRecord (read-only NPC integrity observations).
     /// </summary>
-    public const int Minor = 7;
+    public const int Minor = 8;
 }
 
 public static class Methods
@@ -30,6 +32,7 @@ public static class Methods
     public const string SearchNpcs = "catalog.searchNpcs";
     public const string GetNpc = "catalog.getNpc";
     public const string GetAppearance = "catalog.getAppearance";
+    public const string GetIntegrityRecord = "catalog.getIntegrityRecord";
     public const string SearchArmors = "catalog.searchArmors";
 
     public const string ValidateOutfit = "outfit.validate";

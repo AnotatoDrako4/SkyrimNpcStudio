@@ -120,12 +120,17 @@ ApplicationWindow {
         if (workspaceTabs.currentIndex === 1) { setPanel("left", true); outfitLeftTabs.currentIndex = 0; outfitArmorCatalog.focusSearch() }
         else { workspaceTabs.currentIndex = 0; creatorWorkspace.showCatalog() }
     }
+    function openBeautyLab(sectionIndex) {
+        workspaceTabs.currentIndex = 0
+        creatorWorkspace.openBeautyLab(sectionIndex === undefined ? 0 : sectionIndex)
+    }
 
     // Commands of the palette (Ctrl+Shift+P) and of the shortcut list: each one calls the handler its menu entry
     // or button calls, and is enabled exactly when that entry is.
     readonly property var commands: {
         const list = [
             { id: "ws.creator", category: qsTr("Workspace"), label: qsTr("Ir a Personalizar personaje"), shortcut: "", run: () => workspaceTabs.currentIndex = 0 },
+            { id: "ws.beautylab", category: qsTr("Workspace"), label: qsTr("Abrir NPC Beauty Lab (Hair Studio, Face Workshop, Comparador & Biblioteca)"), shortcut: "", run: () => openBeautyLab(0) },
             { id: "ws.outfit", category: qsTr("Workspace"), label: qsTr("Ir a Estudio de atuendos"), shortcut: "", run: () => workspaceTabs.currentIndex = 1 },
             { id: "ws.forge", category: qsTr("Workspace"), label: qsTr("Ir a Character Forge"), shortcut: "", run: () => workspaceTabs.currentIndex = 2 },
             { id: "panel.left", category: qsTr("Vista"), label: panelOnScreen("left") ? qsTr("Ocultar el panel izquierdo") : qsTr("Mostrar el panel izquierdo"), shortcut: "Ctrl+B", run: () => setPanel("left", !panelOnScreen("left")) },
@@ -150,6 +155,7 @@ ApplicationWindow {
             { id: "settings.theme", category: qsTr("Configuración"), label: qsTr("Tema y colores…"), shortcut: "", run: () => settingsCenter.openAt("appearance", "appearance.theme") },
             { id: "tools.reindex", category: qsTr("Herramientas"), label: qsTr("Reindexar perfil"), shortcut: "F5", enabled: studio.selectedProfile.length > 0 && studio.phase !== StudioController.Scanning && studio.phase !== StudioController.Indexing, run: () => studio.reindex() },
             { id: "export.mod", category: qsTr("Exportar"), label: qsTr("Exportar mod completo / rostro…"), shortcut: "Ctrl+Shift+E", enabled: workspaceTabs.currentIndex !== 2 && ready && !studio.appearance.exporting, run: () => exportWizardDialog.open() },
+            { id: "export.ingameTest", category: qsTr("Exportar"), label: qsTr("Preparar prueba en Skyrim de una exportación…"), shortcut: "", enabled: studio.selectedProfile.length > 0, run: () => inGameTestDialog.chooseExport() },
             { id: "help.shortcuts", category: qsTr("Ayuda"), label: qsTr("Atajos de teclado"), shortcut: "", run: () => shortcutsDialog.open() }
         ]
         for (const p of Workbench.readabilityPresets)
@@ -311,6 +317,10 @@ ApplicationWindow {
         id: exportWizardDialog
         studio: window.studio
     }
+    InGameTestDialog {
+        id: inGameTestDialog
+        studio: window.studio
+    }
     FolderDialog {
         id: forgeOpenDialog
         title: qsTr("Abrir proyecto Character Forge (.sncf)")
@@ -452,6 +462,13 @@ ApplicationWindow {
             title: qsTr("&Archivo")
             Action { text: qsTr("Instancia y perfil de MO2…"); onTriggered: welcome.open() }
             Action { text: qsTr("Abrir ModOrganizer.ini…"); onTriggered: instanceDialog.open() }
+            MenuSeparator {}
+            Action {
+                objectName: "inGameTestAction"
+                text: qsTr("Preparar prueba en Skyrim…")
+                enabled: window.studio.selectedProfile.length > 0
+                onTriggered: inGameTestDialog.chooseExport()
+            }
             MenuSeparator {}
             Action {
                 objectName: "settingsAction"
@@ -1089,6 +1106,15 @@ ApplicationWindow {
             CharacterForge {
                 id: forgeWorkspace
                 forge: window.studio.forge
+                onWorkspaceRequested: target => {
+                    if (target === "outfit") {
+                        workspaceTabs.currentIndex = 1
+                    } else {
+                        workspaceTabs.currentIndex = 0
+                        if (target === "creator.body") creatorWorkspace.showBody()
+                        else if (!window.studio.outfit.npcFormKey.length) creatorWorkspace.searchNpc()
+                    }
+                }
             }
         }
 
@@ -1099,6 +1125,7 @@ ApplicationWindow {
             visible: mainSplit.bottomShown
             studio: window.studio
             SplitView.minimumHeight: Theme.px(80)
+            onPrepareInGameTest: (exportFolder) => inGameTestDialog.prepare(exportFolder)
         }
     }
 

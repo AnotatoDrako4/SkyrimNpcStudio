@@ -13,6 +13,7 @@
 #include "resource_context.hpp"
 #include "sns/appearance/skin_match.hpp"
 #include "sns/assets/asset_resolver.hpp"
+#include "sns/rendering/fidelity.hpp"
 #include "sns/ipc/protocol.hpp"
 
 namespace sns::app {
@@ -423,7 +424,7 @@ void SceneViewModel::cancel() {
 }
 
 void SceneViewModel::clear() {
-  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); skin_match_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
+  cancel(); parts_.clear(); issues_.clear(); stats_.clear(); skin_match_.clear(); fidelity_.clear(); visibility_.clear(); skeleton_ = nullptr; selected_.clear(); hair_vertex_tint_.clear();
   outfit_diagnostics_.clear(); covered_body_diagnostics_.clear();
   body_morphs_.clear(); body_morph_summary_.clear();
   status_.clear();
@@ -623,6 +624,7 @@ void SceneViewModel::reload() {
       prepared->preview = preview;
       prepared->npc = effective;
       auto& scene = prepared->scene;
+      std::optional<rendering::Appearance> fidelity_input;  // set for full character views: the report follows the scene
       QElapsedTimer timer; timer.start();
       diag::Operation op("scene.build", task, ss(effective));
       try {
@@ -714,6 +716,7 @@ void SceneViewModel::reload() {
             first = false;
           }
         }
+        if (!portrait && display_mode.isEmpty()) fidelity_input = appearance;
         // Content keys for GPU object reuse, here rather than on the GUI thread.
         op.stage("content keys");
         prepared->geometry_keys.reserve(scene.parts.size());
@@ -782,6 +785,25 @@ void SceneViewModel::reload() {
         }
         emit self->loadingChanged(); emit self->ready();
       }, Qt::QueuedConnection);
+      // The fidelity report (game vs viewer, garment fit, hidden skin) after the scene is on screen, on this same pool thread: install()
+      // only reads prepared->scene. The next reload sets `cancel`, which stops the analysis between steps.
+      if (fidelity_input && prepared->error.isEmpty()) {
+        rendering::FidelityOptions fidelity_options;
+        fidelity_options.cancelled = [cancel] { return cancel->load(); };
+        try {
+          diag::Operation fop("scene.fidelity", task, ss(effective));
+          auto report = rendering::analyze_fidelity(*fidelity_input, prepared->scene, fidelity_options);
+          if (report.cancelled || cancel->load()) return;
+          fop.succeed();
+          QMetaObject::invokeMethod(self, [self, serial, json = rendering::to_json(report)] {
+            if (!self || serial != self->serial_) return;
+            self->fidelity_ = to_map(json);
+            emit self->fidelityChanged();
+          }, Qt::QueuedConnection);
+        } catch (const std::exception& e) {
+          diag::record("scene", std::string("fidelity report failed: ") + e.what());
+        }
+      }
     });
   };
   if (armor_preview_ && is_mesh && preview_mode_ == "piece") {
@@ -938,6 +960,8 @@ void SceneViewModel::install(Prepared& prepared) {
   morph_views(scene, prepared.assigned_body_name, prepared.preset_mode, prepared.preset_family, prepared.weight, prepared.record_weight,
               prepared.show_outfit, prepared.skeleton, prepared.skeleton_provider, body_morphs_, body_morph_summary_);
   skin_match_ = skin_match_of(scene);
+  fidelity_.clear();  // the new scene's report follows (fidelityChanged) once it is computed
+  emit fidelityChanged();
   installed_ = true;
   installed_npc_ = prepared.npc;
   installed_preview_ = prepared.preview;
@@ -1008,6 +1032,31 @@ bool SceneViewModel::isPieceVisible(const QString& keyOrPath) const {
   }
   return false;
 }
+void SceneViewModel::frameParts(const QStringList& ids) {
+  if (ids.isEmpty()) {
+    emit frameRequested(center_, radius_);
+    return;
+  }
+  bool any = false;
+  QVector3D lo, hi;
+  for (const auto& p : parts_) {
+    const auto row = p.toMap();
+    if (!ids.contains(row.value("id").toString())) continue;
+    const auto c = row.value("center").value<QVector3D>();
+    const float r = row.value("radius").toFloat();
+    const QVector3D a = c - QVector3D(r, r, r), b = c + QVector3D(r, r, r);
+    if (!any) {
+      lo = a;
+      hi = b;
+      any = true;
+    } else {
+      lo = QVector3D(std::min(lo.x(), a.x()), std::min(lo.y(), a.y()), std::min(lo.z(), a.z()));
+      hi = QVector3D(std::max(hi.x(), b.x()), std::max(hi.y(), b.y()), std::max(hi.z(), b.z()));
+    }
+  }
+  if (any) emit frameRequested((lo + hi) * 0.5f, std::max(1.0f, (hi - lo).length() * 0.5f));
+}
+
 void SceneViewModel::restoreVisibility() {
   for (const auto& p : parts_) { const auto row = p.toMap(); visibility_[row.value("id").toString()] = row.value("shownByDefault", true); }
   emit visibilityChanged();

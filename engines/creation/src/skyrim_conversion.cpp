@@ -49,6 +49,27 @@ bool identity_transform(const Json& mesh) {
 
 bool power_of_two(long long v) { return v > 0 && (v & (v - 1)) == 0; }
 
+// [30, 3, 0] -> "30.3.0"; anything that is not a list of integers -> "desconocida".
+std::string dotted_version(const Json& version) {
+  if (!version.is_array() || version.empty()) return "desconocida";
+  std::string out;
+  for (const auto& part : version) {
+    if (!part.is_number_integer()) return "desconocida";
+    out += (out.empty() ? "" : ".") + std::to_string(part.get<long long>());
+  }
+  return out;
+}
+
+// The versions forge_skyrim.py declares as proven (pynifly.testedVersions); reports written before that field
+// existed only knew 29.1.0.
+std::string tested_pynifly_versions(const Json& pynifly) {
+  const auto list = pynifly.value("testedVersions", Json::array());
+  if (!list.is_array() || list.empty()) return "29.1.0";
+  std::string out;
+  for (const auto& version : list) out += (out.empty() ? "" : ", ") + dotted_version(version);
+  return out;
+}
+
 std::string fmt(double value) {
   char buffer[32];
   std::snprintf(buffer, sizeof buffer, "%.1f", value);
@@ -222,6 +243,21 @@ void verify_skin(const nif::MeshFile& mesh, const Json& prepared, const Json& re
 
 Json classify(const Json& report, std::string_view profile) {
   Issues out;
+  // Textures relinked by name near the source (tools/blender/forge_resources.py), only in the working copy.
+  const auto resources = report.value("resources", Json::object());
+  for (const auto& r : resources.value("relinked", Json::array()))
+    out.add("textureRelinked", "autoFixable", text(r, "name"),
+            "La textura no estaba en «" + text(r, "from") + "»; se usa «" + text(r, "to") + "» (mismo nombre, junto al modelo).",
+            "Sin ella, el canal se omitiría en el NIF.",
+            "Enlazada en la copia de trabajo; tu archivo no cambia. Comprueba que es la imagen correcta.", true, true);
+  for (const auto& a : resources.value("ambiguous", Json::array())) {
+    std::string where;
+    for (const auto& c : a.value("candidates", Json::array())) where += (where.empty() ? "" : "; ") + c.get<std::string>();
+    out.add("textureAmbiguous", "manualReview", text(a, "name"),
+            "Hay varios archivos con el nombre de la textura: " + where + ".",
+            "No se elige uno al azar: el canal se omite.",
+            "Deja una sola copia junto al modelo o enlázala en Blender.", true, false);
+  }
   const auto inspection = report.value("inspection", Json::object());
   const auto meshes = inspection.value("meshes", Json::array());
   const auto pynifly = report.value("pynifly", Json::object());
@@ -233,14 +269,16 @@ Json classify(const Json& report, std::string_view profile) {
     out.add("reportSchema", "blocking", "", "El informe de Blender no usa el contrato sns.forge.skyrim/1.",
             "No se puede confiar en ningún dato del análisis.", "Actualiza tools/blender/forge_skyrim.py con la aplicación.", true, false);
 
+  const auto tested = tested_pynifly_versions(pynifly);
   if (!pynifly.value("available", false))
     out.add("pyniflyMissing", "blocking", "", "PyNifly no está disponible en esta instalación de Blender: " +
             text(pynifly, "error") + ".", "No se puede escribir un NIF de Skyrim SE.",
-            "Instala PyNifly (versión probada 29.1.0) en Blender 4/5 desde su release oficial.", true, false);
+            "Instala PyNifly (versiones probadas: " + tested + ") en Blender 4/5 desde su release oficial.", true, false);
   else if (!pynifly.value("tested", false))
-    out.add("pyniflyUntested", "warning", "", "La versión instalada de PyNifly no es la probada (29.1.0).",
+    out.add("pyniflyUntested", "warning", "", "La versión instalada de PyNifly (" + dotted_version(pynifly.value("version", Json::array())) +
+            ") no está entre las probadas (" + tested + ").",
             "El exportador puede comportarse distinto; la relectura del NIF lo comprobará.",
-            "Usa PyNifly 29.1.0 para resultados reproducibles.", true, false);
+            "Usa una versión probada (" + tested + ") para resultados reproducibles.", true, false);
 
   if (meshes.empty())
     out.add("noMeshes", "blocking", "", "El modelo no contiene mallas.", "No hay geometría que exportar.",
@@ -420,7 +458,8 @@ Json classify(const Json& report, std::string_view profile) {
     if (!available) {
       out.add("textureMissing", "warning", name, "Textura no encontrada: " + text(image, "filepath"),
               "El canal se omite en el NIF (no se escribe una ruta absoluta ni inexistente).",
-              "Localiza la imagen en Blender (File > External Data > Find Missing Files).", true, true);
+              "No apareció ningún archivo con ese nombre junto al modelo: localízala en Blender (File > External Data > Find Missing Files).",
+              true, true);
       continue;
     }
     out.add("textureStaging", "autoFixable", name, "La textura no está en una carpeta Data\\textures del paquete.",

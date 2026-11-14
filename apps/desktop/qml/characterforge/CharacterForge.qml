@@ -7,11 +7,14 @@ import SkyrimNpcStudio
 Item {
     id: root
     required property CharacterForgeViewModel forge
-    property string toolWithoutProject: "project"
-    readonly property string currentTool: forge.hasProject ? forge.workspace.tool || "project" : toolWithoutProject
+    // Modo Fácil asks the window to open another workspace: "creator", "creator.body" or "outfit".
+    signal workspaceRequested(string target)
+    property string toolWithoutProject: "easy"
+    readonly property string currentTool: forge.hasProject ? forge.workspace.tool || "easy" : toolWithoutProject
     readonly property WorkspaceLayout panelLayout: Workbench.layout("forge")
     // Title and one line of purpose for the inspector of each tool.
     readonly property var toolInfo: ({
+        "easy": [qsTr("Modo Fácil"), qsTr("Qué puedes hacer ahora, qué falta y el siguiente paso, con el estado real del estudio.")],
         "project": [qsTr("Proyecto"), qsTr("Nombre, descripción y estado del borrador .sncf.")],
         "native": [qsTr("Crear NPC"), qsTr("NPC nativo: identidad, estadísticas, arquetipos, voz, hechizos y perks.")],
         "outfit": [qsTr("Atuendos e inventario"), qsTr("Atuendo e inventario del personaje.")],
@@ -163,11 +166,8 @@ Item {
         if (!needsBlenderConversion(m))
             return;
         if (!forge.projectPath.length) {
-            // Auto-create a working .sncf project directory when the user selects a .blend in an unsaved project
-            const rawBase = String(m.name || "personaje").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-            const baseName = rawBase.length > 0 ? rawBase : "personaje";
-            const autoDir = "D:/.Proyectos Games/SkyrimNpcStudio-ui2/out/forge-projects/" + baseName + ".sncf";
-            if (!forge.saveProject(autoDir)) {
+            // An unsaved project gets a folder of its own in the configurable projects folder (forge.projectsFolder)
+            if (!forge.saveProjectInProjectsFolder(String(m.name || ""))) {
                 pendingAutoConvert = true;
                 saveDialog.open();
                 return;
@@ -383,6 +383,8 @@ Item {
                             width: parent.width
                             sourceComponent: {
                                 switch (root.currentTool) {
+                                case "easy":
+                                    return easyPanel;
                                 case "native":
                                     return nativePanel;
                                 case "import":
@@ -433,9 +435,14 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 220
                         contentWidth: availableWidth
-                        ForgeAdvancedInspector {
+                        // Only while shown: its text is a JSON dump of the whole preview (every part, the full glTF
+                        // inspection) that was rebuilt on each change of the Forge, even hidden.
+                        Loader {
                             width: parent.width
-                            forge: root.forge
+                            active: advanced.checked
+                            sourceComponent: ForgeAdvancedInspector {
+                                forge: root.forge
+                            }
                         }
                     }
                 }
@@ -584,6 +591,16 @@ Item {
         ForgeModelLibrary {
             forge: root.forge
             onConvertPreviewRequested: force => root.startBlenderPreviewConversion(force)
+        }
+    }
+    Component {
+        id: easyPanel
+        EasyModePanel {
+            forge: root.forge
+            onToolRequested: tool => root.showTool(tool)
+            onWorkspaceRequested: target => root.workspaceRequested(target)
+            onAnalyzeRequested: root.ensurePreviewThenSkyrimAction("analyze")
+            onOneClickRequested: root.ensurePreviewThenSkyrimAction("easy")
         }
     }
     Component {

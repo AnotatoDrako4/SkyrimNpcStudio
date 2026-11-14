@@ -7,32 +7,52 @@ namespace SkyrimNpcStudio.Worker.NpcCatalog;
 
 internal static class AppearanceQueries
 {
+    internal const int MaxTemplateDepth = 16;
+
+    /// <summary>
+    /// Follows the Traits template chain to the NPC whose race, sex, head parts and FaceGen the game uses. A chain that
+    /// ends in a missing record, a leveled list, a cycle or more than <see cref="MaxTemplateDepth"/> links fails
+    /// explicitly: falling back to the NPC's own record would show an appearance the game never renders.
+    /// Same rules as BodyQueries' template walk.
+    /// </summary>
+    internal static INpcGetter ResolveTraitsSource(INpcGetter npc, Func<FormKey, INpcGetter?> resolveNpc, Func<FormKey, bool> isLeveledNpc)
+    {
+        var visited = new HashSet<FormKey> { npc.FormKey };
+        var current = npc;
+        for (var depth = 0;
+             current.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
+             && current.Template.FormKeyNullable is { } next && !next.IsNull;
+             depth++)
+        {
+            if (depth >= MaxTemplateDepth)
+                throw new WorkerException(ErrorCodes.ValidationFailed,
+                    $"The Traits template chain of {npc.FormKey} is longer than {MaxTemplateDepth} links.");
+            if (!visited.Add(next))
+                throw new WorkerException(ErrorCodes.ValidationFailed,
+                    $"The Traits template chain of {npc.FormKey} loops back to {next}.");
+            if (resolveNpc(next) is { } template)
+            {
+                current = template;
+                continue;
+            }
+            throw isLeveledNpc(next)
+                ? new WorkerException(ErrorCodes.ValidationFailed,
+                    $"Traits of {npc.FormKey} come from the leveled NPC list {next}: the appearance is chosen in game.")
+                : new WorkerException(ErrorCodes.RecordNotFound,
+                    $"Traits template {next} of {npc.FormKey} is not in the active load order.");
+        }
+        return current;
+    }
+
     public static AppearanceResponse Get(LoadOrderSession session, CatalogQueries queries, AppearanceRequest request)
     {
         if (!queries.TryParseAnyFormKey(request.NpcFormKey, out var key)
             || !session.LinkCache.TryResolve<INpcGetter>(key, out var npc))
             throw new WorkerException(ErrorCodes.RecordNotFound, "NPC not found: " + request.NpcFormKey);
-        var traitsNpc = npc;
-        if (npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
-            && npc.Template.FormKeyNullable is not null)
-        {
-            var visited = new HashSet<FormKey> { npc.FormKey };
-            var current = npc;
-            while (current.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
-                   && current.Template.FormKeyNullable is { } next)
-            {
-                if (!visited.Add(next)) break;
-                if (session.LinkCache.TryResolve<INpcGetter>(next, out var tmpl))
-                {
-                    current = tmpl;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            traitsNpc = current;
-        }
+        var traitsNpc = ResolveTraitsSource(
+            npc,
+            k => session.LinkCache.TryResolve<INpcGetter>(k, out var t) ? t : null,
+            k => session.LinkCache.TryResolve<ILeveledNpcGetter>(k, out _));
 
         var effectiveRaceKey = traitsNpc.Race.FormKeyNullable ?? npc.Race.FormKeyNullable;
         if (effectiveRaceKey is null || !session.LinkCache.TryResolve<IRaceGetter>(effectiveRaceKey.Value, out var race))

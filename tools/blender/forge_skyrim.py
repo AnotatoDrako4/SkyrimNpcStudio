@@ -24,11 +24,17 @@ import traceback
 
 import bpy
 
+# forge_resources.py is staged next to this script by ForgeBlenderBridge (versioned with the application).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import forge_resources  # noqa: E402
+
 SCHEMA = "sns.forge.skyrim/1"
 JOB_SCHEMA = "sns.forge.skyrim.job/1"
 SOURCE_EXTENSIONS = {".blend", ".fbx", ".obj", ".glb", ".gltf"}
 PYNIFLY_MODULE = "io_scene_nifly"
-PYNIFLY_TESTED_VERSIONS = {(29, 1, 0)}
+# A version enters this set only after the real pipeline (tests/app/test_forge_skyrim.cpp, [local]) passed with it.
+# 30.3.0: 2026-11-04, 5 PASS / 1 SKIP, evidence out/local-implementation/m1-pynifly30-20261104/run-pynifly-30.3.0.
+PYNIFLY_TESTED_VERSIONS = {(29, 1, 0), (30, 3, 0)}
 MAX_IMAGE_BYTES = 256 * 1024 * 1024
 # Bones whose presence marks a Skyrim humanoid skeleton (skeleton.nif / XPMSSE share them).
 SKYRIM_HUMANOID_BONES = {"NPC Root [Root]", "NPC COM [COM ]", "NPC Pelvis [Pelv]", "NPC Spine [Spn0]", "NPC Head [Head]"}
@@ -104,6 +110,9 @@ def write_report(path, payload):
 # ---------------------------------------------------------------------------------------------------------
 # Loading: the original is opened or imported, then the session continues on a copy in the stage.
 
+RESOURCES = {}
+
+
 def load_source(source, stage):
     extension = os.path.splitext(source)[1].lower()
     if extension == ".blend":
@@ -118,6 +127,10 @@ def load_source(source, stage):
             result = bpy.ops.import_scene.gltf(filepath=source)
     if "FINISHED" not in result:
         raise RuntimeError("Blender did not finish loading the model")
+    # Missing textures found by name near the source are relinked in the session, before the working copy is saved:
+    # the original file is never written. The decisions go to report["resources"].
+    RESOURCES.clear()
+    RESOURCES.update(forge_resources.relink_missing_images(source))
     work = os.path.join(stage, "work.blend")
     # copy=False keeps the session on the copy; relative_remap rewrites //relative paths for the new folder.
     bpy.ops.wm.save_as_mainfile(filepath=work, copy=False, relative_remap=True, compress=False)
@@ -290,34 +303,54 @@ PRETTY_BONES_PROP = "PYN_ROTATE_BONES_PRETTY"  # io_scene_nifly util/settings.py
 def rotate_bones_pretty(arma):
     """The bone orientation convention of this armature, as PyNifly's export dialog seeds it: the flag its importer
     stamps on the armature (ExportSettings default False). A background export must pass it explicitly: without it
-    PyNifly 29.1 writes every skin-to-bone rotated 90 degrees about X from the bones of a 'pretty' armature."""
+    PyNifly writes every skin-to-bone rotated 90 degrees about X from the bones of a 'pretty' armature (export_nif
+    execute() picks the table from this setting in 29.1 and, unchanged, in 30.3)."""
     return bool(arma.get(PRETTY_BONES_PROP, False))
+
+
+def bone_rotation_api():
+    """How the installed PyNifly takes the bone rotation table, read from its code rather than from its version number:
+    'parameter' when get_bone_global_xf accepts rotations= (PyNifly 30.x), 'global' when it only reads the module-level
+    blender_defs.game_rotations (29.x), None when blender_defs or its tables are not there."""
+    try:
+        import inspect
+        from io_scene_nifly import blender_defs
+        parameters = inspect.signature(blender_defs.get_bone_global_xf).parameters
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return None
+    if not all(hasattr(blender_defs, table) for table in ("game_rotations", "game_rotations_pretty", "game_rotations_none")):
+        return None
+    return "parameter" if "rotations" in parameters else "global"
 
 
 def nif_bone_matrix(arma, name, pretty):
     """The bone's bind transform as PyNifly writes it for SKYRIMSE (armature space) with the same bone convention the
-    export uses: PyNifly's own get_bone_global_xf under the rotation table its exporter selects (export_nif.execute)."""
-    try:
+    export uses: PyNifly's own get_bone_global_xf under the rotation table its exporter selects (export_nif.execute).
+    Returns (matrix, source, api): source 'pynifly' or 'formula'; api as bone_rotation_api() reports it."""
+    api = bone_rotation_api()
+    if api is not None:
         from io_scene_nifly import blender_defs
+        table = blender_defs.game_rotations_pretty if pretty else blender_defs.game_rotations_none
+        if api == "parameter":  # passed explicitly: nothing global is touched
+            return blender_defs.get_bone_global_xf(arma, name, "SKYRIMSE", False, rotations=table), "pynifly", api
         saved = blender_defs.game_rotations
-        blender_defs.game_rotations = blender_defs.game_rotations_pretty if pretty else blender_defs.game_rotations_none
+        blender_defs.game_rotations = table
         try:
-            return blender_defs.get_bone_global_xf(arma, name, "SKYRIMSE", False), "pynifly"
+            return blender_defs.get_bone_global_xf(arma, name, "SKYRIMSE", False), "pynifly", api
         finally:
             blender_defs.game_rotations = saved
-    except ImportError:
-        import math
-        from mathutils import Matrix
-        local = arma.data.bones[name].matrix_local
-        return (local @ Matrix.Rotation(math.radians(-90.0), 4, "X") if pretty else local.copy()), "formula"
+    import math
+    from mathutils import Matrix
+    local = arma.data.bones[name].matrix_local
+    return (local @ Matrix.Rotation(math.radians(-90.0), 4, "X") if pretty else local.copy()), "formula", None
 
 
 def armature_facts(obj):
     bones = [b.name for b in obj.data.bones]
-    detail, source = [], None
+    detail, source, api = [], None, None
     pretty = rotate_bones_pretty(obj)
     for bone in list(obj.data.bones)[:MAX_BONES]:
-        matrix, source = nif_bone_matrix(obj, bone.name, pretty)
+        matrix, source, api = nif_bone_matrix(obj, bone.name, pretty)
         translation, rotation, scale = matrix.decompose()
         detail.append({"name": bone.name, "parent": bone.parent.name if bone.parent else None, "deform": bone.use_deform,
                        "translation": [round(v, 5) for v in translation],
@@ -333,7 +366,7 @@ def armature_facts(obj):
             "skyrimHumanoidBones": sorted(SKYRIM_HUMANOID_BONES.intersection(bones)),
             "pyniflyGame": obj.get("PYN_GAME", None),
             "scale": [round(v, 5) for v in obj.matrix_world.to_scale()],
-            "bonesDetail": detail, "bonesTruncated": len(bones) > MAX_BONES, "bindSource": source, "rotateBonesPretty": pretty,
+            "bonesDetail": detail, "bonesTruncated": len(bones) > MAX_BONES, "bindSource": source, "bindRotationApi": api, "rotateBonesPretty": pretty,
             "worldIdentity": identity, "poseDelta": round(pose_delta, 6)}
 
 
@@ -351,6 +384,8 @@ def pynifly_facts():
         return facts
     version = tuple(getattr(module, "bl_info", {}).get("version", ()))
     facts.update(version=list(version), tested=version in PYNIFLY_TESTED_VERSIONS,
+                 testedVersions=[list(v) for v in sorted(PYNIFLY_TESTED_VERSIONS)],
+                 boneRotationApi=bone_rotation_api(),
                  path=os.path.dirname(getattr(module, "__file__", "") or ""))
     if not hasattr(bpy.ops.export_scene, "pynifly"):
         facts["error"] = "export_scene.pynifly is not registered"
@@ -609,13 +644,16 @@ def readback(path):
 
 
 def main():
+    forge_resources.announce_tempdir()
     job = read_job()
     report = {"schema": SCHEMA, "operation": job["operation"], "profile": job["profile"], "status": "error",
               "blenderVersion": bpy.app.version_string, "sourceFormat": os.path.splitext(job["source"])[1][1:].lower(),
-              "sourceSha256": sha256(job["source"]), "sourceBytes": os.path.getsize(job["source"])}
+              "sourceSha256": sha256(job["source"]), "sourceBytes": os.path.getsize(job["source"]),
+              "blenderTempDir": bpy.app.tempdir}
     try:
         progress("load", 0.05)
         report["workCopy"] = os.path.relpath(load_source(job["source"], job["stage"]), job["stage"])
+        report["resources"] = dict(RESOURCES)
         progress("inspect", 0.25)
         report["pynifly"] = pynifly_facts()
         report["inspection"] = inspect_scene()
@@ -647,7 +685,10 @@ def main():
         report.update(status="error", message=str(error)[:1000], trace=traceback.format_exc()[-4000:])
         write_report(job["report"], report)
         print("SNS_FORGE_SKYRIM_ERROR " + str(error)[:300], flush=True)
-        raise
+        traceback.print_exc()
+        forge_resources.finish_process(17)  # the code --python-exit-code gives an uncaught exception
+    # Report, NIF and textures are on disk: skip the scene teardown that crashed after heavy exports.
+    forge_resources.finish_process(0)
 
 
 if __name__ == "__main__":

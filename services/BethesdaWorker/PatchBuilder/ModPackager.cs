@@ -133,6 +133,8 @@ internal static class ModPackager
             var stagedPlugin = Path.Combine(stagedModDir, pluginName);
             var built = buildAction(stagedPlugin, stagedModDir);
             ct.ThrowIfCancellationRequested();
+            if (mode is "face-overhaul" or "complete-overhaul")
+                RepairIntegrityGate.Check(session, built, stagedModDir, ct);
 
             var sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(stagedPlugin)));
 
@@ -157,8 +159,8 @@ internal static class ModPackager
             if (createZip)
             {
                 stagedZip = Path.Combine(staging, modName + ".zip");
-                CreateZip(stagedModDir, stagedZip);
-                VerifyZip(stagedZip, stagedModDir);
+                CreateZip(stagedModDir, stagedZip, ct);
+                VerifyZip(stagedZip, stagedModDir, ct);
                 verification = [.. verification, $"ZIP releído: {files.Count + 2} entrada(s) con rutas relativas seguras y contenido idéntico al de la carpeta del mod (SHA-256)."];
             }
 
@@ -538,8 +540,9 @@ internal static class ModPackager
     /// Re-opens the ZIP that will be delivered: no absolute or parent-relative entry names, nothing the
     /// mod folder does not contain, nothing missing, and every entry byte-identical to its file.
     /// </summary>
-    internal static void VerifyZip(string zipPath, string modDir)
+    internal static void VerifyZip(string zipPath, string modDir, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var expected = Directory.EnumerateFiles(modDir, "*", SearchOption.AllDirectories)
             .Select(f => Path.GetRelativePath(modDir, f).Replace('\\', '/'))
             .Where(f => !string.Equals(f, "meta.ini", StringComparison.OrdinalIgnoreCase))
@@ -548,16 +551,23 @@ internal static class ModPackager
         using var zip = ZipFile.OpenRead(zipPath);
         foreach (var entry in zip.Entries)
         {
+            ct.ThrowIfCancellationRequested();
             var name = entry.FullName;
-            var segments = name.Split('/');
+            var directory = name.EndsWith('/');
+            var segments = (directory ? name[..^1] : name).Split('/');
             if (name.Length == 0 || name.StartsWith('/') || name.Contains('\\') || name.Contains(':')
-                || segments.Any(s => s is ".." or "." || s.Length == 0 && !name.EndsWith('/')))
+                || segments.Any(s => s is ".." or "." || s.Length == 0))
             {
                 throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: unsafe entry name '{name}'.");
             }
 
-            if (name.EndsWith('/'))
+            if (directory)
             {
+                if (entry.Length != 0 || !expected.Any(f => f.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+                    || !seen.Add(name))
+                {
+                    throw new WorkerException(ErrorCodes.ValidationFailed, $"ZIP verification failed: unexpected, duplicate or nonempty directory '{name}'.");
+                }
                 continue;
             }
 
@@ -567,7 +577,7 @@ internal static class ModPackager
             }
 
             using var stream = entry.Open();
-            var zipped = Convert.ToHexString(SHA256.HashData(stream));
+            var zipped = Convert.ToHexString(SHA256.HashDataAsync(stream, ct).AsTask().GetAwaiter().GetResult());
             var onDisk = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(modDir, name.Replace('/', Path.DirectorySeparatorChar)))));
             if (!string.Equals(zipped, onDisk, StringComparison.Ordinal))
             {
@@ -582,18 +592,25 @@ internal static class ModPackager
         }
     }
 
-    internal static void CreateZip(string modDir, string zipPath)
+    internal static void CreateZip(string modDir, string zipPath, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
         foreach (var file in Directory.EnumerateFiles(modDir, "*", SearchOption.AllDirectories))
         {
+            ct.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(modDir, file);
             if (string.Equals(relative, "meta.ini", StringComparison.OrdinalIgnoreCase))
             {
                 continue; // MO2 creates its own meta.ini on install.
             }
 
-            zip.CreateEntryFromFile(file, relative.Replace('\\', '/'), CompressionLevel.Optimal);
+            var entry = zip.CreateEntry(relative.Replace('\\', '/'), CompressionLevel.Optimal);
+            var modified = File.GetLastWriteTime(file);
+            entry.LastWriteTime = modified.Year is >= 1980 and <= 2107 ? modified : new DateTime(1980, 1, 1);
+            using var source = File.OpenRead(file);
+            using var destination = entry.Open();
+            source.CopyToAsync(destination, ct).GetAwaiter().GetResult();
         }
     }
 

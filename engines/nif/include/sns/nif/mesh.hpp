@@ -90,6 +90,9 @@ struct Shape {
   std::vector<std::optional<Transform>> mesh_bone_to_global;
   std::vector<Influence> influences;      // one per vertex when skinned
   std::vector<std::uint16_t> partitions;  // dismember partition slot ids (e.g. 32 = body)
+  // Dismember partition slot id of every triangle of `indices` (indices.size() / 3 entries), from the skin partition blocks;
+  // empty when the shape has no BSDismemberSkinInstance or the mapping does not cover every triangle.
+  std::vector<std::uint16_t> triangle_partitions;
   // Triangles stored in the NiSkinPartition blocks (nullopt without a skin partition). The game
   // draws skinned SSE geometry from these partitions, not from the shape's own triangle list.
   std::optional<std::uint32_t> partition_triangles;
@@ -109,6 +112,9 @@ struct MeshFile {
 // Parses a NIF from memory. Throws sns::Error(Parse) if the file cannot be read at all;
 // shapes that cannot be converted are skipped with a warning.
 MeshFile load_mesh(std::string_view bytes, std::string_view label);
+
+// Deduplicated shader texture paths without vertex/skin conversion; prevalidated like load_mesh.
+std::vector<std::string> texture_dependencies(std::string_view bytes, std::string_view label);
 
 struct StringExtraData {
   std::string owner;  // shape name, "" for the root node

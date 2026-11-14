@@ -4,3 +4,5 @@ target_link_libraries(sns-probe PRIVATE sns::assets sns::textures sns::face sns:
 if(WIN32)
   target_link_libraries(sns-probe PRIVATE dbghelp)
 endif()
+add_executable(sns-integrity integrity_main.cpp)
+target_link_libraries(sns-integrity PRIVATE sns::appearance sns::ipc sns::compile_options)

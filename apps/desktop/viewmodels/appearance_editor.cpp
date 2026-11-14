@@ -111,11 +111,18 @@ QString blocked_reason(const face::FaceCompatibilityReport& r, const std::string
   }
 }
 
-QVariantMap compatibility_map(const face::FaceCompatibilityReport& r) {
+QVariantMap compatibility_map(const face::FaceCompatibilityReport& r, bool regenerate_mode = false) {
   QVariantList allowed, blocked, mismatches;
-  for (const auto& op : r.allowed) allowed << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}};
-  for (const auto& [op, english] : r.blocked) {
-    blocked << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}, {"reason", blocked_reason(r, op)}, {"detail", qs(english)}};
+  const bool unlocked = regenerate_mode && r.regenerable_from_record && !r.blocked.empty();
+  if (unlocked) {
+    for (const char* op : {"hair-color", "face-morphs", "head-parts", "skin-tone", "outfit", "regenerate"}) {
+      allowed << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}};
+    }
+  } else {
+    for (const auto& op : r.allowed) allowed << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}};
+    for (const auto& [op, english] : r.blocked) {
+      blocked << QVariantMap{{"op", qs(op)}, {"label", operation_label(op)}, {"reason", blocked_reason(r, op)}, {"detail", qs(english)}};
+    }
   }
   for (const auto& m : r.tri_mismatches) {
     mismatches << QVariantMap{{"part", qs(m.part)}, {"tri", qs(m.tri)}, {"triVertices", static_cast<qulonglong>(m.tri_vertices)},
@@ -124,9 +131,24 @@ QVariantMap compatibility_map(const face::FaceCompatibilityReport& r) {
   QStringList evidence, missing;
   for (const auto& e : r.evidence) evidence << qs(e);
   for (const auto& m : r.missing) missing << qs(m);
-  return {{"code", qs(r.code)},           {"label", compatibility_label(r.code)},  {"allowed", allowed},
-          {"blocked", blocked},           {"triMismatches", mismatches},          {"missing", missing},
-          {"evidence", evidence},         {"hairTint", r.hair_tint},              {"deviation", r.regeneration_deviation}};
+  const bool keep_missing_code = r.kind == face::FaceCompatibility::FaceGenMissing;
+  const QString effective_code = (unlocked && !keep_missing_code) ? QStringLiteral("unlocked-regenerate") : qs(r.code);
+  const QString effective_label = (unlocked && !keep_missing_code)
+                                      ? QObject::tr("Desbloqueado para modear (regeneración completa desde el registro)")
+                                      : compatibility_label(r.code);
+  return {{"code", effective_code},
+          {"baseCode", qs(r.code)},
+          {"label", effective_label},
+          {"allowed", allowed},
+          {"blocked", blocked},
+          {"triMismatches", mismatches},
+          {"missing", missing},
+          {"evidence", evidence},
+          {"hairTint", r.hair_tint},
+          {"deviation", r.regeneration_deviation},
+          {"regenerableFromRecord", r.regenerable_from_record},
+          {"unlockedForModding", unlocked},
+          {"canUnlockForModding", r.regenerable_from_record && !unlocked && !blocked.isEmpty()}};
 }
 
 }  // namespace
@@ -169,6 +191,47 @@ std::vector<std::string> facegen_competitors(const mo2::VirtualFileSystem& vfs, 
   return mods;
 }
 
+constexpr const char* kVirtualBaldFormKey = "000000:BALD";
+
+bool has_virtual_bald(const std::vector<std::string>& head_parts) {
+  return std::find(head_parts.begin(), head_parts.end(), std::string(kVirtualBaldFormKey)) != head_parts.end();
+}
+
+QString classify_head_part_package(const QString& plugin, const QString& model_path, const QString& editor_id) {
+  const QString combined = (plugin + " " + model_path + " " + editor_id).toLower();
+  if (combined.contains("kshair") || combined.contains("ks hair")) return QStringLiteral("KS Hairdos");
+  if (combined.contains("apachii")) return QStringLiteral("ApachiiSkyHair");
+  if (combined.contains("hghair") || combined.contains("hg hair")) return QStringLiteral("HG Hairdos");
+  if (combined.contains("yundao") || combined.contains("dint999")) return QStringLiteral("HDT-SMP Hair Pack");
+  if (combined.contains("highpolyhead") || combined.contains("kl_highpoly")) return QStringLiteral("High Poly Head");
+  if (combined.contains("eyesofbeauty") || combined.contains("theeyesofbeauty")) return QStringLiteral("The Eyes of Beauty");
+  if (combined.contains("brows.esp") || combined.contains("hvergelmir")) return QStringLiteral("Hvergelmir Brows / Beards");
+  if (combined.contains("beards.esp")) return QStringLiteral("Beards");
+  static const QStringList vanilla_masters = {"skyrim.esm", "update.esm", "dawnguard.esm", "hearthfires.esm", "dragonborn.esm"};
+  if (vanilla_masters.contains(plugin.toLower()) || plugin.toLower().startsWith("cc")) return QStringLiteral("Vanilla / Creation Club");
+  return plugin.isEmpty() ? QStringLiteral("Otro") : plugin;
+}
+
+QString tint_mask_category_label(int mask_type, const QString& path) {
+  const QString lower = path.toLower();
+  if (mask_type == face::kTintMaskSkinTone || lower.contains("skintone")) return QStringLiteral("Piel");
+  if (mask_type == 1 || mask_type == 2 || mask_type == 3 || mask_type == 4 || mask_type == 5 || mask_type == 9 ||
+      lower.contains("lips") || lower.contains("eyeliner") || lower.contains("eyesocket") || lower.contains("cheek")) {
+    return QStringLiteral("Maquillaje");
+  }
+  if (mask_type == 7 || lower.contains("warpaint") || lower.contains("paint") || lower.contains("scar")) {
+    return QStringLiteral("Pintura y cicatrices");
+  }
+  return QStringLiteral("Rasgos y sombras");
+}
+
+QString tint_mask_display_name(int index, int mask_type, const QString& path) {
+  const QString base = QFileInfo(QString(path).replace('\\', '/')).completeBaseName();
+  if (mask_type == face::kTintMaskSkinTone) return QStringLiteral("Tono de piel base (#%1)").arg(index);
+  if (!base.isEmpty()) return QStringLiteral("%1 (#%2)").arg(base).arg(index);
+  return QStringLiteral("Capa de tinte #%1").arg(index);
+}
+
 }  // namespace
 
 AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, OutfitEditor* outfit, SnapshotProvider snapshot,
@@ -181,6 +244,7 @@ AppearanceEditor::AppearanceEditor(WorkerClient* worker, ConsoleModel* console, 
   connect(&build_timer_, &QTimer::timeout, this, &AppearanceEditor::start_build);
   // Any undo/redo (face or outfit): refresh, and follow head part changes with a new recipe.
   connect(history_, &EditHistory::changed, this, [this] {
+    refresh_compatibility_map(true);
     emit appearanceChanged();
     if (!recipe_ || !draft_.face_loaded()) return;
     if (draft_.face().head_parts != recipe_->npc_head_parts || draft_.face().head_texture != recipe_->npc_head_texture) {
@@ -240,6 +304,8 @@ void AppearanceEditor::set_target(const projects::NpcTarget& target) {
   recipe_.reset();
   existing_facegen_.reset();
   has_existing_tint_ = false;
+  base_compatibility_report_.reset();
+  base_provenance_.clear();
   compatibility_.clear();
   geometry_reason_.clear();
   existing_issues_.clear();
@@ -262,6 +328,11 @@ void AppearanceEditor::clear() {
   target_ = {};
   base_recipe_.reset();
   recipe_.reset();
+  existing_facegen_.reset();
+  has_existing_tint_ = false;
+  base_compatibility_report_.reset();
+  base_provenance_.clear();
+  compatibility_.clear();
   build_.reset();
   overlay_.reset();
   ++geometry_revision_;
@@ -304,7 +375,9 @@ void AppearanceEditor::request_recipe(bool initial) {
   if (target_.form_key.empty() || !worker_) return;
   Json req{{"npcFormKey", target_.form_key}};
   if (!initial) {
-    req["headPartFormKeys"] = draft_.face().head_parts;
+    std::vector<std::string> requested_parts = draft_.face().head_parts;
+    std::erase(requested_parts, std::string(kVirtualBaldFormKey));
+    req["headPartFormKeys"] = requested_parts;
     req["headTextureFormKey"] = draft_.face().head_texture;
   }
   const int serial = ++recipe_serial_;
@@ -334,6 +407,17 @@ void AppearanceEditor::on_recipe(const Json& json, bool initial, int serial) {
   }
   load_error_.clear();
   recipe_issues_ = to_list(json.value("issues", Json::array()));
+  if (!initial && draft_.face_loaded() && has_virtual_bald(draft_.face().head_parts)) {
+    recipe.npc_head_parts = draft_.face().head_parts;
+    for (auto& p : recipe.parts) {
+      if (p.type == face::HeadPartType::Hair) {
+        p.form_key = kVirtualBaldFormKey;
+        p.editor_id = "IntentionallyBald";
+        p.model.clear();
+        p.tris.clear();
+      }
+    }
+  }
   if (initial) {
     base_recipe_ = recipe;
     recipe_ = recipe;
@@ -400,7 +484,8 @@ void AppearanceEditor::analyse_existing_facegen() {
       QString mode = QStringLiteral("regenerate");
       QString reason;
       QVariantList issues;
-      QVariantMap compatibility;
+      face::FaceCompatibilityReport report;
+      QVariantMap provenance;
     };
     auto result = std::make_shared<Result>();
     diag::Operation op("facegen.analyse", task, "npc " + recipe.npc_form_key);
@@ -415,8 +500,7 @@ void AppearanceEditor::analyse_existing_facegen() {
       const auto regen = face::build_facegen(recipe, *ctx->face_assets, options);
       if (regen.cancelled) return;
       op.stage("compatibility");
-      const auto report = face::diagnose_face_compatibility(recipe, *ctx->face_assets, result->existing.get(), regen);
-      result->compatibility = compatibility_map(report);
+      result->report = face::diagnose_face_compatibility(recipe, *ctx->face_assets, result->existing.get(), regen);
       // Where each piece comes from (MO2), and whether the record and its FaceGen come from the same mod.
       QVariantMap provenance{{"winningPlugin", qs(winning_plugin)}};
       for (const auto& p : ctx->snapshot->load_order.active) {
@@ -443,7 +527,7 @@ void AppearanceEditor::analyse_existing_facegen() {
                                              "entre replacers. No se cambia el orden de carga automáticamente.")
                                      .arg(qs(winning_plugin), plugin_mod, facegen_mod);
       }
-      result->compatibility["provenance"] = provenance;
+      result->provenance = provenance;
       if (!result->existing) {
         result->reason = QObject::tr("El NPC no tiene FaceGen en el perfil: el juego construye la cabeza en tiempo real y suele "
                                      "mostrar la cara oscura. Exportar genera un FaceGen coherente con el registro.");
@@ -479,15 +563,39 @@ void AppearanceEditor::analyse_existing_facegen() {
       self->has_existing_tint_ = result->tint;
       self->geometry_reason_ = result->reason;
       self->existing_issues_ = result->issues;
-      self->compatibility_ = result->compatibility;
-      diag::record("facegen", ("compatibility " + ss(result->compatibility.value("code").toString())).c_str());
+      self->base_compatibility_report_ = result->report;
+      self->base_provenance_ = result->provenance;
       self->draft_.set_baseline_geometry_mode(ss(result->mode));
+      self->refresh_compatibility_map(false);
+      diag::record("facegen", ("compatibility " + ss(self->compatibility_.value("code").toString())).c_str());
       self->enforce_face_blocks();
       emit self->appearanceChanged();
       emit self->faceGenChanged();
       self->schedule_build();
     }, Qt::QueuedConnection);
   });
+}
+
+void AppearanceEditor::refresh_compatibility_map(bool emit_signal) {
+  if (!base_compatibility_report_) return;
+  const bool regenerate_active = draft_.face_loaded() && draft_.face().geometry_mode == "regenerate";
+  QVariantMap next = compatibility_map(*base_compatibility_report_, regenerate_active);
+  if (!base_provenance_.isEmpty()) next["provenance"] = base_provenance_;
+  if (next == compatibility_) return;
+  compatibility_ = std::move(next);
+  if (!head_part_options_.isEmpty()) {
+    const bool blocked = operation_blocked(QStringLiteral("head-parts"));
+    for (int i = 0; i < head_part_options_.size(); ++i) {
+      auto item = head_part_options_[i].toMap();
+      const bool mesh_found = item.value("meshFound").toBool();
+      item["headPartBlocked"] = blocked;
+      item["compatibilityState"] = blocked ? QStringLiteral("blocked-custom-head")
+                                           : (!mesh_found ? QStringLiteral("missing-assets") : QStringLiteral("compatible"));
+      head_part_options_[i] = item;
+    }
+    emit headPartOptionsChanged();
+  }
+  if (emit_signal) emit faceGenChanged();
 }
 
 std::vector<face::MorphExtension> AppearanceEditor::morph_extensions(const ResourceContext& ctx) const {
@@ -539,10 +647,9 @@ void AppearanceEditor::start_build() {
   recipe.values = state.values;
   recipe.morph_extensions = morph_extensions(*ctx);
 
-  // Hair Color Safe Mode: only HCLF differs from the record, so the FaceGen the profile really
-  // loads (MO2 winner, loose or BSA) is recolored in place - from the first edit on, whatever was
-  // built before, and never by rebuilding the head from its parts.
-  const bool hair_safe = decision == appearance::FaceBuildKind::HairColorSafe;
+  // Hair Color Safe Mode: only HCLF differs from the record and the profile has a winning FaceGen,
+  // so it is recolored in place without rebuilding the head from its parts.
+  const bool hair_safe = decision == appearance::FaceBuildKind::HairColorSafe && existing_facegen_ != nullptr;
   const auto hair_safe_base = hair_safe ? existing_facegen_ : nullptr;
 
   face::FaceGenBuildOptions options;
@@ -551,8 +658,9 @@ void AppearanceEditor::start_build() {
     options.existing_facegen = existing_facegen_;
     options.baseline = baseline.values;
   }
-  const bool tint_changed = state.values.tints != baseline.values.tints || state.values.skin_tone != baseline.values.skin_tone ||
-                            !has_existing_tint_;
+  const bool mode_regenerated = state.geometry_mode == "regenerate" && baseline.geometry_mode != "regenerate";
+  const bool tint_changed = mode_regenerated || state.values.tints != baseline.values.tints ||
+                            state.values.skin_tone != baseline.values.skin_tone || !has_existing_tint_;
   Job job{diag::next_task_id(), target_.form_key, std::make_shared<std::atomic<bool>>(false)};
   options.cancelled = [cancel = job.cancel] { return cancel->load(); };
   running_ = job;
@@ -718,10 +826,44 @@ QVariantList AppearanceEditor::standard_sliders() const {
 
 QVariantList AppearanceEditor::preset_slots() const {
   QVariantList list;
+  std::shared_ptr<const face::TriFile> chargen_tri;
+  if (recipe_) {
+    if (const auto ctx = context(); ctx && ctx->face_assets) {
+      for (const auto& part : recipe_->parts) {
+        if (part.type != face::HeadPartType::Face) continue;
+        for (const auto& ref : part.tris) {
+          if (ref.kind == face::TriKind::Chargen) {
+            try { chargen_tri = ctx->face_assets->tri(ref.path); } catch (...) {}
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
   for (const auto& slot : face::face_preset_slots()) {
     if (slot.prefix.empty()) continue;
-    list.push_back(QVariantMap{{"slot", static_cast<int>(slot.index)}, {"key", qs(slot.key)}, {"prefix", qs(slot.prefix)},
-                               {"displayNameEs", qs(slot.display_name_es)}, {"max", 40}});
+    int max_index = 35;
+    if (chargen_tri) {
+      int detected = 0;
+      for (int idx = 1; idx <= 99; ++idx) {
+        if (chargen_tri->find(slot.prefix + std::to_string(idx))) detected = idx;
+      }
+      if (detected > 0) max_index = detected;
+    }
+    const int cur_val = draft_.face_loaded() ? draft_.face().values.presets[slot.index] : 0;
+    const bool editable = !operation_blocked(QStringLiteral("face-morphs"));
+    list.push_back(QVariantMap{{"slot", static_cast<int>(slot.index)},
+                               {"index", static_cast<int>(slot.index)},
+                               {"key", qs(slot.key)},
+                               {"prefix", qs(slot.prefix)},
+                               {"displayNameEs", qs(slot.display_name_es)},
+                               {"label", qs(slot.display_name_es)},
+                               {"max", max_index},
+                               {"maxPreset", max_index},
+                               {"value", cur_val},
+                               {"editable", editable},
+                               {"triVerified", chargen_tri != nullptr}});
   }
   return list;
 }
@@ -746,19 +888,60 @@ QVariantList AppearanceEditor::head_parts() const {
   if (!recipe_) return list;
   const auto& pnam = draft_.face().head_parts;
   const bool female = recipe_->female;
+  const auto snap = snapshot_();
+  const auto ctx = context();
   for (const auto& p : recipe_->parts) {
     const bool own = std::find(pnam.begin(), pnam.end(), p.form_key) != pnam.end();
     const bool sex_ok = p.valid_sex == "any" || (p.valid_sex == "female") == female;
+    const QString type_str = qs(std::string(face::head_part_type_to_string(p.type)));
+    const QString plugin_str = qs(p.plugin);
+    const QString model_str = qs(p.model);
+    const QString editor_str = qs(p.editor_id);
+    QString plugin_mod;
+    if (snap && !p.plugin.empty()) {
+      if (const auto it = snap->plugin_provider.find(text::to_lower_ascii(p.plugin)); it != snap->plugin_provider.end()) {
+        plugin_mod = qs(it->second);
+      }
+    }
+    bool mesh_found = p.model.empty();
+    QString asset_kind = p.model.empty() ? QStringLiteral("none") : QStringLiteral("missing");
+    QString effective_provider = plugin_mod;
+    QStringList overridden_by;
+    if (!p.model.empty()) {
+      if (ctx && ctx->resolver) {
+        if (const auto loc = ctx->resolver->locate(p.model)) {
+          mesh_found = true;
+          asset_kind = loc->kind == assets::AssetLocation::Kind::Loose ? QStringLiteral("loose") : QStringLiteral("bsa");
+          effective_provider = qs(loc->kind == assets::AssetLocation::Kind::Archive && !loc->archive_provider.empty()
+                                      ? loc->archive_provider
+                                      : loc->provider);
+        }
+      }
+      if (snap) {
+        for (const auto idx : snap->vfs.providers_of(p.model)) {
+          overridden_by << qs(snap->vfs.providers()[idx].name);
+        }
+      }
+    }
     list.push_back(QVariantMap{{"formKey", qs(p.form_key)},
-                               {"editorId", qs(p.editor_id)},
-                               {"type", qs(std::string(face::head_part_type_to_string(p.type)))},
-                               {"model", qs(p.model)},
+                               {"editorId", editor_str},
+                               {"type", type_str},
+                               {"model", model_str},
                                {"extra", p.extra},
-                               {"plugin", qs(p.plugin)},
+                               {"plugin", plugin_str},
+                               {"pluginMod", plugin_mod},
+                               {"packageFamily", classify_head_part_package(plugin_str, model_str, editor_str)},
                                {"official", p.official},
                                {"fromRecord", own},
                                {"validSex", sex_ok},
-                               {"validRace", p.valid_for_race}});
+                               {"validRace", p.valid_for_race},
+                               {"meshFound", mesh_found},
+                               {"assetKind", asset_kind},
+                               {"effectiveProvider", effective_provider},
+                               {"overrideCount", std::max(0, static_cast<int>(overridden_by.size()) - 1)},
+                               {"overriddenBy", overridden_by},
+                               {"isBaldPart", p.type == face::HeadPartType::Hair && p.model.empty()},
+                               {"requiresFaceGenRebuild", true}});
   }
   return list;
 }
@@ -768,12 +951,52 @@ QVariantList AppearanceEditor::tints() const {
   if (!recipe_) return list;
   for (const auto& t : draft_.face().values.tints) {
     const auto* mask = recipe_->tint_mask(t.index);
+    const QString mask_path = mask ? qs(mask->mask_path) : QString();
+    const int mask_type = mask ? mask->mask_type : -1;
     list.push_back(QVariantMap{{"index", t.index},
                                {"color", qcolor(t.color)},
                                {"value", t.value},
                                {"preset", t.preset},
-                               {"mask", mask ? qs(mask->mask_path) : QString()},
-                               {"maskType", mask ? mask->mask_type : -1}});
+                               {"mask", mask_path},
+                               {"maskType", mask_type},
+                               {"category", tint_mask_category_label(mask_type, mask_path)},
+                               {"label", tint_mask_display_name(t.index, mask_type, mask_path)}});
+  }
+  return list;
+}
+
+QVariantList AppearanceEditor::tint_catalog() const {
+  QVariantList list;
+  if (!recipe_) return list;
+  const auto ctx = context();
+  const auto& active_tints = draft_.face().values.tints;
+  for (const auto& mask : recipe_->tint_masks) {
+    const auto it = std::find_if(active_tints.begin(), active_tints.end(), [&](const auto& t) { return t.index == mask.index; });
+    const QColor color = it != active_tints.end()
+                             ? qcolor(it->color)
+                             : (mask.mask_type == face::kTintMaskSkinTone ? qcolor(draft_.face().values.skin_tone) : QColor(255, 255, 255));
+    const float value = it != active_tints.end() ? it->value : (mask.mask_type == face::kTintMaskSkinTone ? 1.0f : 0.0f);
+    const QString path_str = qs(mask.mask_path);
+    bool texture_found = mask.mask_path.empty();
+    QString provider;
+    if (!mask.mask_path.empty() && ctx && ctx->resolver) {
+      if (const auto loc = ctx->resolver->locate(mask.mask_path)) {
+        texture_found = true;
+        provider = qs(loc->kind == assets::AssetLocation::Kind::Archive && !loc->archive_provider.empty()
+                          ? loc->archive_provider
+                          : loc->provider);
+      }
+    }
+    list.push_back(QVariantMap{{"index", static_cast<int>(mask.index)},
+                               {"color", color},
+                               {"value", value},
+                               {"active", it != active_tints.end() && value > 0.001f},
+                               {"mask", path_str},
+                               {"maskType", mask.mask_type},
+                               {"category", tint_mask_category_label(mask.mask_type, path_str)},
+                               {"label", tint_mask_display_name(static_cast<int>(mask.index), mask.mask_type, path_str)},
+                               {"textureFound", texture_found},
+                               {"provider", provider}});
   }
   return list;
 }
@@ -782,6 +1005,49 @@ QVariantMap AppearanceEditor::custom_morphs() const {
   QVariantMap map;
   for (const auto& [k, v] : draft_.face().values.custom_morphs) map[qs(k)] = v;
   return map;
+}
+
+QVariantList AppearanceEditor::available_custom_morphs() const {
+  QVariantList list;
+  if (!recipe_) return list;
+  QStringList names;
+  for (const auto& [k, _] : draft_.face().values.custom_morphs) {
+    const QString name = qs(k);
+    if (!names.contains(name)) names << name;
+  }
+  if (const auto ctx = context()) {
+    for (const auto& ext : morph_extensions(*ctx)) {
+      if (auto tri = ctx->face_assets->tri(ext.tri)) {
+        for (const auto& m : tri->morphs) {
+          const QString name = qs(m.name);
+          if (!names.contains(name)) names << name;
+        }
+      }
+    }
+  }
+  const auto& active = draft_.face().values.custom_morphs;
+  for (const auto& name : names) {
+    const auto it = active.find(ss(name));
+    list.push_back(QVariantMap{{"name", name},
+                               {"value", it != active.end() ? it->second : 0.0f},
+                               {"min", -1.5f},
+                               {"max", 1.5f}});
+  }
+  return list;
+}
+
+QString AppearanceEditor::head_texture() const {
+  return qs(draft_.face().head_texture);
+}
+
+bool AppearanceEditor::intentionally_bald() const {
+  if (!draft_.face_loaded()) return false;
+  if (has_virtual_bald(draft_.face().head_parts)) return true;
+  if (!recipe_) return false;
+  for (const auto& p : recipe_->parts) {
+    if (p.type == face::HeadPartType::Hair) return p.model.empty();
+  }
+  return false;
 }
 
 int AppearanceEditor::sculpt_targets() const { return static_cast<int>(draft_.face().values.sculpt.size()); }
@@ -824,6 +1090,9 @@ QVariantMap AppearanceEditor::easy_mod_plan() const {
   if (in.npc_loaded && target_.form_key != ss(npc_label())) in.npc_label += " (" + target_.form_key + ")";
   in.face_kind = draft_.face_loaded() ? appearance::face_build_kind(draft_.face_baseline(), draft_.face())
                                       : appearance::FaceBuildKind::Unchanged;
+  if (in.face_kind == appearance::FaceBuildKind::HairColorSafe && !existing_facegen_) {
+    in.face_kind = appearance::FaceBuildKind::Full;
+  }
   in.face_exportable = exportable();
   in.face_building = building_;
   in.face_integrity = ss(facegen_report_.value("integrity").toString());
@@ -890,6 +1159,7 @@ void AppearanceEditor::clearFaceResolution() {
 
 bool AppearanceEditor::exportable() const {
   if (!draft_.face_loaded() || building_) return false;
+  if (has_virtual_bald(draft_.face().head_parts)) return false;
   switch (appearance::face_build_kind(draft_.face_baseline(), draft_.face())) {
     case appearance::FaceBuildKind::Unchanged:
       return true;
@@ -1011,6 +1281,9 @@ void AppearanceEditor::setHeadPart(const QString& formKey, const QString& type) 
   if (formKey.isEmpty() || !recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
   const auto wanted = face::string_to_head_part_type(ss(type));
   auto next = draft_.face();
+  if (wanted == face::HeadPartType::Hair) {
+    std::erase(next.head_parts, std::string(kVirtualBaldFormKey));
+  }
   std::erase_if(next.head_parts, [&](const std::string& fk) {
     const auto it = std::find_if(recipe_->parts.begin(), recipe_->parts.end(), [&](const auto& p) { return p.form_key == fk; });
     return it != recipe_->parts.end() && it->type == wanted;
@@ -1026,15 +1299,85 @@ void AppearanceEditor::searchHeadParts(const QString& type, const QString& text)
   head_part_options_.clear();
   head_part_search_ = {{"state", "searching"}, {"type", type}, {"text", text.trimmed()}};
   emit headPartOptionsChanged();
-  Json params{{"npcFormKey", target_.form_key}, {"limit", 300}};
+  Json params{{"npcFormKey", target_.form_key}, {"limit", 1000}};
   if (!type.isEmpty()) params["type"] = ss(type);
   if (!text.trimmed().isEmpty()) params["text"] = ss(text.trimmed());
   worker_->call(method::kSearchHeadParts, params, 30s, this,
                 [this, serial](const Json& r) {
                   if (serial != head_part_serial_) return;
-                  head_part_options_ = to_variant(r.value("items", Json::array())).toList();
+                  const auto raw_items = to_variant(r.value("items", Json::array())).toList();
+                  const auto snap = snapshot_();
+                  const auto ctx = context();
+                  const bool blocked = operation_blocked(QStringLiteral("head-parts"));
+                  QVariantList enriched;
+                  QStringList packages;
+                  for (const auto& v : raw_items) {
+                    auto item = v.toMap();
+                    const QString plugin = item.value("plugin").toString();
+                    const QString model_raw = item.value("modelPath").toString();
+                    const QString editor_id = item.value("editorId").toString();
+                    const QString part_type = item.value("type").toString();
+                    QString plugin_mod;
+                    if (snap && !plugin.isEmpty()) {
+                      if (const auto it = snap->plugin_provider.find(text::to_lower_ascii(ss(plugin))); it != snap->plugin_provider.end()) {
+                        plugin_mod = qs(it->second);
+                      }
+                    }
+                    const QString pkg = classify_head_part_package(plugin, model_raw, editor_id);
+                    if (!packages.contains(pkg)) packages << pkg;
+                    const bool is_empty_model = model_raw.trimmed().isEmpty();
+                    bool mesh_found = is_empty_model;
+                    QString asset_kind = is_empty_model ? QStringLiteral("none") : QStringLiteral("missing");
+                    QString effective_provider = plugin_mod;
+                    QStringList overridden_by;
+                    bool has_smp = false;
+                    if (!is_empty_model) {
+                      QString norm = model_raw.trimmed();
+                      norm.replace('/', '\\');
+                      while (norm.startsWith('\\')) norm.remove(0, 1);
+                      if (!norm.startsWith(QStringLiteral("meshes\\"), Qt::CaseInsensitive)) norm = QStringLiteral("meshes\\") + norm;
+                      const std::string mesh_key = ss(norm);
+                      if (ctx && ctx->resolver) {
+                        if (const auto loc = ctx->resolver->locate(mesh_key)) {
+                          mesh_found = true;
+                          asset_kind = loc->kind == assets::AssetLocation::Kind::Loose ? QStringLiteral("loose") : QStringLiteral("bsa");
+                          effective_provider = qs(loc->kind == assets::AssetLocation::Kind::Archive && !loc->archive_provider.empty()
+                                                      ? loc->archive_provider
+                                                      : loc->provider);
+                        }
+                        if (norm.endsWith(QStringLiteral(".nif"), Qt::CaseInsensitive)) {
+                          const QString xml_cand = norm.left(norm.size() - 4) + QStringLiteral(".xml");
+                          if (ctx->resolver->locate(ss(xml_cand)).has_value()) has_smp = true;
+                        }
+                      }
+                      if (snap) {
+                        for (const auto idx : snap->vfs.providers_of(mesh_key)) {
+                          overridden_by << qs(snap->vfs.providers()[idx].name);
+                        }
+                      }
+                      const QString comb = (item.value("name").toString() + " " + editor_id + " " + model_raw).toLower();
+                      if (comb.contains("smp") || comb.contains("hdt") || comb.contains("physics")) has_smp = true;
+                    }
+                    item["pluginMod"] = plugin_mod;
+                    item["packageFamily"] = pkg;
+                    item["isBaldPart"] = part_type == QLatin1String("Hair") && is_empty_model;
+                    item["isNonePart"] = is_empty_model;
+                    item["meshFound"] = mesh_found;
+                    item["assetKind"] = asset_kind;
+                    item["effectiveProvider"] = effective_provider;
+                    item["overrideCount"] = std::max(0, static_cast<int>(overridden_by.size()) - 1);
+                    item["overriddenBy"] = overridden_by;
+                    item["hasSmp"] = has_smp;
+                    item["requiresFaceGenRebuild"] = true;
+                    item["headPartBlocked"] = blocked;
+                    item["compatibilityState"] = blocked ? QStringLiteral("blocked-custom-head")
+                                                         : (!mesh_found ? QStringLiteral("missing-assets") : QStringLiteral("compatible"));
+                    enriched.push_back(item);
+                  }
+                  head_part_options_ = std::move(enriched);
                   head_part_search_["state"] = QStringLiteral("ready");
                   head_part_search_["count"] = head_part_options_.size();
+                  head_part_search_["packages"] = packages;
                   emit headPartOptionsChanged();
                 },
                 [this, serial](int, const QString& message, const Json&) {
@@ -1047,15 +1390,74 @@ void AppearanceEditor::searchHeadParts(const QString& type, const QString& text)
                 });
 }
 
+void AppearanceEditor::cancelHeadPartSearch() {
+  ++head_part_serial_;
+  if (head_part_search_.value("state").toString() == QLatin1String("searching")) {
+    head_part_search_["state"] = QStringLiteral("cancelled");
+    emit headPartOptionsChanged();
+  }
+}
+
 void AppearanceEditor::removeHeadPart(const QString& type) {
   if (!recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
   const auto wanted = face::string_to_head_part_type(ss(type));
   auto next = draft_.face();
+  if (wanted == face::HeadPartType::Hair) {
+    std::erase(next.head_parts, std::string(kVirtualBaldFormKey));
+  }
   std::erase_if(next.head_parts, [&](const std::string& fk) {
     const auto it = std::find_if(recipe_->parts.begin(), recipe_->parts.end(), [&](const auto& p) { return p.form_key == fk; });
     return it != recipe_->parts.end() && it->type == wanted;
   });
   edit(std::move(next), tr("Quitar %1 (vuelve la pieza por defecto de la raza)").arg(type));
+}
+
+void AppearanceEditor::setIntentionallyBald(bool bald) {
+  if (!recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
+  auto next = draft_.face();
+  std::erase(next.head_parts, std::string(kVirtualBaldFormKey));
+  std::erase_if(next.head_parts, [&](const std::string& fk) {
+    const auto it = std::find_if(recipe_->parts.begin(), recipe_->parts.end(), [&](const auto& p) { return p.form_key == fk; });
+    return it != recipe_->parts.end() && it->type == face::HeadPartType::Hair;
+  });
+  if (bald) {
+    QString bald_form_key;
+    for (const auto& v : head_part_options_) {
+      const auto m = v.toMap();
+      if (m.value("type").toString() == QLatin1String("Hair") && m.value("modelPath").toString().trimmed().isEmpty()) {
+        bald_form_key = m.value("formKey").toString();
+        break;
+      }
+    }
+    if (!bald_form_key.isEmpty()) {
+      next.head_parts.push_back(ss(bald_form_key));
+    } else {
+      next.head_parts.push_back(kVirtualBaldFormKey);
+    }
+    edit(std::move(next), tr("Establecer NPC calvo intencionalmente"));
+  } else {
+    edit(std::move(next), tr("Restaurar cabello por defecto de la raza"));
+  }
+}
+
+void AppearanceEditor::setCustomMorph(const QString& name, float value) {
+  if (name.trimmed().isEmpty() || refuse_blocked(QStringLiteral("face-morphs"))) return;
+  auto next = draft_.face();
+  const float clamped = std::clamp(value, -1.5f, 1.5f);
+  if (std::abs(clamped) < 1e-4f) {
+    next.values.custom_morphs.erase(ss(name.trimmed()));
+  } else {
+    next.values.custom_morphs[ss(name.trimmed())] = clamped;
+  }
+  edit(std::move(next), tr("Ajustar morph personalizado %1").arg(name.trimmed()), "customMorph:" + name.trimmed());
+}
+
+void AppearanceEditor::setHeadTexture(const QString& formKey) {
+  if (!recipe_ || refuse_blocked(QStringLiteral("head-parts"))) return;
+  auto next = draft_.face();
+  next.head_texture = ss(formKey.trimmed());
+  edit(std::move(next), formKey.trimmed().isEmpty() ? tr("Restaurar textura facial por defecto")
+                                                    : tr("Cambiar textura de cabeza (%1)").arg(formKey.trimmed()));
 }
 
 void AppearanceEditor::setTint(int index, const QColor& color, float value) {
@@ -1074,7 +1476,15 @@ void AppearanceEditor::setTint(int index, const QColor& color, float value) {
 
 void AppearanceEditor::setGeometryMode(const QString& mode) {
   if (mode != "regenerate" && mode != "preserve") return;
-  if (mode == "regenerate" && refuse_blocked(QStringLiteral("regenerate"))) return;
+  if (analysing()) {
+    console_->append("warning", "appearance", tr("Analizando el FaceGen original de %1; espera a que termine.").arg(npc_label()));
+    return;
+  }
+  if (mode == "regenerate" && base_compatibility_report_ && !base_compatibility_report_->regenerable_from_record) {
+    console_->append("warning", "appearance",
+                     tr("No se puede desbloquear la regeneración para %1: faltan mallas o TRI de Head Parts en MO2.").arg(npc_label()));
+    return;
+  }
   if (mode == "preserve" && !existing_facegen_) {
     console_->append("warning", "appearance", tr("No hay FaceGen existente que conservar: se regenera desde el registro."));
     return;
@@ -1084,11 +1494,63 @@ void AppearanceEditor::setGeometryMode(const QString& mode) {
   edit(std::move(next), mode == "preserve" ? tr("Conservar el FaceGen existente") : tr("Regenerar FaceGen desde el registro"));
 }
 
+void AppearanceEditor::unlockForModding() {
+  if (!draft_.face_loaded() || analysing()) return;
+  if (base_compatibility_report_ && !base_compatibility_report_->regenerable_from_record) {
+    console_->append("warning", "appearance",
+                     tr("No se puede desbloquear %1: faltan mallas de Head Parts en el perfil MO2.").arg(npc_label()));
+    return;
+  }
+  if (draft_.face().geometry_mode != "regenerate") {
+    setGeometryMode(QStringLiteral("regenerate"));
+    console_->append("info", "appearance",
+                     tr("Rostro de %1 desbloqueado para modear: la exportación regenerará un FaceGen completo desde el registro.")
+                         .arg(npc_label()));
+  } else {
+    refresh_compatibility_map(true);
+  }
+}
+
 void AppearanceEditor::resetFace() {
   if (!draft_.face_loaded()) return;
   edit(draft_.face_baseline(), tr("Restablecer el rostro del registro"));
   // "Restablecer" returns the NPC to its record: the body height too (an undoable step of its own).
   if (draft_.is_height_dirty()) history_->push(appearance::make_set_height(draft_, draft_.height_baseline()));
+}
+
+void AppearanceEditor::resetMorphs() {
+  if (!draft_.face_loaded()) return;
+  const auto& base = draft_.face_baseline();
+  auto next = draft_.face();
+  next.values.sliders = base.values.sliders;
+  next.values.presets = base.values.presets;
+  next.values.custom_morphs = base.values.custom_morphs;
+  next.values.sculpt = base.values.sculpt;
+  next.values.weight = base.values.weight;
+  edit(std::move(next), tr("Restablecer geometría y morphs faciales"));
+}
+
+void AppearanceEditor::resetTints() {
+  if (!draft_.face_loaded()) return;
+  const auto& base = draft_.face_baseline();
+  auto next = draft_.face();
+  next.values.skin_tone = base.values.skin_tone;
+  next.values.tints = base.values.tints;
+  edit(std::move(next), tr("Restablecer tono de piel y capas de maquillaje/tinte"));
+}
+
+void AppearanceEditor::resetHeadParts() {
+  if (!draft_.face_loaded()) return;
+  const auto& base = draft_.face_baseline();
+  auto next = draft_.face();
+  next.head_parts = base.head_parts;
+  next.head_texture = base.head_texture;
+  next.values.hair_color = base.values.hair_color;
+  edit(std::move(next), tr("Restablecer cabello, ojos, cejas y piezas de cabeza"));
+}
+
+void AppearanceEditor::apply_face_state(appearance::FaceState next, const QString& description) {
+  edit(std::move(next), description);
 }
 
 void AppearanceEditor::undo() {
@@ -1337,8 +1799,8 @@ void AppearanceEditor::export_overhaul(bool complete, const QString& plugin_name
   const auto face_kind = draft_.face_loaded() ? appearance::face_build_kind(draft_.face_baseline(), draft_.face())
                                               : appearance::FaceBuildKind::Unchanged;
   const bool face_edit = face_kind != appearance::FaceBuildKind::Unchanged;
-  // Minimal change: a hair color edit exports HCLF and the recolored winning FaceGen, nothing else.
-  const bool hair_only = face_kind == appearance::FaceBuildKind::HairColorSafe;
+  // Minimal change: a hair color edit on an existing FaceGen exports HCLF and the recolored winning FaceGen.
+  const bool hair_only = face_kind == appearance::FaceBuildKind::HairColorSafe && existing_facegen_ != nullptr;
   const bool body_edit = draft_.is_height_dirty();
   // The draft starts with the NPC's current outfit: only a changed outfit is an edit (an unchanged
   // one would add a new OTFT identical to the current one).

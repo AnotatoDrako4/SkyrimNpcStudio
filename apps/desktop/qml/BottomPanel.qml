@@ -8,6 +8,8 @@ Rectangle {
     id: root
     required property StudioController studio
     property var exports: []
+    // «Preparar prueba en Skyrim» for one export of this session (its mod folder holds manifest.json).
+    signal prepareInGameTest(string exportFolder)
     color: Theme.panel
 
     Connections {
@@ -88,6 +90,14 @@ Rectangle {
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
                         Layout.leftMargin: 6
+                    }
+                    Button {
+                        text: qsTr("Preparar prueba en Skyrim")
+                        enabled: root.studio.selectedProfile.length > 0 && root.studio.inGameTest.state !== "preparing"
+                                 && root.studio.inGameTest.state !== "exporting"
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Con la exportación ya instalada y activa en el perfil de prueba: genera el comando «bat» y el acta como un mod nuevo.")
+                        onClicked: root.prepareInGameTest(modelData.modDirectory)
                     }
                     Button { text: qsTr("Abrir carpeta"); onClicked: root.studio.openFolder(modelData.modDirectory) }
                 }

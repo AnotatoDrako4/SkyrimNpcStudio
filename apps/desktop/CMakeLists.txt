@@ -1,4 +1,5 @@
-find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test)
+find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui GuiPrivate Qml Quick QuickControls2 Quick3D Quick3DAssetUtils Test
+  Quick3DPrivate Quick3DAssetUtilsPrivate Quick3DAssetImportPrivate Quick3DRuntimeRenderPrivate)
 qt_standard_project_setup(REQUIRES 6.11)
 
 qt_add_executable(SkyrimNpcStudio WIN32
@@ -17,6 +18,9 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/edit_history.cpp viewmodels/edit_history.hpp
   viewmodels/resource_context.cpp viewmodels/resource_context.hpp
   viewmodels/export_destination.cpp viewmodels/export_destination.hpp
+  viewmodels/ingame_test_request.cpp viewmodels/ingame_test_request.hpp
+  viewmodels/npc_health_audit.cpp viewmodels/npc_health_audit.hpp
+  viewmodels/forge_projects_folder.cpp viewmodels/forge_projects_folder.hpp
   viewmodels/outfit_editor.cpp viewmodels/outfit_editor.hpp
   viewmodels/appearance_editor.cpp viewmodels/appearance_editor.hpp
   viewmodels/scene_viewmodel.cpp viewmodels/scene_viewmodel.hpp
@@ -34,12 +38,18 @@ qt_add_executable(SkyrimNpcStudio WIN32
   viewmodels/forge_blender_bridge.cpp viewmodels/forge_blender_bridge.hpp
   viewmodels/forge_skyrim_package.cpp viewmodels/forge_skyrim_package.hpp
   viewmodels/forge_scene_viewmodel.cpp viewmodels/forge_scene_viewmodel.hpp
-  viewmodels/outfit_fit_doctor_viewmodel.cpp viewmodels/outfit_fit_doctor_viewmodel.hpp)
+  viewmodels/forge_model_loader.cpp viewmodels/forge_model_loader.hpp
+  viewmodels/stale_temp_folders.hpp
+  viewmodels/outfit_fit_doctor_viewmodel.cpp viewmodels/outfit_fit_doctor_viewmodel.hpp
+  viewmodels/beauty_lab_engine.cpp viewmodels/beauty_lab_engine.hpp
+  viewmodels/beauty_lab_viewmodel.cpp viewmodels/beauty_lab_viewmodel.hpp)
 
 set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py PROPERTIES QT_RESOURCE_ALIAS forge_bridge.py)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py PROPERTIES QT_RESOURCE_ALIAS forge_skyrim.py)
+set_source_files_properties(${PROJECT_SOURCE_DIR}/tools/blender/forge_resources.py PROPERTIES QT_RESOURCE_ALIAS forge_resources.py)
 qt_add_resources(SkyrimNpcStudio forge_bridge_script PREFIX "/forge"
-  FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py)
+  FILES ${PROJECT_SOURCE_DIR}/tools/blender/forge_bridge.py ${PROJECT_SOURCE_DIR}/tools/blender/forge_skyrim.py
+    ${PROJECT_SOURCE_DIR}/tools/blender/forge_resources.py)
 
 # Must be set BEFORE qt_add_qml_module, otherwise Theme is registered as a plain type.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -61,6 +71,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/DependenciesPanel.qml
     qml/BottomPanel.qml
     qml/ExportDialog.qml
+    qml/InGameTestDialog.qml
     qml/components/SectionHeader.qml
     qml/components/KeyValue.qml
     qml/components/IssueList.qml
@@ -90,6 +101,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/CharacterToolbar.qml
     qml/charactercreator/ExportWizardDialog.qml
     qml/charactercreator/AppearanceControlPanel.qml
+    qml/charactercreator/FidelityPanel.qml
     qml/charactercreator/SourceStatusBadge.qml
     qml/charactercreator/SourceImagePane.qml
     qml/charactercreator/AppearanceSourceCompareDialog.qml
@@ -98,6 +110,7 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/charactercreator/SkinMatchCard.qml
     qml/charactercreator/PresetHeadDialog.qml
     qml/charactercreator/OutfitFitDoctor.qml
+    qml/charactercreator/NpcBeautyLab.qml
     qml/charactercreator/CharacterCreator.qml
     qml/characterforge/AIGenerationPanel.qml
     qml/characterforge/ForgeAppearanceEditor.qml
@@ -122,6 +135,8 @@ qt_add_qml_module(SkyrimNpcStudio
     qml/characterforge/NativeNpcEditor.qml
     qml/characterforge/SkeletonEditor.qml
     qml/characterforge/SkyrimConversionWizard.qml
+    qml/characterforge/BlenderRunPanel.qml
+    qml/characterforge/EasyModePanel.qml
     qml/characterforge/StatsEditor.qml
   RESOURCES
     qml/shaders/alpha_channel.vert
@@ -136,6 +151,9 @@ target_compile_options(SkyrimNpcStudio PRIVATE /wd4702 /bigobj)
 target_link_libraries(SkyrimNpcStudio PRIVATE
   Qt6::Quick Qt6::QuickControls2 Qt6::Quick3D Qt6::Quick3DAssetUtils
   Qt6::GuiPrivate  # rhi/qrhi.h: the portrait renderer reads its off-screen texture back (QRhi, semi-public API)
+  # ForgeModelLoader: RuntimeLoader's two halves (importFile on a worker thread, createScene on the GUI thread) are
+  # private Qt Quick 3D API, pinned to the Qt 6.11 they were read from (forge_model_loader.hpp).
+  Qt6::Quick3DPrivate Qt6::Quick3DAssetUtilsPrivate Qt6::Quick3DAssetImportPrivate Qt6::Quick3DRuntimeRenderPrivate
   Qt6::Test  # QTest::mouseClick for the --forge-preview automation (platform input path)
   sns::ipc sns::mo2 sns::projects sns::creation sns::gltf sns::outfit
   sns::appearance sns::presets sns::face

@@ -1,3 +1,6 @@
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Skyrim;
 using SkyrimNpcStudio.TestFixtures;
 using SkyrimNpcStudio.Worker.Contracts;
 using SkyrimNpcStudio.Worker.NpcCatalog;
@@ -31,10 +34,99 @@ public sealed class AppearanceTests : IClassFixture<CatalogFixture>
     }
 
     [Fact]
-    public void UnresolvedAndTemplatedAppearancesFailExplicitly()
+    public void UnresolvedNpcFailsExplicitly()
     {
-        Assert.Throws<WorkerException>(() => Get(new AppearanceRequest { NpcFormKey = "FFFFFF:Skyrim.esm" }));
-        Assert.Throws<WorkerException>(() => Get(new AppearanceRequest { NpcFormKey = SyntheticLoadOrder.TemplatedGuard.ToString() }));
+        var ex = Assert.Throws<WorkerException>(() => Get(new AppearanceRequest { NpcFormKey = "FFFFFF:Skyrim.esm" }));
+        Assert.Equal(ErrorCodes.RecordNotFound, ex.Code);
+    }
+
+    // Since f5b87b0 a Traits template that resolves to an NPC_ is followed (it used to be refused outright): the guard takes
+    // race and sex from GuardTemplate, and its outfit from the template because the guard has none of its own.
+    [Fact]
+    public void ValidTraitsTemplate_ResolvesAppearanceFromTemplate()
+    {
+        var result = Get(new AppearanceRequest { NpcFormKey = SyntheticLoadOrder.TemplatedGuard.ToString() });
+        Assert.Equal(SyntheticLoadOrder.TemplatedGuard.ToString(), result.NpcFormKey);
+        Assert.Equal("male", result.Sex);
+        Assert.Contains(result.Pieces, p => p.ArmorFormKey == SyntheticLoadOrder.SteelCuirass.ToString() && p.Source == "outfit");
+        Assert.Contains(result.Pieces, p => p.ArmorFormKey == SyntheticLoadOrder.ElvenCuirass.ToString() && p.Source == "outfit");
+    }
+
+    private static readonly ModKey TemplateMod = ModKey.FromFileName("TemplateChain.esp");
+
+    private static Npc TraitsNpc(uint id, FormKey? template, bool female = false)
+    {
+        var npc = new Npc(new FormKey(TemplateMod, id), SkyrimRelease.SkyrimSE);
+        if (template is { } t) npc.Template.SetTo(t);
+        npc.Configuration.TemplateFlags = NpcConfiguration.TemplateFlag.Traits;
+        if (female) npc.Configuration.Flags |= NpcConfiguration.Flag.Female;
+        return npc;
+    }
+
+    private static INpcGetter Resolve(INpcGetter start, params Npc[] records)
+    {
+        var byKey = records.ToDictionary(n => n.FormKey, n => (INpcGetter)n);
+        return AppearanceQueries.ResolveTraitsSource(start, k => byKey.GetValueOrDefault(k), _ => false);
+    }
+
+    [Fact]
+    public void TraitsChain_FollowsEveryLinkToTheLastNpc()
+    {
+        var root = TraitsNpc(0x900, null, female: true);
+        root.Configuration.TemplateFlags = 0;  // root has its own traits: the chain stops here
+        var middle = TraitsNpc(0x901, root.FormKey);
+        var leaf = TraitsNpc(0x902, middle.FormKey);
+        Assert.Same(root, Resolve(leaf, root, middle));
+    }
+
+    [Fact]
+    public void TraitsFlagWithoutTemplate_KeepsTheNpcItself()
+    {
+        var npc = TraitsNpc(0x903, null);
+        Assert.Same(npc, Resolve(npc));
+    }
+
+    [Fact]
+    public void TraitsTemplate_MissingRecordFailsInsteadOfFallingBackToOwnAppearance()
+    {
+        var npc = TraitsNpc(0x904, new FormKey(TemplateMod, 0xFFF));
+        var ex = Assert.Throws<WorkerException>(() => Resolve(npc));
+        Assert.Equal(ErrorCodes.RecordNotFound, ex.Code);
+        Assert.Contains("not in the active load order", ex.Message);
+    }
+
+    [Fact]
+    public void TraitsTemplate_LeveledListFailsWithItsOwnReason()
+    {
+        var lvln = new FormKey(TemplateMod, 0x9F0);
+        var npc = TraitsNpc(0x905, lvln);
+        var ex = Assert.Throws<WorkerException>(() =>
+            AppearanceQueries.ResolveTraitsSource(npc, _ => null, k => k == lvln));
+        Assert.Equal(ErrorCodes.ValidationFailed, ex.Code);
+        Assert.Contains("leveled NPC list", ex.Message);
+    }
+
+    [Fact]
+    public void TraitsTemplate_CycleFailsExplicitly()
+    {
+        var a = TraitsNpc(0x906, new FormKey(TemplateMod, 0x907));
+        var b = TraitsNpc(0x907, a.FormKey);
+        var ex = Assert.Throws<WorkerException>(() => Resolve(a, a, b));
+        Assert.Equal(ErrorCodes.ValidationFailed, ex.Code);
+        Assert.Contains("loops back", ex.Message);
+
+        var self = TraitsNpc(0x908, new FormKey(TemplateMod, 0x908));
+        Assert.Contains("loops back", Assert.Throws<WorkerException>(() => Resolve(self, self)).Message);
+    }
+
+    [Fact]
+    public void TraitsTemplate_ChainLongerThanTheLimitFails()
+    {
+        var chain = new List<Npc> { TraitsNpc(0xA00, null) };
+        chain[0].Configuration.TemplateFlags = 0;
+        for (uint i = 1; i <= AppearanceQueries.MaxTemplateDepth + 1; i++) chain.Add(TraitsNpc(0xA00 + i, chain[^1].FormKey));
+        var ex = Assert.Throws<WorkerException>(() => Resolve(chain[^1], [.. chain]));
+        Assert.Contains("longer than", ex.Message);
     }
 
     [Fact]

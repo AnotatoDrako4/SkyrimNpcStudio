@@ -166,6 +166,12 @@ public sealed record ExportBodyDistributionRequest
 
     /// <summary>Free key/value pairs copied into manifest.json.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+
+    /// <summary>
+    /// What the package is; manifest.json format becomes "skyrim-npc-studio/&lt;kind&gt;". "body-distribution" (default)
+    /// or "ingame-test-kit" (batch file + acceptance report for testing an export inside Skyrim). Protocol 1.8.
+    /// </summary>
+    public string? Kind { get; init; }
 }
 
 public sealed record ExportBodyDistributionResponse

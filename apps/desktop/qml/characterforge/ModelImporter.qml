@@ -20,43 +20,12 @@ ColumnLayout {
         return fmt === "blend" || fmt === "fbx" || fmt === "obj";
     }
 
+    // ForgeSceneViewModel computes the isolated part once per change and isolates with one signal.
     function isPartIsolated(partIndex) {
-        const p = root.parts || [];
-        if (partIndex < 0 || partIndex >= p.length || p.length <= 1 || !p[partIndex].visible)
-            return false;
-        const keep = {};
-        let cur = partIndex;
-        while (cur >= 0 && cur < p.length) {
-            keep[cur] = true;
-            cur = p[cur].parent !== undefined ? p[cur].parent : -1;
-        }
-        let anyHidden = false;
-        for (let i = 0; i < p.length; ++i) {
-            if (!keep[i]) {
-                if (p[i].visible)
-                    return false;
-                anyHidden = true;
-            }
-        }
-        return anyHidden;
+        return partIndex >= 0 && root.scene.isolatedPart === partIndex;
     }
     function isolatePart(partIndex) {
-        const p = root.parts || [];
-        if (partIndex < 0 || partIndex >= p.length)
-            return;
-        if (root.isPartIsolated(partIndex)) {
-            root.scene.showAllParts();
-            return;
-        }
-        const keep = {};
-        let cur = partIndex;
-        while (cur >= 0 && cur < p.length) {
-            keep[cur] = true;
-            cur = p[cur].parent !== undefined ? p[cur].parent : -1;
-        }
-        for (let i = 0; i < p.length; ++i)
-            root.scene.setPartVisible(i, !!keep[i]);
-        root.scene.selectPart(partIndex);
+        root.scene.isolatePart(partIndex);
     }
 
     Text {
@@ -228,31 +197,32 @@ ColumnLayout {
         }
     }
     // Drawable parts as RuntimeLoader created them (see ForgeSceneViewModel.partMatch).
-    readonly property var parts: scene.parts
-    readonly property var selectedPart: scene.selectedPart >= 0 && scene.selectedPart < parts.length ? parts[scene.selectedPart] : null
+    // Counts and the selected part come from ForgeSceneViewModel; the list reads ForgePartsModel (rows updated in place).
+    readonly property int partCount: scene.partCount
+    readonly property var selectedPart: scene.selectedPart >= 0 ? scene.selectedPartInfo : null
     Text {
         Layout.fillWidth: true
         Layout.topMargin: 6
-        visible: root.parts.length > 0
-        text: qsTr("Partes del modelo (%1)").arg(root.parts.length)
+        visible: root.partCount > 0
+        text: qsTr("Partes del modelo (%1)").arg(root.partCount)
         color: Theme.text
         font.bold: true
     }
     Text {
         Layout.fillWidth: true
-        visible: root.parts.length > 0
+        visible: root.partCount > 0
         text: root.scene.partMatch === "order"
             ? qsTr("Nombres del glTF asignados por orden de escena: materiales, skin, morph targets y jerarquía coinciden.")
             : root.scene.partMatch === "order-unconfirmed"
             ? qsTr("Asignación por orden no confirmada: alguna parte no coincide con su nodo glTF.")
             : qsTr("El visor creó %1 parte(s) para %2 nodo(s) con malla: sin nombres del glTF.")
-                .arg(root.parts.length).arg((root.inspection.meshNodes || []).length)
+                .arg(root.partCount).arg((root.inspection.meshNodes || []).length)
         color: root.scene.partMatch === "order" ? Theme.textMuted : Theme.warn
         font.pixelSize: Theme.small
         wrapMode: Text.WordWrap
     }
     Repeater {
-        model: root.parts
+        model: root.scene.partsModel
         delegate: RowLayout {
             id: partRow
             required property var modelData
@@ -275,7 +245,7 @@ ColumnLayout {
                 onClicked: root.scene.selectPart(highlighted ? -1 : partRow.modelData.index)
             }
             ToolButton {
-                visible: root.parts.length > 1
+                visible: root.scene.partCount > 1
                 text: root.isPartIsolated(partRow.modelData.index) ? qsTr("Todo") : qsTr("Solo")
                 font.pixelSize: Theme.small
                 onClicked: root.isolatePart(partRow.modelData.index)
@@ -306,8 +276,8 @@ ColumnLayout {
     }
     Button {
         Layout.fillWidth: true
-        visible: root.parts.length > 0
-        enabled: root.parts.some(p => !p.visible)
+        visible: root.partCount > 0
+        enabled: root.scene.anyPartHidden
         text: qsTr("Mostrar todas las partes")
         onClicked: root.scene.showAllParts()
     }

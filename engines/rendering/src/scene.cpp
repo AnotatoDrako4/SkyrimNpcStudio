@@ -143,6 +143,8 @@ RenderPart to_part(const nif::Shape& shape, std::string id, std::string group, s
   part.uv_offset = shape.uv_offset;
   part.uv_scale = shape.uv_scale;
   part.texture_slots = shape.textures;
+  part.partitions = shape.partitions;
+  part.triangle_partitions = shape.triangle_partitions;
 
   const auto n = shape.positions.size();
   part.vertices.resize(n * kFloatsPerVertex);
@@ -1207,9 +1209,54 @@ CharacterScene build_character_scene(const Appearance& appearance, const assets:
       if (shape.shader_type == nif::kShaderSkinTint) part.tint = appearance.skin_tone;
       // FaceTint keeps its own diffuse (slot 0); the FaceGen tint is composited over it below.
       if (shape.shader_type == nif::kShaderFaceTint) part.face_tint = appearance.face_tint;
+      // BSDismember partitions the addon does not claim are not drawn by the game (a garment's reference body in slot 53 when its
+      // ARMA claims 32, nails carrying hands in 33 when the ARMA claims 58). Those triangles go to a hidden companion part with the
+      // reason, so the view matches the game and the inspector can still show them.
+      std::optional<RenderPart> unclaimed;
+      if (part.shown_by_default && group != "head" && mask != 0 && !part.triangle_partitions.empty() &&
+          part.triangle_partitions.size() * 3 == part.indices.size()) {
+        std::vector<std::uint32_t> kept, dropped;
+        std::vector<std::uint16_t> kept_partitions, dropped_partitions;
+        std::vector<int> unclaimed_slots;
+        for (std::size_t t = 0; t < part.triangle_partitions.size(); ++t) {
+          const int id = part.triangle_partitions[t];
+          const bool drop = id >= 30 && id <= 61 && (mask & (1u << (id - 30))) == 0;
+          auto& out = drop ? dropped : kept;
+          out.insert(out.end(), {part.indices[t * 3], part.indices[t * 3 + 1], part.indices[t * 3 + 2]});
+          (drop ? dropped_partitions : kept_partitions).push_back(part.triangle_partitions[t]);
+          if (drop && std::find(unclaimed_slots.begin(), unclaimed_slots.end(), id) == unclaimed_slots.end()) unclaimed_slots.push_back(id);
+        }
+        if (!dropped.empty()) {
+          std::sort(unclaimed_slots.begin(), unclaimed_slots.end());
+          const auto why = "dismember partition " + describe_slots(unclaimed_slots) + " is not among the addon's slots " +
+                           describe_slots(slots_from_mask(mask)) + ": the game does not draw it";
+          ++scene.stats.hidden_shapes;
+          hidden.push_back(shape.name + " (" + why + ")");
+          if (kept.empty()) {
+            part.shown_by_default = false;
+            part.hidden_reason = why;
+            part.partition_hidden = true;
+          } else {
+            RenderPart rest = part;
+            rest.indices = std::move(dropped);
+            rest.triangle_partitions = std::move(dropped_partitions);
+            rest.shape_name = part.shape_name + " [" + describe_slots(unclaimed_slots) + "]";
+            rest.shown_by_default = false;
+            rest.hidden_reason = why;
+            rest.partition_hidden = true;
+            part.indices = std::move(kept);
+            part.triangle_partitions = std::move(kept_partitions);
+            unclaimed = std::move(rest);
+          }
+        }
+      }
       if (part.shown_by_default) scene.stats.triangles += part.indices.size() / 3;
       scene.stats.skinned_shapes += part.skinned ? 1 : 0;
       scene.parts.push_back(std::move(part));
+      if (unclaimed) {
+        unclaimed->id = std::to_string(scene.parts.size());
+        scene.parts.push_back(std::move(*unclaimed));
+      }
     }
     if (!hidden.empty()) {
       std::string names;

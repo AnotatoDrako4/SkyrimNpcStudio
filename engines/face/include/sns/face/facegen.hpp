@@ -195,6 +195,7 @@ struct FaceCompatibilityReport {
   std::vector<std::pair<std::string, std::string>> blocked;  // operation, reason
   float regeneration_deviation = -1.0f;  // max distance regeneration vs winning FaceGen (-1: not compared)
   bool hair_tint = false;                // the winning FaceGen has HairTint shapes
+  bool regenerable_from_record = false;  // regenerating fresh FaceGen from record parts succeeds
 };
 FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, FaceAssetCache& assets,
                                                     const std::string* winning_facegen, const FaceGenBuild& regenerated);

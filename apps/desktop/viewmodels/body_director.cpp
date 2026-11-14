@@ -343,6 +343,16 @@ void BodyDirector::setFilter(const QString& text, const QString& family, bool co
 void BodyDirector::rebuild_presets() {
   presets_.clear();
   preset_total_ = 0;
+  preset_verdicts_.clear();
+  if (library_ && analysis_) {
+    int counts[4] = {0, 0, 0, 0};  // compatible, experimental, needs-resources, blocked
+    for (const auto& p : library_->presets.presets) {
+      const auto v = body::assess_preset(analysis_->body, p, library_->presets, library_->env, /*automatic=*/false).verdict;
+      ++counts[v == body::Verdict::Compatible ? 0 : v == body::Verdict::Experimental ? 1 : v == body::Verdict::NeedsResources ? 2 : 3];
+    }
+    preset_verdicts_ = {{"total", static_cast<int>(library_->presets.presets.size())}, {"compatible", counts[0]},
+                        {"experimental", counts[1]}, {"needsResources", counts[2]}, {"blocked", counts[3]}};
+  }
   if (library_) {
     const auto needle = filter_text_.toLower();
     QString assigned_uid;

@@ -174,6 +174,11 @@ struct RenderPart {
   bool has_skin_median = false;
   std::array<float, 3> skin_median{};
   std::string addon_form_key;                // ARMA the mesh comes from ("" for FaceGen)
+  std::vector<std::uint16_t> partitions;           // BSDismember partition slot ids of the shape
+  std::vector<std::uint16_t> triangle_partitions;  // partition slot id of every triangle (indices / 3), empty = unknown
+  // Triangles split off a shape because their BSDismember partition is not one of the addon's slots: the game does not draw them
+  // (engine rule known from modding, not observed by this app). The part starts hidden; hidden_reason says which partitions.
+  bool partition_hidden = false;
   std::array<std::string, 9> texture_slots;  // BSShaderTextureSet as stored in the NIF
   bool degenerate_uvs = false;               // textured, but every UV triangle has zero area
   std::vector<std::string> warnings;         // per-part problems, in plain language

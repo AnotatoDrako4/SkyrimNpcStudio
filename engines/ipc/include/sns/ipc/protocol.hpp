@@ -5,7 +5,7 @@
 namespace sns::ipc::protocol {
 
 inline constexpr int kMajor = 1;
-inline constexpr int kMinor = 7;
+inline constexpr int kMinor = 8;
 
 namespace method {
 inline constexpr const char* kHandshake = "system.handshake";
@@ -17,6 +17,7 @@ inline constexpr const char* kListPlugins = "catalog.listPlugins";
 inline constexpr const char* kSearchNpcs = "catalog.searchNpcs";
 inline constexpr const char* kGetNpc = "catalog.getNpc";
 inline constexpr const char* kGetAppearance = "catalog.getAppearance";
+inline constexpr const char* kGetIntegrityRecord = "catalog.getIntegrityRecord";
 inline constexpr const char* kSearchArmors = "catalog.searchArmors";
 inline constexpr const char* kValidateOutfit = "outfit.validate";
 inline constexpr const char* kExportOutfitPatch = "export.outfitPatch";

@@ -142,6 +142,33 @@ public sealed class BodyDistributionPackagerTests : IDisposable
     }
 
     [Fact]
+    public void AnInGameTestKitDeclaresItsOwnFormatAndPutsTheBatchFileAtTheDataRoot()
+    {
+        var request = Request("SNS_Test_CF_skyrim_prop", null, true,
+            new BodyPackageFile { RelativePath = "SNS_Test_CF_skyrim_prop.txt", Content = "player.placeatme FE002800 1\r\n" },
+            new BodyPackageFile { RelativePath = "ACTA_SNS_Test_CF_skyrim_prop.md", Content = "# Acta\r\ninGameVerified: false\r\n" })
+            with { Kind = BodyDistributionPackager.InGameTestKitKind };
+
+        var response = Export(request);
+
+        using var manifest = JsonDocument.Parse(File.ReadAllBytes(response.ManifestPath));
+        Assert.Equal("skyrim-npc-studio/ingame-test-kit", manifest.RootElement.GetProperty("format").GetString());
+        // Data\<name>.txt is where the console's `bat <name>` looks; CRLF lines kept byte for byte.
+        Assert.Equal("player.placeatme FE002800 1\r\n", File.ReadAllText(Path.Combine(response.ModDirectory, "SNS_Test_CF_skyrim_prop.txt")));
+        using var zip = ZipFile.OpenRead(response.ZipPath!);
+        Assert.Contains(zip.Entries, e => e.FullName == "SNS_Test_CF_skyrim_prop.txt");
+        Assert.False(Directory.EnumerateFiles(response.ModDirectory, "*.es?", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public void AnUnknownPackageKindIsRefusedBeforeAnythingIsWritten()
+    {
+        var error = Assert.Throws<WorkerException>(() => Export(Request("Kind_Test") with { Kind = "plugin" }));
+        Assert.Equal(ErrorCodes.InvalidArgument, error.Code);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_out));
+    }
+
+    [Fact]
     public void WithoutZipOnlyTheFolderIsWritten()
     {
         var response = Export(Request("BodyDirector_NoZip", zip: false));

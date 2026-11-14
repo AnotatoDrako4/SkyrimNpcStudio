@@ -1,3 +1,6 @@
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Plugins.Binary.Parameters;
+using Mutagen.Bethesda.Skyrim;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -78,7 +81,37 @@ public sealed class ModPackagerTests : IDisposable
         using var zip = ZipFile.OpenRead(response.ZipPath!);
         var names = zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(["README.md", "SNS_Packager_B.esp", "manifest.json"], names);
-        ModPackager.VerifyZip(response.ZipPath!, response.ModDirectory);
+        ModPackager.VerifyZip(response.ZipPath!, response.ModDirectory, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public void DeliveredPluginReopensFromZipWithExpectedMastersAndRecords()
+    {
+        var response = ExportOutfit("SNS_ZipReadback.esp");
+        var extracted = Path.Combine(_out, "readback");
+        ZipFile.ExtractToDirectory(response.ZipPath!, extracted);
+        using var plugin = SkyrimMod.CreateFromBinaryOverlay(
+            new ModPath(ModKey.FromFileName("SNS_ZipReadback.esp"), Path.Combine(extracted, "SNS_ZipReadback.esp")),
+            SkyrimRelease.SkyrimSE, new BinaryReadParameters { MasterFlagsLookup = _state.Read(c => c.Session.MasterStyles) });
+        Assert.Equal(response.Masters, plugin.ModHeader.MasterReferences.Select(m => m.Master.FileName.String));
+        Assert.Equal(SyntheticLoadOrder.Lydia, Assert.Single(plugin.Npcs).FormKey);
+        Assert.Equal(Assert.Single(plugin.Outfits).FormKey, plugin.Npcs.First().DefaultOutfit.FormKey);
+        Assert.Empty(plugin.Armors);
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(extracted, "manifest.json")));
+        foreach (var file in manifest.RootElement.GetProperty("files").EnumerateArray())
+        {
+            var bytes = File.ReadAllBytes(Path.Combine(extracted, file.GetProperty("path").GetString()!));
+            Assert.Equal(file.GetProperty("bytes").GetInt64(), bytes.LongLength);
+            Assert.Equal(file.GetProperty("sha256").GetString(), Convert.ToHexString(SHA256.HashData(bytes)));
+        }
+
+        // Optional retained synthetic artifact for a local engineering run; never install it into a real profile.
+        if (Environment.GetEnvironmentVariable("SNS_SYNTHETIC_EXPORT_EVIDENCE") is { Length: > 0 } evidence)
+        {
+            Directory.CreateDirectory(evidence);
+            File.Copy(response.ZipPath!, Path.Combine(evidence, "SNS_ZipReadback.zip"), overwrite: false);
+            File.Copy(response.ManifestPath, Path.Combine(evidence, "manifest.json"), overwrite: false);
+        }
     }
 
     private string MakeModDir(string name)
@@ -108,7 +141,7 @@ public sealed class ModPackagerTests : IDisposable
         var dir = MakeModDir("ok");
         var zip = Path.Combine(_out, "ok.zip");
         WriteZip(zip, ("a.esp", "plugin"), ("meshes/x.nif", "nif"));
-        ModPackager.VerifyZip(zip, dir);
+        ModPackager.VerifyZip(zip, dir, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -122,8 +155,51 @@ public sealed class ModPackagerTests : IDisposable
         var dir = MakeModDir("unsafe");
         var zip = Path.Combine(_out, "unsafe.zip");
         WriteZip(zip, ("a.esp", "plugin"), (name, "x"));
-        var error = Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(zip, dir));
+        var error = Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(zip, dir, TestContext.Current.CancellationToken));
         Assert.Equal(ErrorCodes.ValidationFailed, error.Code);
+    }
+
+    [Theory]
+    [InlineData("meshes//nested/")]
+    [InlineData("meshes/unexpected/")]
+    [InlineData("meshes/", "payload")]
+    public void VerifyZip_RejectsMalformedUnexpectedOrNonemptyDirectories(string name, string content = "")
+    {
+        var dir = MakeModDir("directory-entry");
+        var zip = Path.Combine(_out, "directory-entry.zip");
+        WriteZip(zip, ("a.esp", "plugin"), ("meshes/x.nif", "nif"), (name, content));
+        var error = Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(zip, dir, TestContext.Current.CancellationToken));
+        Assert.Equal(ErrorCodes.ValidationFailed, error.Code);
+    }
+
+    [Fact]
+    public void PackagingAndVerificationObserveCancellationBeforeOpeningFiles()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var zip = Path.Combine(_out, "cancelled.zip");
+        Assert.Throws<OperationCanceledException>(() => ModPackager.CreateZip(_out, zip, cancellation.Token));
+        Assert.False(File.Exists(zip));
+        Assert.Throws<OperationCanceledException>(() => ModPackager.VerifyZip(zip, _out, cancellation.Token));
+    }
+
+    [Fact]
+    public void CreateZipSupportsFilesOlderThanTheZipTimestampRange()
+    {
+        var dir = MakeModDir("old-date");
+        File.SetLastWriteTime(Path.Combine(dir, "a.esp"), new DateTime(1970, 1, 1));
+        var zip = Path.Combine(_out, "old-date.zip");
+        ModPackager.CreateZip(dir, zip, TestContext.Current.CancellationToken);
+        ModPackager.VerifyZip(zip, dir, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public void VerifyZip_AcceptsAnEmptyDirectoryContainingExpectedFiles()
+    {
+        var dir = MakeModDir("explicit-directory");
+        var zip = Path.Combine(_out, "explicit-directory.zip");
+        WriteZip(zip, ("a.esp", "plugin"), ("meshes/", ""), ("meshes/x.nif", "nif"));
+        ModPackager.VerifyZip(zip, dir, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -132,15 +208,15 @@ public sealed class ModPackagerTests : IDisposable
         var dir = MakeModDir("tamper");
         var extra = Path.Combine(_out, "extra.zip");
         WriteZip(extra, ("a.esp", "plugin"), ("meshes/x.nif", "nif"), ("surprise.dll", "x"));
-        Assert.Contains("surprise.dll", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(extra, dir)).Message, StringComparison.Ordinal);
+        Assert.Contains("surprise.dll", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(extra, dir, TestContext.Current.CancellationToken)).Message, StringComparison.Ordinal);
 
         var missing = Path.Combine(_out, "missing.zip");
         WriteZip(missing, ("a.esp", "plugin"));
-        Assert.Contains("missing", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(missing, dir)).Message, StringComparison.Ordinal);
+        Assert.Contains("missing", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(missing, dir, TestContext.Current.CancellationToken)).Message, StringComparison.Ordinal);
 
         var changed = Path.Combine(_out, "changed.zip");
         WriteZip(changed, ("a.esp", "PLUGIN"), ("meshes/x.nif", "nif"));
-        Assert.Contains("differs", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(changed, dir)).Message, StringComparison.Ordinal);
+        Assert.Contains("differs", Assert.Throws<WorkerException>(() => ModPackager.VerifyZip(changed, dir, TestContext.Current.CancellationToken)).Message, StringComparison.Ordinal);
     }
 
     [Fact]

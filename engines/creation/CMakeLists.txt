@@ -3,7 +3,8 @@ add_library(sns_creation STATIC
   src/forge_workspace.cpp
   src/native_npc_draft.cpp
   src/skyrim_conversion.cpp
-  src/skeleton_mapping.cpp)
+  src/skeleton_mapping.cpp
+  src/forge_easy_mode.cpp)
 add_library(sns::creation ALIAS sns_creation)
 target_include_directories(sns_creation PUBLIC include)
 target_link_libraries(sns_creation

@@ -141,10 +141,11 @@ std::optional<AssetLocation> AssetResolver::locate(std::string_view data_path) c
   return std::nullopt;
 }
 
-std::optional<std::string> AssetResolver::read(std::string_view data_path) const {
-  if (auto file = vfs_->resolve(data_path)) return file_io::read_file(file->absolute, BsaArchive::kMaxFileBytes);
+std::optional<std::string> AssetResolver::read(std::string_view data_path, std::uint64_t max_bytes) const {
+  max_bytes = std::min(max_bytes, BsaArchive::kMaxFileBytes);
+  if (auto file = vfs_->resolve(data_path)) return file_io::read_file(file->absolute, max_bytes);
   for (auto it = archives_.rbegin(); it != archives_.rend(); ++it) {
-    if (auto data = it->archive->read(data_path)) return data;
+    if (auto data = it->archive->read(data_path, max_bytes)) return data;
   }
   return std::nullopt;
 }

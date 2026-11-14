@@ -191,7 +191,8 @@ TEST_CASE("SERANA-01 — Resolución: cuerpo y skin resueltos coinciden con la e
   CHECK(report.body.body_mesh_path == "Priscilla body/Body/femalebody_1.nif");
   CHECK(report.body.body_provider == "Servant Priscilla Serana");
   CHECK(report.body.body_family == MeshFamily::Cbbe3ba);
-  CHECK(report.body.confidence == ConfidenceLevel::ConfirmedGeometric);
+  // A "3BA" shape name is metadata, not a measurement: the strongest hint, never ConfirmedGeometric.
+  CHECK(report.body.confidence == ConfidenceLevel::ProbableMetadata);
   CHECK(report.body.body_has_tri);
 }
 
@@ -392,4 +393,37 @@ TEST_CASE("NPC-09 — Sin recursos: cuando no hay alternativa, reporta necesidad
     if (issue.code == DiagnosticCode::OutfitMorphMissing) has_morph_issue = true;
   }
   CHECK(has_morph_issue);
+}
+
+TEST_CASE("Fit Doctor reads the body and garments the worker resolved, not a fallback", "[fit_doctor][appearance]") {
+  FitDoctorFixture f;
+  const auto vfs = VirtualFileSystem::build(f.config, f.profile, f.game);
+  // catalog.getAppearance shape (AppearanceResponse): the skin piece carries the race-filtered ARMAs, slot 32 = bit 2.
+  const nlohmann::json appearance{
+      {"npcFormKey", "002B6C:Dawnguard.esm"}, {"sex", "female"},
+      {"pieces", nlohmann::json::array({
+           {{"armorFormKey", "000D64:Skyrim.esm"}, {"name", "Skin"}, {"source", "skin"}, {"slotMask", 4 | 8 | 128},
+            {"addons", nlohmann::json::array({{{"formKey", "0001:Priscilla.esp"}, {"meshPath", "meshes\\Priscilla body\\Body\\femalebody_1.nif"}, {"slotMask", 4}},
+                                              {{"formKey", "0002:Priscilla.esp"}, {"meshPath", "meshes\\Priscilla body\\Body\\femalehands_1.nif"}, {"slotMask", 8}}})}},
+           {{"armorFormKey", "000D63:Obi's Crimson Outfit.esp"}, {"name", "Crimson Boots"}, {"source", "outfit"}, {"slotMask", 128},
+            {"addons", nlohmann::json::array({{{"formKey", "0003:Obi's Crimson Outfit.esp"}, {"meshPath", "meshes\\Obicnii\\Crimson Outfit\\Boots_1.nif"}, {"slotMask", 128}}})}},
+           {{"armorFormKey", "000999:Skyrim.esm"}, {"name", "Sin malla"}, {"source", "outfit"}, {"slotMask", 1 << 16},
+            {"addons", nlohmann::json::array()}}})}};
+  const auto details = OutfitFitDoctor::npc_details_from_appearance(appearance, "Serana");
+  CHECK(details.at("skinAddons").size() == 2);
+  CHECK(details.at("skinAddons").at(0).at("femaleModel") == "Priscilla body\\Body\\femalebody_1.nif");
+  CHECK(details.at("skinAddons").at(0).at("bodySlots") == nlohmann::json::array({32}));
+  REQUIRE(details.at("defaultOutfit").at("armors").size() == 2);
+  CHECK(details.at("defaultOutfit").at("armors").at(0).at("addonFormKey") == "0003:Obi's Crimson Outfit.esp");  // the ARMA, not the ARMO
+  CHECK(details.at("defaultOutfit").at("armors").at(0).at("femaleModel") == "Obicnii\\Crimson Outfit\\Boots_1.nif");
+
+  const auto report = OutfitFitDoctor::analyze(vfs, details, nullptr);
+  // The NPC's own body (Priscilla, 3BA shape), never the generic actors\character\character assets\femalebody_1.nif fallback
+  CHECK(report.body.body_provider == "Servant Priscilla Serana");
+  CHECK(report.body.body_family == MeshFamily::Cbbe3ba);
+  REQUIRE(report.pieces.size() == 2);
+  CHECK_FALSE(report.pieces[0].effective_nif_path.empty());
+  bool missing = false;
+  for (const auto& issue : report.pieces[1].issues) missing = missing || issue.code == DiagnosticCode::OutfitMeshMissing;
+  CHECK(missing);  // a piece without an ARMA mesh is reported, not guessed
 }

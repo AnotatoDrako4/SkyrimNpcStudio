@@ -9,6 +9,7 @@ Everything is made from Blender primitives (no third-party asset):
   rigged_figure_split/ the same figure as .gltf + .bin + .png (external resources).
   bridge_sources      optional local-only OBJ, FBX, BLEND fixtures for bridge tests.
   skyrim_prop         optional local-only static prop (.blend + external PNG) for the NIF pipeline.
+  bridge_resources    optional local-only heavy .blend with moved/ambiguous textures for the preview loader.
   parts_set.glb        four mesh nodes in a hierarchy (Body > Helmet, Body > Shield, Sword at the
                        root); Body has two materials, so its mesh has two primitives.
 Naming models (suzanne, rigged_figure, parts_set) builds only those.
@@ -16,6 +17,8 @@ Prints one "SNS_MODEL <path> <bytes>" line per file and exits with 1 on failure.
 """
 import os
 import sys
+
+import shutil
 
 import bpy
 
@@ -49,6 +52,22 @@ def export(path, fmt):
     bpy.ops.export_scene.gltf(filepath=path, export_format=fmt, export_skins=True, export_morph=True,
                               export_animations=True, export_yup=True)
     print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
+
+
+def viewer_stress(folder, parts=172, subdivisions=5):
+    """Local-only load test for the 3D preview: the shape of a heavy character export (172 separate meshes, one
+    material each, ~3.4 M triangles, ~95 MiB GLB) made from primitives. Not part of the default set."""
+    reset()
+    columns = 13  # odd and centred on x = 0, so the middle of the view hits a part (the harness clicks there)
+    for i in range(parts):
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=subdivisions, radius=0.4,
+                                              location=((i % columns) - columns // 2, (i // columns) - 6, 0))
+        obj = bpy.context.active_object
+        obj.name = "Part_%03d" % i
+        obj.data.name = "PartMesh_%03d" % i
+        hue = (i * 0.618) % 1.0
+        obj.data.materials.append(material("PartMat_%03d" % i, (hue, 1.0 - hue, 0.5, 1.0)))
+    export(os.path.join(folder, "viewer_stress.glb"), "GLB")
 
 
 def suzanne(folder):
@@ -224,6 +243,42 @@ def skyrim_prop(folder):
         print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
 
 
+def bridge_resources(folder):
+    """Local-only fixture for the preview resource loading (forge_resources.py): bridge_resources/heavy_resources.blend is
+    a 400x400 grid (about 318 000 triangles, over the 300 000 preview budget) whose two textures are missing where the
+    .blend expects them (//textures/...). One exists ONCE below the folder (moved/textures/heavy_diffuse.png: relinked);
+    the other exists twice in folders that do not match the expected path (a/dup.png, b/dup.png: ambiguous, left missing).
+    """
+    reset()
+    root = os.path.join(folder, "bridge_resources")
+    for sub in ("moved/textures", "a", "b"):
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+
+    def png(name, path):
+        image = bpy.data.images.new(name, width=16, height=16)
+        image.generated_type = "COLOR_GRID"
+        image.filepath_raw = path
+        image.file_format = "PNG"
+        image.save()
+        return image
+
+    diffuse = png("heavy_diffuse", os.path.join(root, "moved", "textures", "heavy_diffuse.png"))
+    dup = png("dup", os.path.join(root, "a", "dup.png"))
+    shutil.copyfile(os.path.join(root, "a", "dup.png"), os.path.join(root, "b", "dup.png"))
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=400, y_subdivisions=400, size=2.0)
+    grid = bpy.context.active_object
+    grid.name = "HeavyGrid"
+    grid.data.materials.append(material("HeavyMaterial", (1.0, 1.0, 1.0, 1.0), diffuse))
+    grid.data.materials.append(material("DupMaterial", (1.0, 1.0, 1.0, 1.0), dup))
+    path = os.path.join(root, "heavy_resources.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=path)
+    # Point both images at //textures/<name> next to the .blend, where they do not exist, and save again.
+    diffuse.filepath = "//textures/heavy_diffuse.png"
+    dup.filepath = "//textures/dup.png"
+    bpy.ops.wm.save_as_mainfile(filepath=path)
+    print("SNS_MODEL %s %d" % (path, os.path.getsize(path)), flush=True)
+
+
 SPINE = ("NPC Pelvis [Pelv]", "NPC Spine [Spn0]", "NPC Spine1 [Spn1]", "NPC Spine2 [Spn2]")
 
 
@@ -339,7 +394,7 @@ def skyrim_skinned(folder):
 DEFAULT_MODELS = ("suzanne", "rigged_figure", "parts_set")
 MODELS = {"suzanne": suzanne, "rigged_figure": rigged_figure,
           "parts_set": parts_set, "bridge_sources": bridge_sources, "skyrim_prop": skyrim_prop,
-          "skyrim_skinned": skyrim_skinned}
+          "skyrim_skinned": skyrim_skinned, "bridge_resources": bridge_resources, "viewer_stress": viewer_stress}
 
 
 def main():

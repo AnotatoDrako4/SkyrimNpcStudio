@@ -157,14 +157,16 @@ std::unique_ptr<BsaArchive> BsaArchive::open(const std::filesystem::path& path) 
 
 bool BsaArchive::contains(std::string_view data_path) const { return entries_.contains(text::data_path_key(data_path)); }
 
-std::optional<std::string> BsaArchive::read(std::string_view data_path) const {
+std::optional<std::string> BsaArchive::read(std::string_view data_path, std::uint64_t max_bytes) const {
   const auto key = text::data_path_key(data_path);
   const auto it = entries_.find(key);
   if (it == entries_.end()) return std::nullopt;
-  return read_entry(it->second, key);
+  return read_entry(it->second, key, std::min(max_bytes, kMaxFileBytes));
 }
 
-std::string BsaArchive::read_entry(const Entry& entry, std::string_view key) const {
+std::string BsaArchive::read_entry(const Entry& entry, std::string_view key, std::uint64_t max_bytes) const {
+  // Cap stored and decompressed allocations before either allocation.
+  if (entry.size > max_bytes) throw Error(ErrorKind::InvalidArgument, std::string(key) + " exceeds the read budget");
   std::ifstream in(path_, std::ios::binary);  // one stream per read: safe across threads
   if (!in) throw Error(ErrorKind::Io, "cannot reopen " + text::path_to_utf8(path_));
   auto data = read_at(in, entry.offset, entry.size, std::string(key));
@@ -177,7 +179,7 @@ std::string BsaArchive::read_entry(const Entry& entry, std::string_view key) con
   if (!entry.compressed) return data.substr(skip);
 
   const auto original = get<std::uint32_t>(data, skip, std::string(key));
-  if (original > kMaxFileBytes) throw Error(ErrorKind::InvalidArgument, std::string(key) + " is larger than allowed");
+  if (original > max_bytes) throw Error(ErrorKind::InvalidArgument, std::string(key) + " is larger than allowed");
   if (version_ != 105) {
     throw Error(ErrorKind::Parse, std::string(key) + " is zlib-compressed (BSA v104), which is not supported");
   }

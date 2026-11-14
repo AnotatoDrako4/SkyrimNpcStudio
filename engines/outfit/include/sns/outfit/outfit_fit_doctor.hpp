@@ -169,6 +169,12 @@ class OutfitFitDoctor {
       const nlohmann::json& npc_details,
       const assets::AssetResolver* resolver = nullptr);
 
+  // The npc_details analyze() needs, built from the worker's catalog.getAppearance answer for the NPC and the pieces being
+  // edited: the effective skin ARMAs (race-filtered by the worker: the body the game and the 3D viewer use) as skinAddons, and
+  // each "outfit" piece with the mesh of its effective ARMA. Mesh paths lose their "meshes\" prefix (analyze adds it back).
+  // A piece without a mesh keeps an empty femaleModel, which analyze reports as OutfitMeshMissing.
+  static nlohmann::json npc_details_from_appearance(const nlohmann::json& appearance, std::string_view npc_name);
+
   static std::vector<CompatibleAlternative> find_alternatives(
       const mo2::VirtualFileSystem& vfs,
       const PieceFitDiagnosis& piece,

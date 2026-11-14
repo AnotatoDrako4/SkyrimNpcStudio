@@ -9,6 +9,7 @@
 #include <cmath>
 #include "temp_dir.hpp"
 #include "sns/assets/asset_resolver.hpp"
+#include "sns/appearance/integrity_guard.hpp"
 #include "sns/assets/bsa_archive.hpp"
 #include "sns/core/error.hpp"
 #include "sns/mo2/vfs.hpp"
@@ -71,6 +72,26 @@ TEST_CASE("BSA rejects corrupt headers and compressed frames", "[assets]") {
   auto bad=bsa("fixture",true); bad.back()^=0x55;
   auto archive=sns::assets::BsaArchive::open(dir.write("bad-frame.bsa",bad));
   CHECK_THROWS_AS(archive->read("meshes/test.nif"),sns::Error);
+}
+TEST_CASE("Integrity: real BSA replacement changes effective archived asset evidence", "[integrity][assets]") {
+  namespace guard = sns::appearance::integrity;
+  sns::test::TempDir dir;
+  const auto path = dir.write("test.bsa", bsa("old bytes", false));
+  const auto vfs = sns::mo2::VirtualFileSystem::build_from({});
+  const std::vector<sns::assets::ArchiveRef> archives{{"test.bsa", "HairMod", path, "Hair.esp"}};
+  guard::Json before;
+  {
+    sns::assets::AssetResolver resolver(vfs, archives);
+    before = guard::resolve_asset("meshes/test.nif", vfs, resolver, archives);
+  }
+  const auto stamp = std::filesystem::last_write_time(path);
+  dir.write("test.bsa", bsa("new bytes", false));
+  std::filesystem::last_write_time(path, stamp);
+  sns::assets::AssetResolver resolver(vfs, archives);
+  const auto after = guard::resolve_asset("meshes/test.nif", vfs, resolver, archives);
+  CHECK(before["provider"] == "HairMod"); CHECK(after["archive"] == "test.bsa");
+  CHECK(before["signature"]["bytes"] == after["signature"]["bytes"]);
+  CHECK(before["signature"]["sha256"] != after["signature"]["sha256"]);
 }
 TEST_CASE("DDS block sizes and malformed data", "[textures]") {
   using namespace sns::textures;

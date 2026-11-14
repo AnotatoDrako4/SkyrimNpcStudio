@@ -8,6 +8,17 @@ Item {
     id: root
     required property StudioController studio
     property bool advancedMode: Theme.advancedMode
+    property bool beautyLabMode: false
+
+    function openBeautyLab(sectionIndex) {
+        creatorSplit.layout.maximized = false
+        creatorSplit.layout.rightVisible = true
+        if (creatorSplit.layout.rightWidth < 500) creatorSplit.layout.rightWidth = 540
+        root.beautyLabMode = true
+        if (sectionIndex !== undefined && sectionIndex >= 0) {
+            npcBeautyLabView.activeSection = sectionIndex
+        }
+    }
 
     // Explorer on screen (the user asked for it), on the NPC search or on the armor catalog, search focused.
     // Used by the empty viewer and by the command palette.
@@ -22,6 +33,12 @@ Item {
         creatorSplit.layout.leftVisible = true
         leftTabs.currentIndex = 1
         creatorArmorCatalog.focusSearch()
+    }
+    // Body tab of the inspector (Character Forge Modo Fácil: «Cambiar cuerpo o apariencia»).
+    function showBody() {
+        creatorSplit.layout.maximized = false
+        creatorSplit.layout.rightVisible = true
+        rightTabs.currentIndex = 3
     }
     function showResources() {
         creatorSplit.layout.maximized = false
@@ -387,12 +404,30 @@ Item {
                         }
 
                         Text {
-                            text: qsTr("Personalización")
+                            text: root.beautyLabMode ? qsTr("NPC Beauty Lab") : qsTr("Personalización")
                             color: Theme.text
                             font.bold: true
                             font.pixelSize: Theme.micro
                             Layout.fillWidth: true
                             elide: Text.ElideRight
+                        }
+
+                        Button {
+                            id: beautyLabToggleButton
+                            objectName: "beautyLabToggleButton"
+                            text: root.beautyLabMode ? qsTr("✦ Inspector Clásico") : qsTr("✦ NPC Beauty Lab")
+                            Accessible.name: qsTr("Alternar sección integrada NPC Beauty Lab")
+                            implicitHeight: Theme.px(22)
+                            font.pixelSize: Theme.micro
+                            highlighted: root.beautyLabMode
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Abrir o cerrar NPC Beauty Lab (Hair Studio, Face Workshop, Comparador MO2, Estilos Next-Gen, Calidad Visual y Biblioteca)")
+                            onClicked: {
+                                if (!root.beautyLabMode && creatorSplit.layout.rightWidth < 500) {
+                                    creatorSplit.layout.rightWidth = 540
+                                }
+                                root.beautyLabMode = !root.beautyLabMode
+                            }
                         }
 
                         // Controles de Ancho / Auto-ajuste
@@ -473,15 +508,29 @@ Item {
                     id: rightTabs
                     objectName: "creatorRightTabs"
                     Layout.fillWidth: true
-                    DockTabButton { text: qsTr("Presets"); shortText: qsTr("Presets"); glyph: "document" }
-                    DockTabButton { text: qsTr("Rostro"); shortText: qsTr("Rostro"); glyph: "person" }
-                    DockTabButton { text: qsTr("Pelo/Ojos"); shortText: qsTr("Pelo"); glyph: "eye" }
-                    DockTabButton { text: qsTr("Cuerpo"); shortText: qsTr("Cuerpo"); glyph: "people" }
-                    DockTabButton { text: qsTr("Vestuario"); shortText: qsTr("Ropa"); glyph: "tag" }
-                    DockTabButton { objectName: "creatorOriginTab"; text: qsTr("Origen"); shortText: qsTr("Origen"); glyph: "diagnostic" }
+                    onCurrentIndexChanged: root.beautyLabMode = false
+                    DockTabButton { text: qsTr("Presets"); shortText: qsTr("Presets"); glyph: "document"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { text: qsTr("Rostro"); shortText: qsTr("Rostro"); glyph: "person"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { text: qsTr("Pelo/Ojos"); shortText: qsTr("Pelo"); glyph: "eye"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { text: qsTr("Cuerpo"); shortText: qsTr("Cuerpo"); glyph: "people"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { text: qsTr("Vestuario"); shortText: qsTr("Ropa"); glyph: "tag"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { objectName: "creatorOriginTab"; text: qsTr("Origen"); shortText: qsTr("Origen"); glyph: "diagnostic"; onClicked: root.beautyLabMode = false }
+                    DockTabButton { objectName: "creatorFidelityTab"; text: qsTr("Fidelidad"); shortText: qsTr("Fidel."); glyph: "diagnostic"; onClicked: root.beautyLabMode = false }
+                }
+
+                NpcBeautyLab {
+                    id: npcBeautyLabView
+                    objectName: "npcBeautyLabView"
+                    visible: root.beautyLabMode
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    studio: root.studio
+                    viewportTarget: charViewport
+                    onRequestOpenExportWizard: exportWizard.open()
                 }
 
                 StackLayout {
+                    visible: !root.beautyLabMode
                     currentIndex: rightTabs.currentIndex
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -516,6 +565,11 @@ Item {
                     AppearanceControlPanel {
                         studio: root.studio
                         onResolutionRequested: exportWizard.open()
+                    }
+
+                    // Pestaña 7: Fidelidad (qué dibujaría el juego frente al visor, con evidencia y categoría de cada problema)
+                    FidelityPanel {
+                        studio: root.studio
                     }
                 }
             }

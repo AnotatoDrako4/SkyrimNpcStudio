@@ -509,7 +509,9 @@ Rectangle {
                     enabled: (doctor?.isDraftMode ?? false)
                     onClicked: {
                         const defaultDir = studio.outfit.defaultExportDirectory
-                        doctor.exportDoctorMod(defaultDir, "OutfitFitDoctor_Serana_Fix")
+                        // Named after the diagnosed NPC (letters, digits and "_" only)
+                        const npc = String(doctor.npcName || "NPC").replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "")
+                        doctor.exportDoctorMod(defaultDir, "OutfitFitDoctor_" + (npc.length ? npc : "NPC") + "_Fix")
                     }
                 }
             }

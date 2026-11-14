@@ -83,6 +83,25 @@ TEST_CASE("Skyrim conversion blocks what the exporter cannot do", "[forge][skyri
     auto r = minimal_report();
     r["pynifly"]["tested"] = false;
     CHECK(find_issue(skyrim::classify(r), "pyniflyUntested").value("severity", "") == "warning");
+    // A report written before testedVersions existed still names the version it was proven with.
+    CHECK(find_issue(skyrim::classify(r), "pyniflyUntested").value("problem", "").find("29.1.0") != std::string::npos);
+  }
+  SECTION("the untested warning names the installed and the proven versions from the report") {
+    auto r = minimal_report();
+    r["pynifly"]["tested"] = false;
+    r["pynifly"]["version"] = {31, 0, 0};
+    r["pynifly"]["testedVersions"] = {{29, 1, 0}, {30, 3, 0}};
+    const auto issue = find_issue(skyrim::classify(r), "pyniflyUntested");
+    const auto problem = issue.value("problem", "");
+    CHECK(problem.find("31.0.0") != std::string::npos);
+    CHECK(problem.find("29.1.0, 30.3.0") != std::string::npos);
+    CHECK(issue.value("solution", "").find("30.3.0") != std::string::npos);
+  }
+  SECTION("a malformed version is reported as unknown, never guessed") {
+    auto r = minimal_report();
+    r["pynifly"]["tested"] = false;
+    r["pynifly"]["version"] = {"30", 3};
+    CHECK(find_issue(skyrim::classify(r), "pyniflyUntested").value("problem", "").find("desconocida") != std::string::npos);
   }
   SECTION("no UV") {
     auto r = minimal_report();
@@ -398,4 +417,26 @@ TEST_CASE("Skinned states never show an incomplete export as validated", "[forge
   CHECK(broken.at("current") == "RIG_INSPECTED");
   for (const auto& s : broken.at("states"))
     if (s.at("state") == "NIF_VERIFIED" || s.at("state") == "PENDIENTE_SKYRIM") CHECK(s.at("reached") == false);
+}
+
+TEST_CASE("Skyrim conversion reports textures relinked by name and refuses to guess an ambiguous one", "[forge][skyrim]") {
+  auto r = report();
+  r["resources"] = {{"missingBefore", 2},
+                    {"relinked", Json::array({{{"name", "Goblin_Hips_Color.png"}, {"from", R"(G:\textures\Goblin_Hips_Color.png)"},
+                                               {"to", R"(G:\Nueva carpeta (3)\textures\Goblin_Hips_Color.png)"}}})},
+                    {"ambiguous", Json::array({{{"name", "dup.png"}, {"expected", R"(G:\textures\dup.png)"},
+                                                {"candidates", Json::array({R"(G:\a\dup.png)", R"(G:\b\dup.png)"})}}})},
+                    {"stillMissing", Json::array()}};
+  const auto result = skyrim::classify(r);
+  const auto relinked = find_issue(result, "textureRelinked");
+  REQUIRE(relinked.contains("code"));  // find_issue returns {} when absent
+  CHECK(relinked.at("severity") == "autoFixable");
+  CHECK(relinked.at("fixAvailable").get<bool>());
+  CHECK(relinked.at("problem").get<std::string>().find("Nueva carpeta (3)") != std::string::npos);
+  const auto ambiguous = find_issue(result, "textureAmbiguous");
+  REQUIRE(ambiguous.contains("code"));  // find_issue returns {} when absent
+  CHECK(ambiguous.at("severity") == "manualReview");
+  CHECK_FALSE(ambiguous.at("fixAvailable").get<bool>());
+  CHECK(ambiguous.at("problem").get<std::string>().find(R"(G:\b\dup.png)") != std::string::npos);
+  CHECK(result.at("exportable").get<bool>());  // neither blocks the export
 }

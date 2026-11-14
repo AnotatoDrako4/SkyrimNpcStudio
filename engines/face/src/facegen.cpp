@@ -1096,6 +1096,7 @@ std::vector<FaceIssue> audit_facegen(const FaceGenInfo& facegen, const FaceRecip
 FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, FaceAssetCache& assets,
                                                     const std::string* winning_facegen, const FaceGenBuild& regenerated) {
   FaceCompatibilityReport r;
+  r.regenerable_from_record = regenerated.exportable();
   auto allow = [&](std::initializer_list<const char*> ops) { r.allowed.insert(r.allowed.end(), ops.begin(), ops.end()); };
   auto block = [&](const char* op, std::string why) { r.blocked.emplace_back(op, std::move(why)); };
   auto set = [&](FaceCompatibility kind, const char* code) {
@@ -1222,9 +1223,8 @@ FaceCompatibilityReport diagnose_face_compatibility(const FaceRecipe& recipe, Fa
   if (!r.tri_mismatches.empty()) {
     set(FaceCompatibility::CustomIncompatibleMorphs, "custom-incompatible-morphs");
     hair_color();
-    allow({"outfit"});
+    allow({"outfit", "head-parts"});
     block("face-morphs", "the head's TRI files do not fit its mesh: sliders and presets cannot be applied");
-    block("head-parts", "not verified for a head whose morphs do not fit");
     block("regenerate", "regenerating would lose the custom geometry and sculpt");
     return r;
   }

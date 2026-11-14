@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "sns/core/error.hpp"
+#include "sns/outfit/outfit_draft.hpp"
 #include "sns/core/text.hpp"
 #include "sns/nif/mesh.hpp"
 #include "sns/nif/safe_load.hpp"
@@ -292,35 +293,37 @@ static std::pair<MeshFamily, ConfidenceLevel> classify_family(
     const GeometricEvidence& geom,
     std::string_view data_path,
     std::string_view provider) {
-  // 1. Confirmed Geometric: inspect shape names and physics bones
+  // 1. Shape names and physics bones: the strongest metadata hints, but names and bones are not a measurement (UBE bodies carry
+  // breast/butt physics bones too; any author can name a shape "3BA"). The measured evidence is the scene's fidelity report
+  // (garment fit, TRI vocabulary), so these stay ProbableMetadata.
   for (const auto& sh : geom.shape_names) {
     const auto lower = to_lower(sh);
     if (lower == "3ba" || lower == "3bbb" || lower.starts_with("3ba_") || lower.find("body [3ba]") != std::string::npos) {
-      return {MeshFamily::Cbbe3ba, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Cbbe3ba, ConfidenceLevel::ProbableMetadata};
     }
     if (lower == "ubebody" || lower == "ube" || lower.starts_with("ube ")) {
-      return {MeshFamily::Ube, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Ube, ConfidenceLevel::ProbableMetadata};
     }
     if (lower == "bhunp" || lower.find("bhunp 3bbb") != std::string::npos) {
-      return {MeshFamily::Bhunp, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Bhunp, ConfidenceLevel::ProbableMetadata};
     }
     if (lower == "cbbe" || lower == "body [cbbe]") {
-      return {MeshFamily::Cbbe, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Cbbe, ConfidenceLevel::ProbableMetadata};
     }
     if (lower == "baseshape") {
       if (contains_token_icase(data_path, "cbbe")) {
-        return {MeshFamily::Cbbe, ConfidenceLevel::ConfirmedGeometric};
+        return {MeshFamily::Cbbe, ConfidenceLevel::ProbableMetadata};
       }
-      return {MeshFamily::Unp, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Unp, ConfidenceLevel::ProbableMetadata};
     }
   }
 
   if (!geom.physics_bones.empty()) {
     // Has breast/butt physics bones characteristic of 3BA or BHUNP
     if (contains_token_icase(data_path, "bhunp") || contains_token_icase(provider, "bhunp")) {
-      return {MeshFamily::Bhunp, ConfidenceLevel::ConfirmedGeometric};
+      return {MeshFamily::Bhunp, ConfidenceLevel::ProbableMetadata};
     }
-    return {MeshFamily::Cbbe3ba, ConfidenceLevel::ConfirmedGeometric};
+    return {MeshFamily::Cbbe3ba, ConfidenceLevel::ProbableMetadata};
   }
 
   // 2. Probable Metadata: path or provider indicators
@@ -344,6 +347,60 @@ static std::pair<MeshFamily, ConfidenceLevel> classify_family(
   }
 
   return {MeshFamily::Unknown, ConfidenceLevel::Indeterminate};
+}
+
+nlohmann::json OutfitFitDoctor::npc_details_from_appearance(const nlohmann::json& appearance, std::string_view npc_name) {
+  const auto text = [](const nlohmann::json& j, const char* key) {
+    const auto it = j.find(key);
+    return it != j.end() && it->is_string() ? it->get<std::string>() : std::string{};
+  };
+  const auto strip_meshes = [](std::string path) {
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower.starts_with("meshes\\") || lower.starts_with("meshes/")) path.erase(0, 7);
+    return path;
+  };
+  const auto mask_of = [](const nlohmann::json& j) {
+    const auto it = j.find("slotMask");
+    if (it == j.end() || !it->is_number_integer()) return 0u;
+    return static_cast<std::uint32_t>(it->get<std::int64_t>());
+  };
+  nlohmann::json details{{"formKey", text(appearance, "npcFormKey")},
+                         {"name", std::string(npc_name)},
+                         {"sex", text(appearance, "sex") == "male" ? "Male" : "Female"}};
+  nlohmann::json skin = nlohmann::json::array();
+  nlohmann::json armors = nlohmann::json::array();
+  const auto pieces = appearance.find("pieces");
+  if (pieces != appearance.end() && pieces->is_array()) {
+    for (const auto& piece : *pieces) {
+      const auto source = text(piece, "source");
+      const auto addons = piece.find("addons");
+      if (source == "skin") {
+        if (addons == piece.end() || !addons->is_array()) continue;
+        for (const auto& addon : *addons) {
+          const auto mesh = text(addon, "meshPath");
+          if (mesh.empty()) continue;
+          skin.push_back({{"formKey", text(addon, "formKey")}, {"bodySlots", slots_of(mask_of(addon))}, {"femaleModel", strip_meshes(mesh)}});
+        }
+      } else if (source == "outfit") {
+        nlohmann::json armor{{"formKey", text(piece, "armorFormKey")}, {"name", text(piece, "name")},
+                             {"slots", slots_of(mask_of(piece))}, {"addonFormKey", ""}, {"femaleModel", ""}};
+        if (addons != piece.end() && addons->is_array()) {
+          for (const auto& addon : *addons) {
+            const auto mesh = text(addon, "meshPath");
+            if (mesh.empty()) continue;
+            armor["addonFormKey"] = text(addon, "formKey");
+            armor["femaleModel"] = strip_meshes(mesh);
+            break;
+          }
+        }
+        armors.push_back(std::move(armor));
+      }
+    }
+  }
+  details["skinAddons"] = std::move(skin);
+  details["defaultOutfit"] = {{"formKey", text(appearance, "npcFormKey")}, {"outfit", std::string(npc_name)}, {"armors", std::move(armors)}};
+  return details;
 }
 
 OutfitFitReport OutfitFitDoctor::analyze(
@@ -545,27 +602,20 @@ OutfitFitReport OutfitFitDoctor::analyze(
             piece.topology_compatible = false;
             piece.issues.push_back(FitIssue{
                 DiagnosticCode::BodyOutfitFamilyMismatch,
-                DiagnosticSeverity::Error,
+                DiagnosticSeverity::Warning,
                 norm_piece_path,
                 prov.name,
-                "Prenda UBE equipada sobre cuerpo CBBE 3BA: UV maps y topología incompatibles, genera costuras en cuello y extremidades.",
-                "Sustituir por la variante CBBE/3BA de la prenda."});
-            piece.issues.push_back(FitIssue{
-                DiagnosticCode::OutfitTopologyMismatch,
-                DiagnosticSeverity::Error,
-                norm_piece_path,
-                prov.name,
-                "La distribución geométrica de vértices no encaja con la base 3BA.",
-                "Buscar variante compatible en el perfil MO2."});
+                "Indicio por nombres y metadatos (sin medir): prenda UBE sobre cuerpo CBBE 3BA. Comprueba el ajuste medido en la pestaña Fidelidad.",
+                "Si la Fidelidad confirma penetración o huecos, sustituir por la variante CBBE/3BA de la prenda."});
           } else if (report.body.body_family == MeshFamily::Ube && (piece.detected_family == MeshFamily::Cbbe || piece.detected_family == MeshFamily::Cbbe3ba)) {
             piece.topology_compatible = false;
             piece.issues.push_back(FitIssue{
                 DiagnosticCode::BodyOutfitFamilyMismatch,
-                DiagnosticSeverity::Error,
+                DiagnosticSeverity::Warning,
                 norm_piece_path,
                 prov.name,
-                "Prenda CBBE/3BA sobre cuerpo UBE: costuras y deformaciones severas en cuello y extremidades.",
-                "Sustituir por la variante UBE de la prenda."});
+                "Indicio por nombres y metadatos (sin medir): prenda CBBE/3BA sobre cuerpo UBE. Comprueba el ajuste medido en la pestaña Fidelidad.",
+                "Si la Fidelidad confirma penetración o huecos, sustituir por la variante UBE de la prenda."});
           }
         }
 

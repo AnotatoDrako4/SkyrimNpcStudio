@@ -626,6 +626,7 @@ TEST_CASE("Face compatibility is diagnosed from the FaceGen, meshes and TRI file
   CHECK(allowed(limited, "hair-color"));
   CHECK(allowed(limited, "face-morphs"));
   CHECK(blocked(limited, "regenerate"));
+  CHECK(limited.regenerable_from_record);
 
   // A replacer head whose TRI files do not fit its mesh (the Serana case: 3832-vertex head, 996-vertex TRIs).
   auto broken = synthetic_assets();
@@ -642,6 +643,8 @@ TEST_CASE("Face compatibility is diagnosed from the FaceGen, meshes and TRI file
   CHECK(incompatible.tri_mismatches[0].tri_vertices == 3);
   CHECK(incompatible.tri_mismatches[0].mesh_vertices == 4);
   CHECK(allowed(incompatible, "hair-color"));
+  CHECK(allowed(incompatible, "head-parts"));
+  CHECK_FALSE(incompatible.regenerable_from_record);
   CHECK(blocked(incompatible, "face-morphs"));
   CHECK(blocked(incompatible, "regenerate"));
 

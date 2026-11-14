@@ -401,6 +401,22 @@ TEST_CASE("Blender skinned mesh to verified skinned NIF, end to end", "[forge][s
   INFO(inspect.failure.toStdString());
   REQUIRE(inspect.failure.isEmpty());
   const auto inspected = mapped(inspect);
+  // The expected bind comes from PyNifly's own get_bone_global_xf: rotations= when it takes one (30.x), the swapped
+  // module global otherwise (29.x). Read from the add-on's code, so a 30.x install must never fall back to the global.
+  const auto pynifly = inspected.at("pynifly");
+  INFO(pynifly.dump());
+  const auto api = pynifly.value("boneRotationApi", Json());
+  REQUIRE(api.is_string());
+  const auto version = pynifly.value("version", Json::array());
+  if (!version.empty() && version.at(0).get<int>() >= 30) CHECK(api == "parameter");
+  for (const auto& armature : inspected.at("inspection").at("armatures")) {
+    CHECK(armature.value("bindSource", "") == "pynifly");
+    CHECK(armature.value("bindRotationApi", Json()) == api);
+  }
+  if (const auto evidence = qEnvironmentVariable("SNS_FORGE_EVIDENCE_DIR"); !evidence.isEmpty()) {
+    fs::create_directories(fs::path(evidence.toStdWString()));
+    std::ofstream(fs::path(evidence.toStdWString()) / "pynifly-facts.json") << pynifly.dump(1);
+  }
   REQUIRE(inspected.contains("skeletonMapping"));
   const auto& mapping = inspected.at("skeletonMapping");
   INFO(mapping.at("weighted").dump());
@@ -426,6 +442,9 @@ TEST_CASE("Blender skinned mesh to verified skinned NIF, end to end", "[forge][s
   REQUIRE(result.value("packaged").toBool());
   CHECK(result.value("states").toMap().value("current").toString() == "PENDIENTE_SKYRIM");
   CHECK(result.value("manifest").toMap().value("kind").toString() == "SkinnedMesh-NIF");
+  // The package records which PyNifly wrote it, whether that version is proven, and how the bind was checked.
+  CHECK(result.value("manifest").toMap().value("pyniflyBoneRotationApi").toString().toStdString() == api.get<std::string>());
+  CHECK(result.value("manifest").toMap().value("pyniflyTested").toBool() == pynifly.value("tested", false));
   const auto shape = verification.value("shapes").toList().value(0).toMap();
   CHECK(shape.value("bones").toInt() == 4);
   CHECK(shape.value("triangles").toInt() == 216);

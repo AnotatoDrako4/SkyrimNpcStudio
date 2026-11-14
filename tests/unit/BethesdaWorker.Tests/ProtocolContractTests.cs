@@ -30,12 +30,14 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
-    public void TheWorkerSpeaksProtocol1_7_AndAdvertisesTheFiveBehaviorEndpoints()
+    public void TheWorkerSpeaksProtocol1_8_AndAdvertisesTheFiveBehaviorEndpoints()
     {
         var rpc = new WorkerRpcTarget(new WorkerState(), () => { }, (_, _) => { });
         var hello = rpc.Handshake(new HandshakeRequest { ClientName = "contract-test", ClientVersion = "0", ProtocolMajor = 1, ProtocolMinor = 6 });
         Assert.Equal(1, hello.ProtocolMajor);
-        Assert.Equal(7, hello.ProtocolMinor);
+        Assert.Equal(8, hello.ProtocolMinor);  // 1.8: export.bodyDistribution kind + catalog.getIntegrityRecord
+        Assert.Contains(Methods.ExportBodyDistribution, hello.Capabilities);
+        Assert.Contains(Methods.GetIntegrityRecord, hello.Capabilities);
         foreach (var method in BehaviorMethods) Assert.Contains(method, hello.Capabilities);
     }
 

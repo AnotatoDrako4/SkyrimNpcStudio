@@ -71,6 +71,9 @@ class BodyDirector : public QObject {
   [[nodiscard]] QVariantMap npc() const { return npc_; }
   [[nodiscard]] QVariantList presets() const { return presets_; }
   [[nodiscard]] int preset_total() const { return preset_total_; }
+  // Verdicts of EVERY preset of the profile for the current NPC, ignoring the list's filters and its length limit:
+  // {total, compatible, experimental, needsResources, blocked} (empty before an NPC is analysed). Read by the Modo Fácil.
+  [[nodiscard]] QVariantMap preset_verdicts() const { return preset_verdicts_; }
   [[nodiscard]] QVariantMap draft() const { return draft_; }
   [[nodiscard]] QVariantMap export_result() const { return export_result_; }
   [[nodiscard]] QString default_export_directory() const;
@@ -150,6 +153,7 @@ class BodyDirector : public QObject {
   QVariantMap environment_, npc_, draft_, export_result_;
   QVariantList presets_;
   int preset_total_ = 0;
+  QVariantMap preset_verdicts_;
 };
 
 }  // namespace sns::app

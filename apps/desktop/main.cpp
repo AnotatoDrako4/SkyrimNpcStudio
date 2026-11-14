@@ -190,7 +190,10 @@ int main(int argc, char* argv[]) {
                                         "directory");
   const QCommandLineOption settings_expect_opt("settings-expect", "Check that the settings an earlier --settings-check stored came back.",
                                                "file");
-  cli.addOptions({settings_opt, settings_expect_opt});
+  const QCommandLineOption beauty_capture_opt("beauty-lab-capture",
+                                              "Capture all 6 sections of NPC Beauty Lab (Hair Studio, Face Workshop, Comparator, Styles, Quality Check, Library).",
+                                              "directory");
+  cli.addOptions({settings_opt, settings_expect_opt, beauty_capture_opt});
   cli.addOptions({instance_opt, profile_opt, game_opt, npc_opt, shot_opt, workspace_opt, size_opt, smoke_opt, verify_opt, capture_opt, stress_opt,
                   second_npc_opt, stress_work_opt, crash_opt, forge_preview_opt, forge_capture_opt});
   cli.process(app);
@@ -235,7 +238,7 @@ int main(int argc, char* argv[]) {
   const bool automated = cli.isSet(shot_opt) || cli.isSet(workspace_opt) || cli.isSet(size_opt) || cli.isSet(smoke_opt) || cli.isSet(verify_opt) || cli.isSet(capture_opt) ||
                          cli.isSet(stress_opt) || cli.isSet(forge_preview_opt) ||
                          cli.isSet(workbench_opt) || cli.isSet(workbench_expect_opt) || cli.isSet(settings_opt) ||
-                         cli.isSet(settings_expect_opt);
+                         cli.isSet(settings_expect_opt) || cli.isSet(beauty_capture_opt);
   // Automation starts in Character Creator unless told otherwise: the workspace the user left last
   // (restored from the preferences) must not change what a smoke run or a check loads.
   if (automated && !cli.isSet(workspace_opt) && main_window) {
@@ -263,6 +266,56 @@ int main(int argc, char* argv[]) {
                  s.value("files").toLongLong(), qPrintable(studio.npc().value("summary").toMap().value("editorId").toString()));
     QCoreApplication::exit(code);
   };
+  const auto run_beauty_captures = [&](QQuickWindow* window, const QString& out_dir, std::function<void()> done_cb) {
+    QDir().mkpath(out_dir);
+    if (auto* workbench = engine.singletonInstance<sns::app::WorkbenchState*>("SkyrimNpcStudio", "Workbench")) {
+      workbench->resetAppearance();
+      if (auto* l = workbench->layout(QStringLiteral("creator"))) {
+        l->set_right_width(600);
+      }
+    }
+    static const char* const kFileNames[] = {
+        "01-hair-studio.png",
+        "02-face-workshop.png",
+        "03-comparator-mo2.png",
+        "04-nextgen-styles.png",
+        "05-quality-check.png",
+        "06-beauty-library.png"};
+    auto step_idx = std::make_shared<int>(0);
+    auto step_fn = std::make_shared<std::function<void()>>();
+    *step_fn = [&, window, out_dir, done_cb, step_idx, step_fn]() {
+      const int idx = *step_idx;
+      if (idx >= 6) {
+        done_cb();
+        return;
+      }
+      if (window) {
+        QMetaObject::invokeMethod(window, "openBeautyLab", Q_ARG(QVariant, idx));
+      }
+      if (idx == 0 && studio.beauty_lab()) {
+        const auto parts = studio.beauty_lab()->filtered_head_parts();
+        if (!parts.isEmpty()) studio.beauty_lab()->inspectHeadPart(parts.first().toMap());
+      } else if (idx == 2 && studio.beauty_lab() && studio.appearance()->loaded()) {
+        studio.beauty_lab()->applyStylePreset("lore-friendly-hd", QVariantMap{{"intensity", 0.75}});
+      } else if (idx == 3 && studio.beauty_lab() && studio.appearance()->loaded()) {
+        studio.beauty_lab()->applyStylePreset("cinematic-fantasy", QVariantMap{{"intensity", 0.85}});
+      } else if (idx == 4 && studio.beauty_lab()) {
+        studio.beauty_lab()->runQualityCheck();
+      } else if (idx == 5 && studio.beauty_lab() && studio.appearance()->loaded()) {
+        studio.beauty_lab()->saveCurrentAsPreset("Propuesta Cinematográfica", "Cinematic Fantasy", "Generada en sesión de prueba", window);
+      }
+      QTimer::singleShot(1100, &app, [&, window, out_dir, idx, step_idx, step_fn]() {
+        if (window) {
+          const QString path = QDir(out_dir).filePath(QString::fromLatin1(kFileNames[idx]));
+          window->grabWindow().save(path);
+          std::fprintf(stderr, "beauty-lab capture [%d/6]: %s\n", idx + 1, qPrintable(path));
+        }
+        *step_idx = idx + 1;
+        (*step_fn)();
+      });
+    };
+    (*step_fn)();
+  };
   if (cli.isSet(instance_opt) && !studio.openInstance(cli.value(instance_opt)) && automated) return 2;
   if (cli.isSet(game_opt) && !studio.setGamePath(cli.value(game_opt))) return 2;
   if (cli.isSet(forge_preview_opt)) {
@@ -274,22 +327,42 @@ int main(int argc, char* argv[]) {
   } else if (cli.isSet(profile_opt)) {
     QTimer::singleShot(0, &studio, [&] { studio.loadProfile(cli.value(profile_opt)); });
   } else if (automated) {
-    QTimer::singleShot(3000, &app, [&] { finish(0); });  // nothing to load: capture the start screen
+    QTimer::singleShot(2000, &app, [&] {
+      if (cli.isSet(beauty_capture_opt)) {
+        run_beauty_captures(main_window, cli.value(beauty_capture_opt), [&] { finish(0); });
+      } else {
+        finish(0);
+      }
+    });  // nothing to load: capture the start screen
   }
+  bool automation_started = false;
   QObject::connect(&studio, &sns::app::StudioController::loaded, &app, [&] {
     if (cli.isSet(npc_opt)) {
       studio.selectNpc(cli.value(npc_opt));
+      if (cli.isSet(beauty_capture_opt)) {
+        QTimer::singleShot(4500, &app, [&] {
+          if (!automation_started) {
+            automation_started = true;
+            run_beauty_captures(main_window, cli.value(beauty_capture_opt), [&] { finish(0); });
+          }
+        });
+      }
     } else if (automated && !cli.isSet(forge_preview_opt)) {  // the Forge check loads a profile itself and finishes on its own
-      QTimer::singleShot(1500, &app, [&] { finish(0); });
+      QTimer::singleShot(1500, &app, [&] {
+        if (cli.isSet(beauty_capture_opt)) {
+          run_beauty_captures(main_window, cli.value(beauty_capture_opt), [&] { finish(0); });
+        } else {
+          finish(0);
+        }
+      });
     }
   });
   // Only the first scene load starts the automation: verification and captures reload the scene.
-  bool automation_started = false;
   QObject::connect(studio.scene(), &sns::app::SceneViewModel::ready, &app, [&] {
     if (automated && cli.isSet(npc_opt) && !automation_started) {
       automation_started = true;
       QTimer::singleShot(2500, &app, [&] {
-        if (studio.scene()->parts().isEmpty()) { finish(5); return; }
+        if (studio.scene()->parts().isEmpty() && !cli.isSet(beauty_capture_opt)) { finish(5); return; }
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         const auto then_stress = [&, window] {
           if (cli.isSet(settings_opt) || cli.isSet(settings_expect_opt)) {
@@ -303,6 +376,10 @@ int main(int argc, char* argv[]) {
             auto* workbench = engine.singletonInstance<sns::app::WorkbenchState*>("SkyrimNpcStudio", "Workbench");
             sns::app::run_workbench_check(window, workbench, cli.value(workbench_opt), cli.value(workbench_expect_opt),
                                           [&](bool ok) { finish(ok ? 0 : 11); });
+            return;
+          }
+          if (cli.isSet(beauty_capture_opt)) {
+            run_beauty_captures(window, cli.value(beauty_capture_opt), [&] { finish(0); });
             return;
           }
           if (!cli.isSet(stress_opt)) { finish(0); return; }

@@ -15,6 +15,9 @@
 #include "forge_asset_library.hpp"
 #include "forge_blender_bridge.hpp"
 #include "forge_skyrim_package.hpp"
+#include "forge_projects_folder.hpp"
+#include "json_bridge.hpp"
+#include "sns/creation/forge_easy_mode.hpp"
 #include "sns/creation/skyrim_conversion.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -29,6 +32,22 @@ QString local_path(const QString& path) {
   return url.isLocalFile() ? url.toLocalFile() : path;
 }
 
+// blender.exe on PATH or in its usual install folders (empty when none is found).
+QString find_blender() {
+  auto path = QStandardPaths::findExecutable("blender");
+#if defined(Q_OS_WIN)
+  if (path.isEmpty()) {
+    for (const auto* candidate : {"D:/Program Files/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender 4.2/blender.exe",
+                                  "C:/Program Files/Blender Foundation/Blender/blender.exe"}) {
+      if (QFileInfo::exists(candidate)) return QString::fromLatin1(candidate);
+    }
+  }
+#endif
+  return path;
+}
+
 QString safe_stem(QString name) {
   name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]+")), "_");
   return name.isEmpty() ? QStringLiteral("CharacterForge") : name.left(80);
@@ -39,8 +58,15 @@ QString safe_stem(QString name) {
 CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment, WorkerClient* worker, QObject* parent)
     : QObject(parent), environment_(std::move(environment)), worker_(worker) {
   scene_ = new ForgeSceneViewModel(this);
+  // easyMode reads the scene and the worker too: it is recomputed on any of their changes.
+  connect(this, &CharacterForgeViewModel::changed, this, &CharacterForgeViewModel::easyModeChanged);
+  connect(scene_, &ForgeSceneViewModel::changed, this, &CharacterForgeViewModel::easyModeChanged);
+  connect(worker_, &WorkerClient::stateChanged, this, &CharacterForgeViewModel::easyModeChanged);
   blender_bridge_ = new ForgeBlenderBridge(this);
   connect(blender_bridge_, &ForgeBlenderBridge::completed, this, [this](const QString& glb, const QVariantMap& report) {
+    const auto run = report.value("run").toMap();
+    const bool recovered = run.value("decision").toString() == QStringLiteral("recovered");
+    blender_run_["run"] = run;
     try {
       const auto source = draft_.current().workspace.at("model");
       const auto imported = forge_assets::import_model(project_path_, glb);
@@ -51,6 +77,17 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
                  {"convertedToNif", false}, {"metadataInspected", true},
                  {"sourceFormat", source.at("format")}, {"sourcePath", source.at("path")},
                  {"blenderVersion", report.value("blenderVersion").toString().toStdString()}};
+      if (recovered)
+        model["blenderRun"] = {{"decision", "recovered"}, {"exit", run.value("exit").toString().toStdString()},
+                               {"exitHex", run.value("exitHex").toString().toStdString()},
+                               {"message", run.value("message").toString().toStdString()}};
+      // A preview lightened for the viewer (forge_resources.reduce_for_preview) says so: it is not the export source.
+      if (const auto reduction = report.value("previewReduction").toMap(); reduction.value("applied").toBool())
+        model["previewReduction"] = {{"trianglesBefore", reduction.value("trianglesBefore").toLongLong()},
+                                     {"trianglesAfter", reduction.value("trianglesAfter").toLongLong()}};
+      // Textures relinked by name for the preview (forge_resources.relink_missing_images)
+      if (const auto relinked = report.value("images").toMap().value("relink").toMap().value("relinked").toList(); !relinked.isEmpty())
+        model["previewTexturesRelinked"] = static_cast<int>(relinked.size());
       auto next = draft_.current().workspace;
       next["model"] = model;
       auto library = next.value("library", Json::array());
@@ -73,22 +110,48 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
         } catch (...) {}
       }
       last_error_.clear();
+      blender_run_["state"] = QStringLiteral("done");
+      blender_run_["message"] = run.value("message");
       preview_selected_model();
-    } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
+    } catch (const std::exception& ex) {
+      last_error_ = QString::fromUtf8(ex.what());
+      blender_run_["state"] = QStringLiteral("failed");
+      blender_run_["message"] = tr("Blender generó el GLB, pero no se pudo añadir al proyecto: %1").arg(last_error_);
+    }
     busy_ = false;
     emit changed();
   });
   connect(blender_bridge_, &ForgeBlenderBridge::failed, this, [this](const QString& message) {
     busy_ = false; last_error_ = message;
     skyrim_easy_ = false;  // a failed or cancelled Blender job ends the easy chain
-    if (skyrim_.value("state").toString() == QStringLiteral("running")) {
+    if (skyrim_.value("state").toString() == QStringLiteral("running") ||
+        skyrim_.value("state").toString() == QStringLiteral("recoverable")) {
       skyrim_["state"] = QStringLiteral("error");
       skyrim_["message"] = message;
     }
+    blender_run_["state"] = QStringLiteral("failed");
+    blender_run_["message"] = message;
+    blender_run_["run"] = blender_bridge_->lastRun();
+    emit changed();
+  });
+  connect(blender_bridge_, &ForgeBlenderBridge::recoverable, this, [this](const QVariantMap& run) {
+    busy_ = false;
+    skyrim_easy_ = false;  // the chain never continues on a result nobody has accepted yet
+    blender_run_["state"] = QStringLiteral("recoverable");
+    blender_run_["message"] = run.value("message");
+    blender_run_["run"] = run;
+    if (skyrim_.value("state").toString() == QStringLiteral("running")) {
+      skyrim_["state"] = QStringLiteral("recoverable");
+      skyrim_["message"] = run.value("message");
+      skyrim_["run"] = run;
+    }
+    last_error_.clear();
     emit changed();
   });
   connect(blender_bridge_, &ForgeBlenderBridge::progressed, this, [this](const QString& step, double fraction) {
-    skyrim_["step"] = step; skyrim_["fraction"] = fraction; emit changed();
+    blender_run_["step"] = step; blender_run_["fraction"] = fraction;
+    if (blender_run_.value("kind").toString() != QStringLiteral("preview")) { skyrim_["step"] = step; skyrim_["fraction"] = fraction; }
+    emit changed();
   });
   connect(blender_bridge_, &ForgeBlenderBridge::skyrimCompleted, this,
           [this](const QString& operation, const QString& stage, const QVariantMap& report) {
@@ -114,6 +177,13 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
         if (!mapping_error.isEmpty()) next["mappingError"] = mapping_error;
         next["states"] = to_map(creation::skyrim::skinned_states(json, classification, nullptr));
       }
+      // How Blender ended travels with the result (and, for an export, into report.json and manifest.json).
+      const auto run = report.value("run").toMap();
+      next["run"] = run;
+      if (run.value("decision").toString() == QStringLiteral("recovered")) {
+        next["recovered"] = true;
+        next["warning"] = run.value("message");
+      }
       if (operation == QStringLiteral("inspect")) {
         next["state"] = QStringLiteral("analyzed");
       } else {
@@ -124,11 +194,15 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
       }
       skyrim_ = next;
       last_error_.clear();
+      blender_run_["state"] = QStringLiteral("done");
     } catch (const std::exception& ex) {
       skyrim_["state"] = QStringLiteral("error");
       skyrim_["message"] = QString::fromUtf8(ex.what());
       last_error_ = QString::fromUtf8(ex.what());
+      blender_run_["state"] = QStringLiteral("failed");
+      blender_run_["message"] = last_error_;
     }
+    blender_run_["run"] = report.value("run");
     busy_ = false;
     emit changed();
     if (skyrim_easy_) QTimer::singleShot(0, this, [this] { continue_easy(); });
@@ -137,6 +211,28 @@ CharacterForgeViewModel::CharacterForgeViewModel(EnvironmentProvider environment
 }
 
 bool CharacterForgeViewModel::blender_busy() const { return blender_bridge_->busy(); }
+
+QVariantMap CharacterForgeViewModel::blender_run() const {
+  if (blender_run_.isEmpty()) return {{"state", "idle"}};
+  return blender_run_;
+}
+
+void CharacterForgeViewModel::begin_blender_run(const QString& kind) {
+  blender_run_ = {{"state", "running"}, {"kind", kind}, {"step", "version"}, {"fraction", 0.0}, {"message", QString()}};
+}
+
+void CharacterForgeViewModel::acceptRecoveredBlenderResult() {
+  if (!blender_bridge_->hasPendingRecovery()) return;
+  busy_ = true;  // the receivers of the delivered result clear it
+  if (skyrim_.value("state").toString() == QStringLiteral("recoverable")) skyrim_["state"] = QStringLiteral("running");
+  emit changed();
+  blender_bridge_->acceptRecovered();
+}
+
+void CharacterForgeViewModel::discardRecoveredBlenderResult() {
+  if (!blender_bridge_->hasPendingRecovery()) return;
+  blender_bridge_->discardRecovered();  // failed(): state "failed", nothing added
+}
 
 QString CharacterForgeViewModel::project_name() const {
   return has_project_ ? QString::fromStdString(draft_.current().name) : QString();
@@ -854,20 +950,7 @@ void CharacterForgeViewModel::selectBlenderExecutable(const QString& url) {
   }, false);
 }
 void CharacterForgeViewModel::detectBlender() {
-  auto path = QStandardPaths::findExecutable("blender");
-  if (path.isEmpty()) {
-#if defined(Q_OS_WIN)
-    for (const auto* candidate : {"D:/Program Files/blender.exe",
-                                  "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe",
-                                  "C:/Program Files/Blender Foundation/Blender 4.2/blender.exe",
-                                  "C:/Program Files/Blender Foundation/Blender/blender.exe"}) {
-      if (QFileInfo::exists(candidate)) {
-        path = QString::fromLatin1(candidate);
-        break;
-      }
-    }
-#endif
-  }
+  const auto path = find_blender();
   if (path.isEmpty()) { last_error_ = tr("Blender no encontrado en PATH. Puedes seleccionar su ejecutable."); emit changed(); return; }
   selectBlenderExecutable(path);
 }
@@ -887,6 +970,7 @@ void CharacterForgeViewModel::convertSelectedModelWithBlender() {
     const auto source = QString::fromStdString(model.at("path").get<std::string>());
     blender_bridge_->convert(executable, source);
     busy_ = true; last_error_.clear();
+    begin_blender_run(QStringLiteral("preview"));
   } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
   emit changed();
 }
@@ -1026,6 +1110,7 @@ void CharacterForgeViewModel::start_skyrim_job(const QString& operation) {
     skyrim_["modelName"] = name;
     busy_ = true;
     last_error_.clear();
+    begin_blender_run(operation);
   } catch (const std::exception& ex) { last_error_ = QString::fromUtf8(ex.what()); }
   emit changed();
 }
@@ -1043,4 +1128,96 @@ void CharacterForgeViewModel::selectReferenceImage(const QString& role, const QS
     draft_.set_workspace(std::move(w));
   }, false);
 }
+
+void CharacterForgeViewModel::set_npc_loaded(bool loaded) {
+  if (npc_loaded_ == loaded) return;
+  npc_loaded_ = loaded;
+  emit easyModeChanged();
+}
+QString CharacterForgeViewModel::projects_folder() const { return forge_projects::projects_folder(); }
+QString CharacterForgeViewModel::setProjectsFolder(const QString& folder_or_url) {
+  const auto refused = forge_projects::set_projects_folder(local_path(folder_or_url), forbidden_roots_ ? forbidden_roots_() : std::vector<ForbiddenRoot>{});
+  if (!refused.isEmpty()) last_error_ = refused;
+  emit changed();
+  return refused;
+}
+bool CharacterForgeViewModel::saveProjectInProjectsFolder(const QString& model_name) {
+  if (busy_) return false;
+  if (has_project_ && !project_path_.isEmpty()) return true;  // already has its folder
+  const auto folder = forge_projects::projects_folder();
+  const auto refuse = [this](const QString& why) { last_error_ = why; emit changed(); return false; };
+  if (const auto refused = forge_projects::refused_projects_folder(folder, forbidden_roots_ ? forbidden_roots_() : std::vector<ForbiddenRoot>{});
+      !refused.isEmpty())
+    return refuse(refused);
+  if (!QDir().mkpath(folder)) return refuse(tr("No se puede crear la carpeta de proyectos %1.").arg(QDir::toNativeSeparators(folder)));
+  const auto path = forge_projects::unique_project_path(folder, model_name);
+  if (path.isEmpty()) return refuse(tr("Ya hay 99 proyectos con ese nombre en %1.").arg(QDir::toNativeSeparators(folder)));
+  if (!has_project_ && !newProject(QFileInfo(model_name).completeBaseName().isEmpty() ? tr("Nuevo personaje") : QFileInfo(model_name).completeBaseName()))
+    return false;
+  return saveProject(path);
+}
+QVariantMap CharacterForgeViewModel::easy_mode() const {
+  creation::easy::Facts f;
+  f.project_open = has_project_;
+  f.project_saved = has_project_ && !project_path_.isEmpty();
+  f.busy = busy_;
+  f.worker_ready = worker_->state() == WorkerClient::State::Ready;
+  f.worker_message = worker_message().toStdString();
+  f.profile_indexed = catalog_ready_;
+  f.npc_loaded = npc_loaded_;
+  bool configured = false;
+  if (has_project_) {
+    const auto& w = draft_.current().workspace;
+    const auto blender = w.value("blender", Json::object());
+    if (blender.is_object()) {
+      const QFileInfo exe(QString::fromStdString(blender.value("executable", std::string{})));
+      configured = exe.isFile();
+    }
+    const auto model = w.value("model", Json::object());
+    f.model_selected = model.is_object() && !model.value("path", std::string{}).empty();
+    if (f.model_selected) f.model_format = model.value("format", std::string{});
+  }
+  // A Blender found on this machine counts: the easy flow selects it (detectBlender) before the first job.
+  f.blender_found = configured || !find_blender().isEmpty();
+  f.preview_state = scene_->state().toStdString();
+  // The preview counts only when the scene shows THIS model: its own file, or the managed GLB converted from it
+  // (a library entry whose sourcePath is the model). A GLB left from another model is not its preview.
+  if (scene_->has_model() && has_project_ && f.model_selected) {
+    const auto& w = draft_.current().workspace;
+    const auto model = w.value("model", Json::object());
+    const auto shown = QFileInfo(scene_->file_path()).absoluteFilePath();
+    const auto same = [&](const QString& path) { return !path.isEmpty() && QFileInfo(path).absoluteFilePath().compare(shown, Qt::CaseInsensitive) == 0; };
+    const auto path = QString::fromStdString(model.value("path", std::string{}));
+    if (model.value("storage", std::string{}) == "managed") {
+      f.preview_loaded = same(forge_assets::resolve_model(project_path_, path, QString::fromStdString(model.value("sha256", std::string{}))));
+    } else if (same(path)) {
+      f.preview_loaded = true;
+    } else {
+      for (const auto& entry : w.value("library", Json::array())) {
+        if (!entry.is_object() || entry.value("storage", std::string{}) != "managed") continue;
+        if (QFileInfo(QString::fromStdString(entry.value("sourcePath", std::string{}))).absoluteFilePath().compare(QFileInfo(path).absoluteFilePath(), Qt::CaseInsensitive) != 0) continue;
+        if (same(forge_assets::resolve_model(project_path_, QString::fromStdString(entry.value("path", std::string{})),
+                                             QString::fromStdString(entry.value("sha256", std::string{}))))) {
+          f.preview_loaded = true;
+          break;
+        }
+      }
+    }
+  }
+  const auto conversion = skyrim_conversion();
+  f.conversion_state = conversion.value("state").toString().toStdString();
+  f.conversion_operation = conversion.value("operation").toString().toStdString();
+  f.profile = (conversion.contains("profile") ? conversion.value("profile").toString() : skyrim_profile_).toStdString();
+  if (conversion.contains("classification")) f.classification = to_json(conversion.value("classification"));
+  f.nif_verified = conversion.value("verification").toMap().value("passed").toBool();
+  f.mod_state = conversion.value("modState").toString().toStdString();
+  f.mod_message = conversion.value("modMessage").toString().toStdString();
+  return {{"actions", to_list(creation::easy::actions(f))},
+          {"flow", to_map(creation::easy::flow(f))},
+          {"diagnosis", to_map(creation::easy::explain(f.classification))},
+          {"projectsFolder", forge_projects::projects_folder()},
+          {"npc", to_map(creation::easy::npc_overview(npc_facts_ ? npc_facts_() : Json::object()))},
+          {"running", skyrim_easy_}};
+}
+
 }  // namespace sns::app

@@ -18,6 +18,9 @@ namespace SkyrimNpcStudio.Worker.PatchBuilder;
 internal static class BodyDistributionPackager
 {
     public const string ManifestFormat = "skyrim-npc-studio/body-distribution";
+    public const string DefaultKind = "body-distribution";
+    public const string InGameTestKitKind = "ingame-test-kit";
+    private static readonly string[] Kinds = [DefaultKind, InGameTestKitKind];
     public const int ManifestVersion = 1;
     public const int MaxModNameLength = 100;
     public const int MaxRelativePathLength = 240;
@@ -40,6 +43,11 @@ internal static class BodyDistributionPackager
         // The resolved folder (links and junctions followed): the export writes there, never through a link.
         var outputDir = ExportDestinationPolicy.Validate(session, request.OutputDirectory);
         ValidateModName(request.ModName);
+        var kind = request.Kind ?? DefaultKind;
+        if (!Kinds.Contains(kind, StringComparer.Ordinal))
+        {
+            throw new WorkerException(ErrorCodes.InvalidArgument, $"Unknown package kind '{kind}'; expected one of: {string.Join(", ", Kinds)}.");
+        }
         var files = NormalizeFiles(request.Files);
 
         var modName = request.ModName;
@@ -101,7 +109,7 @@ internal static class BodyDistributionPackager
             };
             var manifest = new
             {
-                format = ManifestFormat,
+                format = "skyrim-npc-studio/" + kind,
                 formatVersion = ManifestVersion,
                 tool = new { name = "Skyrim NPC Studio", workerVersion = ModPackager.WorkerVersion, protocol = $"{Protocol.Major}.{Protocol.Minor}" },
                 createdUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
@@ -120,8 +128,8 @@ internal static class BodyDistributionPackager
             if (request.CreateZip)
             {
                 stagedZip = Path.Combine(staging, modName + ".zip");
-                ModPackager.CreateZip(stagedModDir, stagedZip);
-                ModPackager.VerifyZip(stagedZip, stagedModDir);
+                ModPackager.CreateZip(stagedModDir, stagedZip, ct);
+                ModPackager.VerifyZip(stagedZip, stagedModDir, ct);
                 verification.Add($"ZIP releído: {ordered.Length + 1} entrada(s) con rutas relativas seguras y contenido idéntico al de la carpeta del mod (SHA-256).");
             }
 

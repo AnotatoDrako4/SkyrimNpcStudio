@@ -367,12 +367,28 @@ ColumnLayout {
                                                readback: qsTr("releyendo el NIF"), done: qsTr("terminado") })[root.conversion.step] || "")
         }
     }
+    // How the last Skyrim job's Blender run ended; a verified result after a crash waits for an explicit decision.
+    BlenderRunPanel {
+        id: wizardRun
+        Layout.fillWidth: true
+        forge: root.forge
+        kinds: ["inspect", "exportNif"]
+        showProgress: false  // the bar above already follows the job
+    }
     Text {
         Layout.fillWidth: true
-        visible: root.conversion.state === "error"
+        visible: root.conversion.state === "error" && !wizardRun.shows
         wrapMode: Text.WordWrap
         color: Theme.error
         text: root.conversion.message || ""
+    }
+    Text {
+        Layout.fillWidth: true
+        objectName: "forgeSkyrimRecoveredWarning"
+        visible: !!root.conversion.recovered && !wizardRun.shows
+        wrapMode: Text.WordWrap
+        color: Theme.warn
+        text: qsTr("Advertencia: este resultado se recuperó de una ejecución de Blender que terminó mal. ") + (root.conversion.warning || "")
     }
 
     ColumnLayout {
@@ -392,7 +408,10 @@ ColumnLayout {
                     .arg(t.meshes || 0).arg(t.vertices || 0).arg(t.triangles || 0).arg(t.materials || 0).arg(t.images || 0)
                     .arg(t.shapeKeys || 0).arg((d[0] || 0).toFixed(1)).arg((d[1] || 0).toFixed(1)).arg((d[2] || 0).toFixed(1))
                     .arg(root.conversion.blenderVersion || "?")
-                    .arg(p.available ? (p.version || []).join(".") + (p.tested ? "" : qsTr(" (no probada)")) : qsTr("no disponible"))
+                    .arg(p.available ? (p.version || []).join(".")
+                                       + (p.tested ? "" : qsTr(" (no probada; probadas: %1)")
+                                                          .arg((p.testedVersions || [[29, 1, 0]]).map(v => v.join(".")).join(", ")))
+                                     : qsTr("no disponible"))
         }
 
         // SkinnedMesh pipeline states & skeletonMapping summary when profile === "skinned"

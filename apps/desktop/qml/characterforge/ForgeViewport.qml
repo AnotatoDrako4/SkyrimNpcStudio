@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick3D
-import QtQuick3D.AssetUtils
 import QtQuick3D.Helpers
 import SkyrimNpcStudio
 
@@ -39,14 +38,7 @@ Rectangle {
     readonly property var skyrimConv: forge.skyrimConversion || ({ state: "none" })
     readonly property bool skyrimAnalyzed: ["analyzed", "exported", "verificationFailed"].indexOf(skyrimConv.state) >= 0
     readonly property bool canCompare: hasGeometry && (skyrimAnalyzed || !!modelInfo.sourcePath)
-    readonly property bool anyPartShown: {
-        const p = scene.parts || [];
-        for (let i = 0; i < p.length; ++i) {
-            if (p[i].shown)
-                return true;
-        }
-        return false;
-    }
+    readonly property bool anyPartShown: scene.anyPartShown
 
     // Track elapsed time during background Blender operations without blocking the UI thread.
     property real blenderElapsedSec: 0
@@ -66,27 +58,13 @@ Rectangle {
     readonly property var localizedIssues: {
         const out = [];
         const clsIssues = ((root.skyrimConv.classification || {}).issues) || [];
-        const parts = root.scene.parts || [];
+        root.scene.partCount;  // re-evaluated when the parts change (findPart reads them in C++)
         for (let i = 0; i < clsIssues.length; ++i) {
             const iss = clsIssues[i];
             if (!iss || iss.severity === "compatible")
                 continue;
-            let matchedPart = -1;
             const obj = String(iss.object || "").trim();
-            if (obj.length > 0) {
-                const objLower = obj.toLowerCase();
-                for (let p = 0; p < parts.length; ++p) {
-                    const part = parts[p];
-                    const lbl = String(part.label || "").toLowerCase();
-                    const nName = String(part.nodeName || "").toLowerCase();
-                    const mName = String(part.meshName || "").toLowerCase();
-                    if (lbl === objLower || nName === objLower || mName === objLower
-                            || lbl.indexOf(objLower) >= 0 || objLower.indexOf(lbl) >= 0) {
-                        matchedPart = p;
-                        break;
-                    }
-                }
-            }
+            const matchedPart = obj.length > 0 ? root.scene.findPart(obj) : -1;
             out.push({
                 severity: iss.severity || "warning",
                 code: iss.code || "",
@@ -106,13 +84,12 @@ Rectangle {
             root.localizedIssueBoxes = [];
             return;
         }
-        const parts = root.scene.parts || [];
         const issues = root.localizedIssues || [];
         const byPart = {};
         for (let i = 0; i < issues.length; ++i) {
             const iss = issues[i];
             const idx = iss.partIndex;
-            if (idx >= 0 && idx < root.models.length && idx < parts.length && parts[idx].shown) {
+            if (idx >= 0 && idx < root.models.length && root.scene.partAt(idx).shown) {
                 if (!byPart[idx] || iss.severity === "blocking") {
                     byPart[idx] = iss;
                 }
@@ -129,7 +106,7 @@ Rectangle {
                     position: box.position,
                     size: box.size,
                     severity: byPart[idx].severity,
-                    label: byPart[idx].object || parts[idx].label
+                    label: byPart[idx].object || root.scene.partAt(idx).label
                 });
             }
         }
@@ -194,65 +171,22 @@ Rectangle {
     function focusPartByName(objectName) {
         if (!objectName)
             return;
-        const target = String(objectName).trim().toLowerCase();
-        const parts = root.scene.parts || [];
-        for (let i = 0; i < parts.length; ++i) {
-            const p = parts[i];
-            const lbl = String(p.label || "").toLowerCase();
-            const nName = String(p.nodeName || "").toLowerCase();
-            const mName = String(p.meshName || "").toLowerCase();
-            if (lbl === target || nName === target || mName === target
-                    || lbl.indexOf(target) >= 0 || target.indexOf(lbl) >= 0) {
-                if (!p.visible)
-                    root.scene.setPartVisible(i, true);
-                root.scene.selectPart(i);
-                issuesToggle.checked = true;
-                root.framePart(i);
-                return;
-            }
-        }
+        const i = root.scene.findPart(String(objectName));
+        if (i < 0)
+            return;
+        if (!root.scene.partAt(i).visible)
+            root.scene.setPartVisible(i, true);
+        root.scene.selectPart(i);
+        issuesToggle.checked = true;
+        root.framePart(i);
     }
+    // Computed once per change by ForgeSceneViewModel (O(parts)); list delegates only compare an index.
     function isPartIsolated(partIndex) {
-        const parts = root.scene.parts || [];
-        if (partIndex < 0 || partIndex >= parts.length || parts.length <= 1)
-            return false;
-        if (!parts[partIndex].visible)
-            return false;
-        // Build ancestor set so parents required to keep partIndex visible are allowed
-        const keep = {};
-        let cur = partIndex;
-        while (cur >= 0 && cur < parts.length) {
-            keep[cur] = true;
-            cur = parts[cur].parent !== undefined ? parts[cur].parent : -1;
-        }
-        let anyHidden = false;
-        for (let i = 0; i < parts.length; ++i) {
-            if (!keep[i]) {
-                if (parts[i].visible)
-                    return false;
-                anyHidden = true;
-            }
-        }
-        return anyHidden;
+        return partIndex >= 0 && root.scene.isolatedPart === partIndex;
     }
+    // One change and one signal for the whole model (a per-part loop rebuilt every list once per part).
     function isolatePart(partIndex) {
-        const parts = root.scene.parts || [];
-        if (partIndex < 0 || partIndex >= parts.length)
-            return;
-        if (root.isPartIsolated(partIndex)) {
-            root.scene.showAllParts();
-            return;
-        }
-        const keep = {};
-        let cur = partIndex;
-        while (cur >= 0 && cur < parts.length) {
-            keep[cur] = true;
-            cur = parts[cur].parent !== undefined ? parts[cur].parent : -1;
-        }
-        for (let i = 0; i < parts.length; ++i) {
-            root.scene.setPartVisible(i, !!keep[i]);
-        }
-        root.scene.selectPart(partIndex);
+        root.scene.isolatePart(partIndex);
     }
 
     // Near/far planes follow the camera distance and the model size, also after zooming
@@ -281,7 +215,7 @@ Rectangle {
     // that signal would store empty bounds and suppress the signal, so they are read only after it.
     property bool boundsReady: false
     function reportBounds() {
-        if (!root.scene || !root.boundsReady || loader.status !== RuntimeLoader.Success)
+        if (!root.scene || !root.boundsReady || loader.status !== ForgeModelLoader.Success)
             return;
         root.scene.reportBounds(loader.source, loader.bounds.minimum, loader.bounds.maximum);
         root.reportParts();
@@ -305,7 +239,7 @@ Rectangle {
         return found;
     }
     function reportParts() {
-        if (!root.scene || loader.status !== RuntimeLoader.Success)
+        if (!root.scene || loader.status !== ForgeModelLoader.Success)
             return;
         const found = root.collectModels(loader, []);
         const report = [];
@@ -330,15 +264,15 @@ Rectangle {
     function applyParts() {
         if (!root.scene)
             return;
-        const parts = root.scene.parts;
-        if (parts.length !== root.models.length) {
+        const visibility = root.scene.partVisibility();
+        if (visibility.length !== root.models.length) {
             selectionBox.visible = false;
             root.localizedIssueBoxes = [];
             return;
         }
-        for (let i = 0; i < parts.length; ++i) {
-            if (root.models[i])
-                root.models[i].visible = parts[i].visible;
+        for (let i = 0; i < visibility.length; ++i) {
+            if (root.models[i] && root.models[i].visible !== visibility[i])
+                root.models[i].visible = visibility[i];
         }
         root.updateSelectionBox();
         root.updateIssueBoxes();
@@ -368,8 +302,7 @@ Rectangle {
     // Axis-aligned box, in scene space, around the selected part's bounds.
     function updateSelectionBox() {
         const i = root.scene.selectedPart;
-        const parts = root.scene.parts;
-        if (i < 0 || i >= root.models.length || i >= parts.length || !parts[i].shown) {
+        if (i < 0 || i >= root.models.length || !root.scene.partAt(i).shown) {
             selectionBox.visible = false;
             return;
         }
@@ -402,6 +335,7 @@ Rectangle {
         target: root.scene
         function onFrameRequested() { root.frame(0, -8) }
         function onPartsChanged() { root.applyParts() }
+        function onSelectionChanged() { root.updateSelectionBox() }
     }
     Connections {
         target: root.forge
@@ -518,53 +452,20 @@ Rectangle {
             }
         }
 
-        // ---- Non-blocking background Blender activity bar when 3D geometry is already visible ----
+        // ---- Blender run while 3D geometry is already visible: real step, cancel and the explicit recovery of a
+        //      verified result after a crash (BlenderRunPanel). The viewer stays usable meanwhile. ----
         Rectangle {
             Layout.fillWidth: true
-            visible: root.hasGeometry && root.forge.blenderBusy
-            implicitHeight: busyStripRow.implicitHeight + Theme.spacingSm * 2
+            visible: root.hasGeometry && stripPanel.shows
+            implicitHeight: stripPanel.implicitHeight + Theme.spacingSm * 2
             color: Theme.panelAlt
             border.color: Theme.accentBorder
             border.width: 1
-            RowLayout {
-                id: busyStripRow
+            BlenderRunPanel {
+                id: stripPanel
                 anchors.fill: parent
                 anchors.margins: Theme.spacingSm
-                spacing: Theme.spacingMd
-                BusyIndicator {
-                    Layout.preferredWidth: 20
-                    Layout.preferredHeight: 20
-                    running: root.forge.blenderBusy
-                }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Text {
-                        Layout.fillWidth: true
-                        text: root.forge.statusMessage || qsTr("Ejecutando operación en Blender en segundo plano…")
-                        color: Theme.text
-                        font.pixelSize: Theme.small
-                        font.bold: true
-                        elide: Text.ElideRight
-                    }
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        indeterminate: !(root.skyrimConv.fraction > 0)
-                        from: 0
-                        to: 1
-                        value: root.skyrimConv.fraction || 0
-                    }
-                }
-                Text {
-                    text: root.blenderElapsedSec.toFixed(1) + " s"
-                    color: Theme.textDim
-                    font.family: Theme.mono
-                    font.pixelSize: Theme.small
-                }
-                Button {
-                    text: qsTr("Cancelar")
-                    onClicked: root.forge.cancelOperation()
-                }
+                forge: root.forge
             }
         }
 
@@ -646,7 +547,7 @@ Rectangle {
                                 color: Theme.textDim
                                 font.pixelSize: Theme.small
                                 text: qsTr("Geometría: %1 malla(s) · %2 vértices · %3 triángulos · %4 shape keys")
-                                    .arg(origCol.tot.meshes !== undefined ? origCol.tot.meshes : (origCol.dec.meshes || root.scene.parts.length))
+                                    .arg(origCol.tot.meshes !== undefined ? origCol.tot.meshes : (origCol.dec.meshes || root.scene.partCount))
                                     .arg(origCol.tot.vertices !== undefined ? origCol.tot.vertices : (origCol.val.vertices || 0))
                                     .arg(origCol.tot.triangles !== undefined ? origCol.tot.triangles : (origCol.val.triangles || 0))
                                     .arg(origCol.tot.shapeKeys || origCol.dec.morphTargets || 0)
@@ -803,7 +704,9 @@ Rectangle {
                         eulerRotation: Qt.vector3d(-15, 150, 0)
                         brightness: 0.6
                     }
-                    RuntimeLoader {
+                    // RuntimeLoader's import, moved off the GUI thread (ForgeModelLoader, C++): the window stays usable
+                    // while a large model is parsed; only the creation of its Qt Quick 3D objects runs here.
+                    ForgeModelLoader {
                         id: loader
                         source: root.scene.source
                         onSourceChanged: {
@@ -813,7 +716,11 @@ Rectangle {
                             root.localizedIssueBoxes = [];
                             Qt.callLater(root.reportStatus);
                         }
-                        onStatusChanged: Qt.callLater(root.reportStatus)
+                        onStatusChanged: {
+                            if (status === ForgeModelLoader.Success || status === ForgeModelLoader.Error)
+                                root.scene.reportImportCost(source, importMs, uiBlockMs);
+                            Qt.callLater(root.reportStatus);
+                        }
                         onBoundsChanged: {
                             root.boundsReady = true;
                             Qt.callLater(root.reportBounds);
@@ -1008,24 +915,10 @@ Rectangle {
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
                     }
-                    // Live progress bar & timer during Blender conversion
-                    ColumnLayout {
+                    // Blender run: the script's real step and fraction, cancel, and the recovery of a verified result.
+                    BlenderRunPanel {
                         Layout.fillWidth: true
-                        visible: root.forge.blenderBusy
-                        spacing: 6
-                        ProgressBar {
-                            Layout.fillWidth: true
-                            indeterminate: true
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            horizontalAlignment: Text.AlignHCenter
-                            color: Theme.textDim
-                            font.family: Theme.mono
-                            font.pixelSize: Theme.small
-                            text: qsTr("Tiempo transcurrido: %1 s · Conversión en segundo plano (interfaz libre)")
-                                .arg(root.blenderElapsedSec.toFixed(1))
-                        }
+                        forge: root.forge
                     }
                     // Actionable buttons for BLEND/FBX/OBJ preview conversion & error recovery
                     Flow {
@@ -1078,11 +971,6 @@ Rectangle {
                             text: qsTr("Cancelar")
                             onClicked: root.scene.cancel()
                         }
-                        Button {
-                            visible: root.forge.blenderBusy
-                            text: qsTr("Cancelar conversión")
-                            onClicked: root.forge.cancelOperation()
-                        }
                     }
                 }
             }
@@ -1127,7 +1015,7 @@ Rectangle {
                         spacing: 2
                         Repeater {
                             model: [
-                                qsTr("Mallas (%1)").arg(root.scene.parts.length),
+                                qsTr("Mallas (%1)").arg(root.scene.partCount),
                                 qsTr("Mat. (%1)").arg(((root.scene.inspection.materials || []).length)),
                                 qsTr("Huesos (%1)").arg(((root.scene.inspection.declared || {}).joints || 0)),
                                 qsTr("Alertas (%1)").arg(root.localizedIssues.length)
@@ -1157,7 +1045,7 @@ Rectangle {
                             Button {
                                 Layout.fillWidth: true
                                 text: qsTr("Mostrar todas")
-                                enabled: root.scene.parts.some(p => !p.visible)
+                                enabled: root.scene.anyPartHidden
                                 font.pixelSize: Theme.small
                                 onClicked: root.scene.showAllParts()
                             }
@@ -1166,7 +1054,7 @@ Rectangle {
                                 text: root.isPartIsolated(root.scene.selectedPart)
                                     ? qsTr("Salir de aislar")
                                     : qsTr("Aislar pieza")
-                                enabled: root.scene.selectedPart >= 0 && root.scene.parts.length > 1
+                                enabled: root.scene.selectedPart >= 0 && root.scene.partCount > 1
                                 font.pixelSize: Theme.small
                                 onClicked: root.isolatePart(root.scene.selectedPart)
                             }
@@ -1180,7 +1068,7 @@ Rectangle {
                                 width: parent.width
                                 spacing: 2
                                 Repeater {
-                                    model: root.scene.parts
+                                    model: root.scene.partsModel  // rows updated in place (ForgePartsModel)
                                     delegate: Rectangle {
                                         id: vPartCard
                                         required property var modelData
@@ -1224,7 +1112,7 @@ Rectangle {
                                             }
                                             ToolButton {
                                                 text: root.isPartIsolated(vPartCard.modelData.index) ? qsTr("Todo") : qsTr("Solo")
-                                                visible: root.scene.parts.length > 1
+                                                visible: root.scene.partCount > 1
                                                 font.pixelSize: Theme.small
                                                 onClicked: root.isolatePart(vPartCard.modelData.index)
                                                 ToolTip.visible: hovered
@@ -1456,17 +1344,23 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             Layout.margins: 12
-            readonly property var selected: root.scene.selectedPart >= 0 && root.scene.selectedPart < root.scene.parts.length
-                ? root.scene.parts[root.scene.selectedPart] : null
+            readonly property var selected: root.scene.selectedPart >= 0 ? root.scene.selectedPartInfo : null
             readonly property var f: root.framing()
             readonly property string boundsText: boundsToggle.checked && f && f.size
                 ? qsTr(" · Caja %1 × %2 × %3 u").arg(f.size.x.toFixed(2)).arg(f.size.y.toFixed(2)).arg(f.size.z.toFixed(2))
+                : ""
+            // A preview lightened for the viewer: the Skyrim export still reads the original at full detail.
+            readonly property var reduction: (root.forge.workspace.model || {}).previewReduction || null
+            readonly property string reductionText: reduction
+                ? qsTr(" · vista previa reducida (%1 de %2 triángulos; la exportación usa el original)")
+                    .arg(Number(reduction.trianglesAfter).toLocaleString(Qt.locale(), "f", 0))
+                    .arg(Number(reduction.trianglesBefore).toLocaleString(Qt.locale(), "f", 0))
                 : ""
             text: root.hasGeometry
                 ? (selected ? qsTr("Seleccionado: %1 · ").arg(selected.label) : "")
                     + qsTr("Vista previa de %1 · %2 vértices · %3 triángulos (validados)%4 · no adaptado a Skyrim · FaceGen pendiente")
                     .arg(root.scene.fileName).arg(root.scene.inspection.validated.vertices).arg(root.scene.inspection.validated.triangles)
-                    .arg(boundsText)
+                    .arg(boundsText) + reductionText
                 : qsTr("FaceGen pendiente · verificación en Skyrim pendiente")
             color: Theme.textMuted
             elide: Text.ElideRight

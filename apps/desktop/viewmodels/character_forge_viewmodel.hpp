@@ -4,6 +4,7 @@
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 #include <functional>
+#include "export_destination.hpp"
 #include "forge_scene_viewmodel.hpp"
 #include "worker_client.hpp"
 
@@ -34,6 +35,12 @@ class CharacterForgeViewModel final : public QObject {
   Q_PROPERTY(QVariantList recordChoices READ record_choices NOTIFY recordsChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(bool blenderBusy READ blender_busy NOTIFY changed)
+  // The current or last Blender run (GLB preview or Skyrim job), told apart by layer (ForgeBlenderBridge):
+  // {state: "idle" | "running" | "recoverable" | "done" | "failed", kind: "preview" | "inspect" | "exportNif", step, fraction,
+  //  message, run: {verdict, exit, exitHex, exitMeaning, seconds, markerOk, report, artifact, artifactDetail, crashLog,
+  //  stderrTail, decision}}. "recoverable": Blender ended badly after a verified result; nothing is used until
+  //  acceptRecoveredBlenderResult() or discardRecoveredBlenderResult().
+  Q_PROPERTY(QVariantMap blenderRun READ blender_run NOTIFY changed)
   Q_PROPERTY(bool catalogReady READ catalog_ready NOTIFY changed)
   Q_PROPERTY(QVariantMap workspace READ workspace NOTIFY changed)
   Q_PROPERTY(QVariantMap capabilities READ capabilities CONSTANT)
@@ -70,6 +77,12 @@ class CharacterForgeViewModel final : public QObject {
   Q_PROPERTY(QString skyrimProfile READ skyrim_profile WRITE setSkyrimProfile NOTIFY changed)
   // The 3D preview of the selected model (independent from the NPC scenes of the other workspaces).
   Q_PROPERTY(ForgeSceneViewModel* scene READ scene CONSTANT)
+  // Character Forge — Modo Fácil (engines/creation forge_easy_mode), computed from the facts of this viewmodel, its scene,
+  // the worker and the studio: {actions: [...7], flow: {steps, current, canExport}, diagnosis: easy::explain(classification),
+  // projectsFolder}. It offers only operations this viewmodel already has.
+  Q_PROPERTY(QVariantMap easyMode READ easy_mode NOTIFY easyModeChanged)
+  // Folder where a project is created for a model picked before any .sncf exists (forge_projects::projects_folder).
+  Q_PROPERTY(QString projectsFolder READ projects_folder NOTIFY easyModeChanged)
 
  public:
   using EnvironmentProvider = std::function<creation::ForgeEnvironment()>;
@@ -91,6 +104,7 @@ class CharacterForgeViewModel final : public QObject {
   QVariantList record_choices() const { return record_choices_; }
   bool busy() const { return busy_; }
   bool blender_busy() const;
+  QVariantMap blender_run() const;
   bool catalog_ready() const { return catalog_ready_; }
   QVariantMap workspace() const;
   QVariantMap capabilities() const;
@@ -145,6 +159,11 @@ class CharacterForgeViewModel final : public QObject {
   Q_INVOKABLE void selectBlenderExecutable(const QString& url);
   Q_INVOKABLE void detectBlender();
   Q_INVOKABLE void convertSelectedModelWithBlender();
+  // Uses the verified result of a Blender run that ended badly (blenderRun.state "recoverable"). The model, the export or
+  // the package keeps blenderRun.decision = "recovered" and the warning; it is never shown as a clean run.
+  Q_INVOKABLE void acceptRecoveredBlenderResult();
+  // Drops that result: nothing is added to the project.
+  Q_INVOKABLE void discardRecoveredBlenderResult();
   // ANALIZAR COMPATIBILIDAD CON SKYRIM: inspects a copy of the selected model in Blender and classifies it (writes nothing).
   Q_INVOKABLE void analyzeSkyrimCompatibility();
   // Exports the selected model with PyNifly, re-reads the NIF with nifly and, when every check passes, writes a Type A
@@ -158,6 +177,19 @@ class CharacterForgeViewModel final : public QObject {
   // same as its button, with the same checks; the chain stops at the first step that cannot run and the panel says why.
   // skyrimConversion.easy is true while the chain runs.
   Q_INVOKABLE void createSkyrimModEasy();
+  QVariantMap easy_mode() const;
+  QString projects_folder() const;
+  // Stores another projects folder (refused inside the game or MO2). Returns the refusal, empty on success.
+  Q_INVOKABLE QString setProjectsFolder(const QString& folder_or_url);
+  // Gives the open project (a new one when none is open) a folder of its own in projectsFolder, named after the model:
+  // <model>.sncf, <model>_2.sncf ... Never reuses an existing folder. False with lastError when it cannot.
+  Q_INVOKABLE bool saveProjectInProjectsFolder(const QString& model_name);
+  // Studio facts the Modo Fácil needs and this viewmodel cannot see: an NPC loaded in the Character Creator, and the
+  // folders of the game and MO2 no project may be created in.
+  void set_npc_loaded(bool loaded);
+  void set_forbidden_roots(std::function<std::vector<ForbiddenRoot>()> provider) { forbidden_roots_ = std::move(provider); }
+  // Facts of the Character Creator's NPC for easyMode.npc (creation::easy::npc_overview); the studio provides them.
+  void set_npc_facts_provider(std::function<nlohmann::json()> provider) { npc_facts_ = std::move(provider); }
   Q_INVOKABLE void selectReferenceImage(const QString& role, const QString& url);
   void invalidate_validation();
   void set_catalog_ready(bool ready);
@@ -166,6 +198,7 @@ class CharacterForgeViewModel final : public QObject {
   void changed();
   void recordsChanged();
   void behaviorChanged();
+  void easyModeChanged();
 
  private:
   template <class F> void edit(F&& change, bool affects_validation = true);
@@ -178,12 +211,17 @@ class CharacterForgeViewModel final : public QObject {
   void start_skyrim_job(const QString& operation);
   void continue_easy();
   bool skyrim_easy_ = false;
+  bool npc_loaded_ = false;
+  std::function<std::vector<ForbiddenRoot>()> forbidden_roots_;
+  std::function<nlohmann::json()> npc_facts_;
   QString skyrim_profile_ = QStringLiteral("static");
   QString skyrim_model_key() const;
   QVariantMap skyrim_;
   EnvironmentProvider environment_;
   ForgeSceneViewModel* scene_ = nullptr;
   ForgeBlenderBridge* blender_bridge_ = nullptr;
+  QVariantMap blender_run_;  // see blenderRun
+  void begin_blender_run(const QString& kind);
   creation::ForgeDraft draft_;
   bool has_project_ = false;
   QString project_path_;

@@ -9,11 +9,14 @@ import SkyrimNpcStudio
 ColumnLayout {
     id: root
     required property CharacterForgeViewModel forge
-    property string currentTool: forge.workspace.tool || "project"
+    property string currentTool: forge.workspace.tool || "easy"
     signal toolSelected(string tool)
     spacing: Theme.sp(2)
 
     readonly property var groups: [
+        { key: "easy", title: qsTr("Modo Fácil"), tools: [
+            { key: "easy", glyph: "bulb", label: qsTr("Modo Fácil"), tip: qsTr("Acciones guiadas con el estado real: qué puedes hacer, qué falta y cómo seguir"), needsProject: false }
+        ] },
         { key: "project", title: qsTr("Proyecto"), tools: [
             { key: "project", glyph: "document", label: qsTr("Proyecto"), tip: qsTr("Nombre, descripción, guardado y estado del borrador .sncf"), needsProject: false }
         ] },

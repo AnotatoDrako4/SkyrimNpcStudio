@@ -35,7 +35,7 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
             ProtocolMinor = Protocol.Minor,
             MutagenVersion = MutagenVersion,
             ProcessId = Environment.ProcessId,
-            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords,
+            Capabilities = ["catalog.npc", "catalog.armor", "catalog.getAppearance", Methods.GetIntegrityRecord, "outfit.validate", "export.outfitPatch", "catalog.headParts", "face.recipe", "export.faceOverhaul", "export.completeOverhaul", Methods.CreationValidateNpc, Methods.CreationExportNpc, Methods.CreationSearchRecords,
                 Methods.CreationAnalyzeVoice, Methods.CreationGetBehaviorCatalog, Methods.CreationApplyArchetype, Methods.CreationUndoArchetype, Methods.CreationValidateBehavior, Methods.BodyInspectNpcs, Methods.ExportBodyDistribution],
         };
     }
@@ -80,6 +80,10 @@ internal sealed class WorkerRpcTarget(WorkerState state, Action requestShutdown,
     [JsonRpcMethod(Methods.GetAppearance)]
     public AppearanceResponse GetAppearance(AppearanceRequest request) =>
         Guard(() => state.Read(c => AppearanceQueries.Get(c.Session, c.Queries, request)));
+
+    [JsonRpcMethod(Methods.GetIntegrityRecord)]
+    public IntegrityRecordResponse GetIntegrityRecord(IntegrityRecordRequest request, CancellationToken ct) =>
+        Guard(() => state.Read(c => IntegrityQueries.Get(c.Session, c.Queries, request, ct)));
 
     [JsonRpcMethod(Methods.SearchHeadParts)]
     public SearchHeadPartsResponse SearchHeadParts(SearchHeadPartsRequest request) =>

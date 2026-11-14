@@ -135,7 +135,14 @@ QVariantMap package_export(const QString& project_folder, const QString& stage, 
                         {"referenceSkeleton", report.value("skeletonMapping", Json::object()).value("reference", Json())},
                         {"blenderVersion", report.value("blenderVersion", "")},
                         {"pyniflyVersion", report.value("pynifly", Json::object()).value("version", Json::array())},
+                        {"pyniflyTested", report.value("pynifly", Json::object()).value("tested", false)},
+                        // How the expected bind was computed (forge_skyrim.py bone_rotation_api): provenance for review.
+                        {"pyniflyBoneRotationApi", report.value("pynifly", Json::object()).value("boneRotationApi", Json())},
                         {"sourceSha256", report.value("sourceSha256", "")}, {"nifVerified", true},
+                        // How Blender ended (ForgeBlenderBridge): "recovered" means it crashed or hung after a verified result.
+                        {"blenderRun", Json{{"decision", report.value("run", Json::object()).value("decision", "")},
+                                            {"exit", report.value("run", Json::object()).value("exit", "")},
+                                            {"exitHex", report.value("run", Json::object()).value("exitHex", "")}}},
                         {"skyrimStatus", "PENDIENTE_SKYRIM"}, {"files", files}};
     write_file(partial + "/manifest.json", QByteArray::fromStdString(manifest.dump(1)));
     if (!QDir().rename(partial, final_folder)) throw std::runtime_error("Cannot move the finished export into place");

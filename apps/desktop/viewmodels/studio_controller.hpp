@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 #include <atomic>
@@ -23,11 +24,15 @@
 #include "preset_head_checker.hpp"
 #include "body_director.hpp"
 #include "loose_resource_library.hpp"
+#include "beauty_lab_viewmodel.hpp"
 
 namespace sns::app {
 
 // Root view model: MO2 instance/profile selection, scanning, indexing through the worker, and the
 // browsers (mods, NPCs, armors). QML never touches files or plugins directly; it calls into here.
+class OutfitFitDoctorViewModel;
+struct InGameTestPlan;
+
 class StudioController : public QObject {
   Q_OBJECT
   QML_ELEMENT
@@ -51,6 +56,8 @@ class StudioController : public QObject {
   Q_PROPERTY(BodyDirector* body READ body CONSTANT)
   // Loose outfit packs, replacers, and BodySlide projects without ESP (see LooseResourceLibrary).
   Q_PROPERTY(LooseResourceLibrary* looseResources READ loose_resources CONSTANT)
+  // NPC Beauty Lab Next-Gen: Hair Studio, Face Beauty Workshop, Comparator, Next-Gen Presets, Quality Check & Library.
+  Q_PROPERTY(BeautyLabViewModel* beautyLab READ beauty_lab CONSTANT)
   // Display names of NPCs asked for by FormKey (resolveNpcNames): npcKey(FormKey) -> name (or EditorID). Lists of FormKeys (the portrait
   // cache inspector) show the name next to the key once the catalog answered.
   Q_PROPERTY(QVariantMap npcNames READ npc_names NOTIFY npcNamesChanged)
@@ -92,6 +99,8 @@ class StudioController : public QObject {
   // elapsedMs, counts: {warning, info, ok}, codes: {code: n}, rows: [{formKey, name, worst, codes,
   // facePlugin, faceMod, faceGenMod, message}]} — rows only for NPCs with notes or warnings.
   Q_PROPERTY(QVariantMap appearanceScan READ appearance_scan NOTIFY appearanceScanChanged)
+  // NPC Health repair export: {state: idle|exporting|exported|nothing|failed, decisions[], result{}, message, outputDirectory}
+  Q_PROPERTY(QVariantMap npcHealthRepair READ npc_health_repair NOTIFY npcHealthRepairChanged)
 
  public:
   enum class Phase { Idle, Scanning, Indexing, Ready, Error };
@@ -113,7 +122,13 @@ class StudioController : public QObject {
   [[nodiscard]] AppearanceSources* sources() const { return sources_; }
   [[nodiscard]] PresetHeadChecker* preset_heads() const { return preset_heads_; }
   [[nodiscard]] BodyDirector* body() const { return body_; }
+  // The Outfit Fit Doctor is created by its QML panel; it registers here so the Character Forge Modo Fácil can read its
+  // last diagnosis (never runs one of its own).
+  void set_fit_doctor(OutfitFitDoctorViewModel* doctor);
+  // Facts of the NPC loaded in the Character Creator for creation::easy::npc_overview (BodyDirector, OutfitEditor, Fit Doctor).
+  [[nodiscard]] nlohmann::json easy_npc_facts() const;
   [[nodiscard]] LooseResourceLibrary* loose_resources() const { return loose_resources_; }
+  [[nodiscard]] BeautyLabViewModel* beauty_lab() const { return beauty_lab_; }
   [[nodiscard]] VariantListModel* instances() const { return instances_; }
   [[nodiscard]] VariantListModel* mods() const { return mods_; }
   [[nodiscard]] VariantListModel* diagnostics() const { return diagnostics_; }
@@ -138,6 +153,7 @@ class StudioController : public QObject {
   [[nodiscard]] bool npc_loading() const { return npc_loading_; }
   [[nodiscard]] QVariantMap appearance_control() const { return appearance_control_; }
   [[nodiscard]] QVariantMap appearance_scan() const;
+  [[nodiscard]] QVariantMap npc_health_repair() const { return health_repair_; }
   [[nodiscard]] SnapshotPtr snapshot() const { return snapshot_; }
 
   Q_INVOKABLE void discoverInstances();
@@ -150,6 +166,13 @@ class StudioController : public QObject {
   [[nodiscard]] QString mo2_mods_directory() const;
   Q_INVOKABLE bool isMo2Running() const;
   Q_INVOKABLE QVariantMap installModToMo2(const QString& mod_dir);
+  // M2 «Preparar prueba en Skyrim»: for an export (folder or manifest.json) already installed in the loaded profile,
+  // packages its console batch file and acceptance report as a NEW mod (folder + ZIP) next to the export. Refused
+  // when the profile does not load that exact plugin (SHA-256). Writes nothing in MO2 or the game. State and result
+  // arrive through inGameTest: {state: "preparing"|"exporting"|"done"|"error", errors, batchCommand, zipPath, ...}.
+  Q_INVOKABLE void prepareInGameTest(const QString& export_dir_or_manifest);
+  Q_PROPERTY(QVariantMap inGameTest READ in_game_test NOTIFY inGameTestChanged)
+  [[nodiscard]] QVariantMap in_game_test() const { return in_game_test_; }
   Q_INVOKABLE void loadProfile(const QString& profile);
   Q_INVOKABLE void reindex();
   Q_INVOKABLE void cancel();
@@ -170,6 +193,13 @@ class StudioController : public QObject {
   // inputDigest}; empty when it was not analysed (no scan yet, or not a unique NPC).
   Q_INVOKABLE QVariantMap appearanceStateOf(const QString& form_key) const;
   Q_INVOKABLE void scanAppearanceControl();
+  // NPC Health & Beauty Center: the same profile scan, but every unique NPC is read with getNpc (head parts)
+  // and audited (HAIR/FACE/NPC codes); results in appearanceScan.health. Cancel with cancelAppearanceScan.
+  Q_INVOKABLE void scanNpcHealth();
+  // After a finished health scan: plans the reversible wig repair of every NPC with a confirmed broken wig
+  // (appearance::plan_wig_repair) and exports «SkyrimNpcStudio - NPC Appearance Repair.esp» as an MO2 mod into
+  // `output_directory` (staging; never the MO2 mods folder or Data). Nothing is installed. Result in npcHealthRepair.
+  Q_INVOKABLE void exportNpcHealthRepair(const QString& output_directory);
   Q_INVOKABLE void cancelAppearanceScan();
   // Hands the control map's «Usar el rostro de X» of the selected NPC to the Easy Mod Creator, which
   // then plans (and exports) that patch. Returns false when the map offers no resolution.
@@ -205,11 +235,14 @@ class StudioController : public QObject {
   void npcChanged();
   void appearanceControlChanged();
   void appearanceScanChanged();
+  void npcHealthRepairChanged();
+  void inGameTestChanged();
   // selectNpc could not load the NPC (unknown FormKey, worker error); the message says why.
   void npcLoadFailed(const QString& message);
   void loaded();
 
  private:
+  QPointer<OutfitFitDoctorViewModel> fit_doctor_;
   void set_phase(Phase phase);
   void set_progress(const QString& text, double value);
   void scan_finished(SnapshotPtr snapshot, const QString& error);
@@ -240,6 +273,8 @@ class StudioController : public QObject {
   // requiresReview / reviewState / reviewReason / inputDigest (+ decision, date, notes) for QML.
   QVariantMap review_fields(const std::string& form_key, const appearance::FaceResolution& resolution, const QString& digest) const;
   void scan_finish();
+  // Second half of prepareInGameTest, on the UI thread: shows the plan (or its errors) and asks the worker to package it.
+  void send_ingame_test(int serial, const InGameTestPlan& plan);
 
   WorkerClient* worker_;
   ConsoleModel* console_;
@@ -257,6 +292,7 @@ class StudioController : public QObject {
   PresetHeadChecker* preset_heads_ = nullptr;
   BodyDirector* body_ = nullptr;
   LooseResourceLibrary* loose_resources_ = nullptr;
+  BeautyLabViewModel* beauty_lab_ = nullptr;
   std::unordered_map<std::string, std::string> registered_armor_meshes_;
   VariantListModel* instances_;
   VariantListModel* mods_;
@@ -286,12 +322,15 @@ class StudioController : public QObject {
   QVariantMap summary_;
   QVariantMap npc_;
   QVariantMap appearance_control_;
+  QVariantMap in_game_test_;
+  int in_game_test_serial_ = 0;  // a newer prepareInGameTest supersedes the result of an older one
   std::optional<appearance::FaceResolution> control_resolution_;  // of appearance_control_
   QString control_review_digest_;  // SHA-256 of review_identity of control_resolution_ and its inputs
   appearance::ReviewBook review_book_;
   QString review_book_path_;
   bool review_book_unreadable_ = false;  // an existing book could not be read: never overwrite it
   std::shared_ptr<AppearanceScan> scan_;
+  QVariantMap health_repair_;
   QSet<QString> races_with_facegen_;  // race FormKeys (lower-case) with a FaceGen file for some unique NPC
   bool npc_loading_ = false;
   QString pending_npc_;

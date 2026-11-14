@@ -64,7 +64,7 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QString presetName READ preset_name NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantMap morphs READ morphs NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList standardSliders READ standard_sliders CONSTANT)
-  Q_PROPERTY(QVariantList presetSlots READ preset_slots CONSTANT)
+  Q_PROPERTY(QVariantList presetSlots READ preset_slots NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList facePresets READ face_presets NOTIFY appearanceChanged)
   Q_PROPERTY(QColor hairColor READ hair_color NOTIFY appearanceChanged)
   Q_PROPERTY(bool hasHairColor READ has_hair_color NOTIFY appearanceChanged)
@@ -73,7 +73,11 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(float height READ height NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList headParts READ head_parts NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantList tints READ tints NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantList tintCatalog READ tint_catalog NOTIFY appearanceChanged)
   Q_PROPERTY(QVariantMap customMorphs READ custom_morphs NOTIFY appearanceChanged)
+  Q_PROPERTY(QVariantList availableCustomMorphs READ available_custom_morphs NOTIFY appearanceChanged)
+  Q_PROPERTY(QString headTexture READ head_texture NOTIFY appearanceChanged)
+  Q_PROPERTY(bool intentionallyBald READ intentionally_bald NOTIFY appearanceChanged)
   Q_PROPERTY(int sculptTargets READ sculpt_targets NOTIFY appearanceChanged)
   Q_PROPERTY(QString geometryMode READ geometry_mode NOTIFY appearanceChanged)
   Q_PROPERTY(QString geometryModeReason READ geometry_mode_reason NOTIFY faceGenChanged)
@@ -94,6 +98,9 @@ class AppearanceEditor : public QObject {
   Q_PROPERTY(QString redoText READ redo_text NOTIFY appearanceChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY appearanceChanged)
   Q_PROPERTY(bool hasFaceEdits READ has_face_edits NOTIFY appearanceChanged)
+  Q_PROPERTY(bool faceDirty READ has_face_edits NOTIFY appearanceChanged)
+  Q_PROPERTY(QString raceEditorId READ race_editor_id NOTIFY recipeChanged)
+  Q_PROPERTY(bool female READ is_female NOTIFY recipeChanged)
   // Where the current face comes from ("Donante: …", a project preset name, or empty). Part of the face
   // state, so undo/redo and reset restore it with the face.
   Q_PROPERTY(QString faceSource READ face_source NOTIFY appearanceChanged)
@@ -108,6 +115,7 @@ class AppearanceEditor : public QObject {
   // The last searchHeadParts(): {state: "none" | "searching" | "ready" | "error", type, text, count, error}. Lets the UI tell
   // "no compatible parts" from "the search failed" (both leave headPartOptions empty).
   Q_PROPERTY(QVariantMap headPartSearch READ head_part_search NOTIFY headPartOptionsChanged)
+  Q_PROPERTY(bool searchingHeadParts READ searching_head_parts NOTIFY headPartOptionsChanged)
 
  public:
   using SnapshotProvider = std::function<SnapshotPtr()>;
@@ -142,7 +150,11 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] float height() const;
   [[nodiscard]] QVariantList head_parts() const;
   [[nodiscard]] QVariantList tints() const;
+  [[nodiscard]] QVariantList tint_catalog() const;
   [[nodiscard]] QVariantMap custom_morphs() const;
+  [[nodiscard]] QVariantList available_custom_morphs() const;
+  [[nodiscard]] QString head_texture() const;
+  [[nodiscard]] bool intentionally_bald() const;
   [[nodiscard]] int sculpt_targets() const;
   [[nodiscard]] QString geometry_mode() const;
   [[nodiscard]] QString geometry_mode_reason() const { return geometry_reason_; }
@@ -163,6 +175,16 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QString redo_text() const { return history_->redo_text(); }
   [[nodiscard]] bool dirty() const { return draft_.is_face_dirty() || draft_.is_height_dirty(); }
   [[nodiscard]] bool has_face_edits() const { return draft_.is_face_dirty(); }
+  [[nodiscard]] QString race_editor_id() const {
+    return recipe_ ? QString::fromStdString(recipe_->race_editor_id)
+                   : (base_recipe_ ? QString::fromStdString(base_recipe_->race_editor_id) : QString());
+  }
+  [[nodiscard]] bool is_female() const {
+    return recipe_ ? recipe_->female : (base_recipe_ ? base_recipe_->female : true);
+  }
+  [[nodiscard]] bool searching_head_parts() const {
+    return head_part_search_.value(QStringLiteral("state")).toString() == QLatin1String("searching");
+  }
   [[nodiscard]] QString face_source() const { return QString::fromStdString(draft_.face().source); }
   [[nodiscard]] QVariantList presets_list() const { return presets_list_; }
   [[nodiscard]] bool exporting() const { return exporting_; }
@@ -171,6 +193,11 @@ class AppearanceEditor : public QObject {
   [[nodiscard]] QVariantList head_part_options() const { return head_part_options_; }
   [[nodiscard]] QVariantMap head_part_search() const { return head_part_search_; }
   [[nodiscard]] const face::FaceRecipe* recipe() const { return recipe_ ? &*recipe_ : nullptr; }
+  [[nodiscard]] const face::FaceRecipe* base_recipe() const { return base_recipe_ ? &*base_recipe_ : nullptr; }
+  [[nodiscard]] const appearance::AppearanceDraft& draft_state() const { return draft_; }
+  [[nodiscard]] const projects::NpcTarget& target_info() const { return target_; }
+  [[nodiscard]] SnapshotPtr current_snapshot() const { return snapshot_ ? snapshot_() : nullptr; }
+  [[nodiscard]] std::shared_ptr<ResourceContext> resource_context() const { return context(); }
   // The FaceGen the profile loads for the NPC (MO2 winner), as read for the analysis; null if none.
   [[nodiscard]] std::shared_ptr<const std::string> winning_facegen() const { return existing_facegen_; }
 
@@ -182,11 +209,20 @@ class AppearanceEditor : public QObject {
   Q_INVOKABLE void setHeight(float height);
   Q_INVOKABLE void setHeadPart(const QString& formKey, const QString& type);
   Q_INVOKABLE void removeHeadPart(const QString& type);
+  Q_INVOKABLE void setIntentionallyBald(bool bald);
+  Q_INVOKABLE void setCustomMorph(const QString& name, float value);
+  Q_INVOKABLE void setHeadTexture(const QString& formKey);
   // Fills headPartOptions with the head parts of `type` ("Hair", "Eyes", ...) valid for this NPC.
   Q_INVOKABLE void searchHeadParts(const QString& type, const QString& text = {});
+  Q_INVOKABLE void cancelHeadPartSearch();
   Q_INVOKABLE void setTint(int index, const QColor& color, float value);
   Q_INVOKABLE void setGeometryMode(const QString& mode);
+  Q_INVOKABLE void unlockForModding();
   Q_INVOKABLE void resetFace();
+  Q_INVOKABLE void resetMorphs();
+  Q_INVOKABLE void resetTints();
+  Q_INVOKABLE void resetHeadParts();
+  void apply_face_state(appearance::FaceState next, const QString& description);
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
   Q_INVOKABLE void applyDonor(const QString& donorFormKey, const QString& donorName = QString());
@@ -244,6 +280,7 @@ class AppearanceEditor : public QObject {
   void request_recipe(bool initial);
   void on_recipe(const Json& json, bool initial, int serial);
   void analyse_existing_facegen();
+  void refresh_compatibility_map(bool emit_signal = false);
   void schedule_build();
   void start_build();
   void finish_build(const std::shared_ptr<Build>& build);
@@ -279,6 +316,8 @@ class AppearanceEditor : public QObject {
   std::shared_ptr<const std::string> existing_facegen_;
   QString geometry_reason_;
   QVariantList existing_issues_;
+  std::optional<face::FaceCompatibilityReport> base_compatibility_report_;
+  QVariantMap base_provenance_;
   QVariantMap compatibility_;
   bool has_existing_tint_ = false;
 

@@ -5,12 +5,19 @@ Run only through the application with --background --factory-startup --disable-a
 The C++ caller validates the output with engines/gltf before adding it to a project.
 """
 
+import hashlib
 import json
 import os
 import struct
 import sys
+import time
+import traceback
 
 import bpy
+
+# forge_resources.py is staged next to this script by ForgeBlenderBridge (versioned with the application).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import forge_resources  # noqa: E402
 
 
 def args():
@@ -23,6 +30,44 @@ def args():
     if os.path.splitext(output)[1].lower() != ".glb" or not os.path.isfile(source):
         raise ValueError("Invalid source or output path")
     return source, output, report
+
+
+TIMINGS = {}
+INVENTORY = {}
+_last = [time.perf_counter()]
+
+
+def progress(step, fraction):
+    # Same protocol as forge_skyrim.py: ForgeBlenderBridge::read_progress reads these lines.
+    print("SNS_FORGE_PROGRESS " + json.dumps({"step": step, "fraction": round(fraction, 3)}), flush=True)
+
+
+def lap(step):
+    """Seconds since the previous lap, recorded under `step` (report.timings)."""
+    now = time.perf_counter()
+    TIMINGS[step] = round(now - _last[0], 3)
+    _last[0] = now
+
+
+def image_inventory():
+    """Facts about the images the scene uses, for the report: what Blender could load and what it could not."""
+    facts = {"total": 0, "packed": 0, "external": 0, "missing": [], "largest": 0, "pixelsMegapixels": 0.0}
+    for img in bpy.data.images:
+        if img.source not in {"FILE", "TILED"}:
+            continue
+        facts["total"] += 1
+        if img.packed_file is not None:
+            facts["packed"] += 1
+        else:
+            facts["external"] += 1
+            path = bpy.path.abspath(img.filepath, library=img.library) if img.filepath else ""
+            if not path or not os.path.isfile(path):
+                facts["missing"].append({"name": img.name, "path": path})
+        w, h = img.size[0], img.size[1]
+        facts["largest"] = max(facts["largest"], w, h)
+        facts["pixelsMegapixels"] = round(facts["pixelsMegapixels"] + w * h / 1e6, 2)
+    facts["missing"] = facts["missing"][:50]
+    return facts
 
 
 def write_report(path, payload):
@@ -106,6 +151,47 @@ def _prune_non_renderable_and_rig_widgets():
                 if mod.type in {"SUBSURF", "MULTIRES"}:
                     mod.show_viewport = False
                     mod.show_render = False
+
+    # Normalize material shaders for glTF export so complex node trees (Cycles/EEVEE target outputs,
+    # procedural Mix/HSV trees, and eye materials like scleraBright/irisBlue/eyes) bake into standard PBR textures
+    for mat in bpy.data.materials:
+        if not getattr(mat, "use_nodes", False) or not mat.node_tree:
+            continue
+        nt = mat.node_tree
+        outputs = [n for n in nt.nodes if n.type == "OUTPUT_MATERIAL"]
+        for o in outputs:
+            if getattr(o, "target", "") in ("CYCLES", "EEVEE"):
+                o.target = "ALL"
+                o.is_active_output = True
+
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if not bsdf:
+            continue
+
+        active_out = next((o for o in outputs if o.is_active_output), outputs[0] if outputs else None)
+        if active_out and active_out.inputs.get("Surface"):
+            s_link = active_out.inputs["Surface"].links
+            if not s_link or s_link[0].from_node.type != "BSDF_PRINCIPLED":
+                nt.links.new(bsdf.outputs["BSDF"], active_out.inputs["Surface"])
+
+        bc = bsdf.inputs.get("Base Color")
+        if bc:
+            is_direct_img = bc.is_linked and bc.links[0].from_node.type == "TEX_IMAGE"
+            if not is_direct_img:
+                candidates = []
+                for n in nt.nodes:
+                    if n.type == "TEX_IMAGE" and n.image:
+                        iname = (n.image.name or "").lower()
+                        if "eyes_sss" in iname or "disp" in iname or "bump" in iname or "norm" in iname or "rough" in iname or "trans" in iname:
+                            continue
+                        if "albedo" in iname or "color" in iname or "diff" in iname or "eyes" in iname or "base" in iname or "iris" in iname:
+                            candidates.append((0, n))
+                        else:
+                            candidates.append((1, n))
+                if candidates:
+                    candidates.sort(key=lambda c: c[0])
+                    best_tex = candidates[0][1]
+                    nt.links.new(best_tex.outputs["Color"], bc)
 
 
 def _optimize_preview_images(max_dim=1024):
@@ -213,6 +299,8 @@ def _sanitize_and_verify_glb(glb_path):
 def convert(source, output):
     extension = os.path.splitext(source)[1].lower()
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    _last[0] = time.perf_counter()
+    progress("open", 0.05)
     if extension == ".blend":
         result = bpy.ops.wm.open_mainfile(filepath=source, load_ui=False)
     elif extension == ".fbx":
@@ -221,15 +309,33 @@ def convert(source, output):
         result = bpy.ops.wm.obj_import(filepath=source)
     if "FINISHED" not in result:
         raise RuntimeError("Blender did not finish importing the model")
+    lap("open")
+    progress("textures", 0.25)
+    INVENTORY["relink"] = forge_resources.relink_missing_images(source)
+    lap("relink")
+    progress("prune", 0.35)
     _prune_non_renderable_and_rig_widgets()
+    lap("prune")
+    # The viewer (RuntimeLoader) needed ~220 s for a 1.49 M-triangle preview: the preview gets a triangle budget. Only this
+    # preview session is reduced; the Skyrim job re-reads the source file at full detail.
+    progress("reduce", 0.4)
+    INVENTORY["previewReduction"] = forge_resources.reduce_for_preview()
+    lap("reduce")
     mesh_objects = [obj for obj in bpy.data.objects if obj.type == "MESH"]
     meshes = len(mesh_objects)
     if not meshes:
         raise ValueError("The source has no mesh objects")
     total_vertices = sum(len(obj.data.vertices) for obj in mesh_objects if getattr(obj, "data", None))
     heavy_scene = total_vertices > 50000 or os.path.getsize(source) > 50 * 1024 * 1024
+    INVENTORY.update(image_inventory())
+    INVENTORY["vertices"] = total_vertices
+    INVENTORY["heavyScene"] = heavy_scene
+    lap("inventory")
     if heavy_scene:
+        progress("images", 0.45)
         _optimize_preview_images(1024)
+    lap("images")
+    progress("export", 0.55)
     export_kwargs = dict(
         filepath=output,
         export_format="GLB",
@@ -249,27 +355,40 @@ def convert(source, output):
         exported = bpy.ops.export_scene.gltf(**export_kwargs)
     if "FINISHED" not in exported or not os.path.isfile(output):
         raise RuntimeError("Blender did not produce a GLB")
+    lap("export")
+    progress("verify", 0.95)
     _sanitize_and_verify_glb(output)
+    lap("verify")
     return meshes
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
+    forge_resources.announce_tempdir()
     source, output, report = args()
     result = {"schema": 1, "blenderVersion": bpy.app.version_string,
-              "sourceFormat": os.path.splitext(source)[1][1:].lower()}
+              "sourceFormat": os.path.splitext(source)[1][1:].lower(), "blenderTempDir": bpy.app.tempdir}
     try:
         meshes = convert(source, output)
-        result.update(status="ok", meshes=meshes, outputBytes=os.path.getsize(output))
+        # Size and SHA-256 of the finished file: the caller checks them, so a GLB cut short by a crash is never used.
+        result.update(status="ok", meshes=meshes, outputBytes=os.path.getsize(output), outputSha256=file_sha256(output),
+                      timings=TIMINGS, images=INVENTORY, previewReduction=INVENTORY.get("previewReduction", {}))
         write_report(report, result)
         print("SNS_FORGE_BRIDGE_OK", flush=True)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
+        forge_resources.finish_process(0)
     except Exception as error:
-        result.update(status="error", message=str(error)[:1000])
+        result.update(status="error", message=str(error)[:1000], timings=TIMINGS, images=INVENTORY)
         write_report(report, result)
         print("SNS_FORGE_BRIDGE_ERROR", flush=True)
-        raise
+        traceback.print_exc()
+        forge_resources.finish_process(17)  # the code --python-exit-code gives an uncaught exception
 
 
 if __name__ == "__main__":

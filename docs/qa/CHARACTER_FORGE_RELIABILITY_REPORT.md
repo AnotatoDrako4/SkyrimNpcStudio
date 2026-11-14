@@ -37,6 +37,13 @@ CTest registra correctamente nombres como `NPC-08 — Generalización...`, pero 
 
 La solución mínima aplicada en este ámbito es operacional: el runner usa filtros ASCII directos (`NPC-0*`, `SERANA-0*`) como evidencia de ejecución real y conserva el CTest Unicode como regresión explícita. No se renombraron pruebas ni se modificó infraestructura compartida.
 
+**Corregido el 2026-11-04.** Causa: CTest pasa el nombre en UTF-8, pero el CRT convierte `argv` a la página ANSI (1252 en el
+runner de CI y en Windows en español), así que `—` y `ó` no coinciden con los literales UTF-8 de Catch2. Los ejecutables de
+Catch2 llevan ahora `tests/support/utf8.manifest` (`activeCodePage` UTF-8, Windows 10 1903+), registrado en
+`tests/CMakeLists.txt`; `argv` llega en UTF-8. Resultado: `ctest -R "^(unit|app):"` 286/286 PASS, incluidos los 9 casos
+`NPC-0*`/`SERANA-0*` que antes fallaban. Evidencia: `out/local-implementation/easy-modding-20261104/ctest-unit-app.log`.
+El defecto también habría fallado en CI (ACP 1252); no se vio porque el paso `dotnet test` fallaba antes.
+
 ## Brechas pendientes
 
 - Geometría degenerada: sin regresión dedicada de Character Forge.

@@ -1862,6 +1862,111 @@ struct Stress : std::enable_shared_from_this<Stress> {
           self->after(200, *wait);
         });
       }
+    } else if (name == "npc-health") {
+      // NPC Health & Beauty Center (opt-in, not in "all": one getNpc per unique NPC). Audits every unique NPC of
+      // the real profile and writes npc-health-scan.json (one row per NPC, clean ones included). Checks only what
+      // must hold on any profile: totals add up, confirmed findings carry evidence and a resource, nothing claims
+      // an in-game verification. How many defects the profile has is the result, not a check.
+      steps.push_back([self] {
+        self->studio->scanNpcHealth();
+        auto wait = std::make_shared<std::function<void()>>();
+        auto started = std::make_shared<QElapsedTimer>();
+        started->start();
+        *wait = [self, wait, started] {
+          const auto scan = self->studio->appearance_scan();
+          if (scan.value("running").toBool() && started->elapsed() < 30 * 60 * 1000) { self->after(500, *wait); return; }
+          const auto health = scan.value("health").toMap();
+          const auto rows = health.value("rows").toList();
+          const int total = scan.value("total").toInt(), errors = scan.value("errors").toInt();
+          self->check(scan.value("stage").toString() == "done", "health scan finished: " + scan.value("stage").toString());
+          self->check(rows.size() + errors == total,
+                      QStringLiteral("%1 unique NPCs, %2 audited, %3 errors").arg(total).arg(rows.size()).arg(errors));
+          const auto status = health.value("status").toMap();
+          int by_status = 0;
+          for (auto it = status.begin(); it != status.end(); ++it) by_status += it.value().toInt();
+          self->check(by_status == rows.size(), QStringLiteral("status totals %1 = rows %2").arg(by_status).arg(rows.size()));
+          int bad_evidence = 0, verified = 0;
+          for (const auto& r : rows) {
+            const auto row = r.toMap();
+            if (row.value("inGameVerified").toBool()) ++verified;
+            for (const auto& f : row.value("findings").toList()) {
+              const auto m = f.toMap();
+              if (m.value("status").toString() == "CONFIRMADO" && (m.value("evidence").toString().isEmpty() || m.value("resource").toString().isEmpty()))
+                ++bad_evidence;
+            }
+          }
+          self->check(bad_evidence == 0, QStringLiteral("%1 confirmed findings without evidence or resource").arg(bad_evidence));
+          self->check(verified == 0, QStringLiteral("%1 rows claim an in-game verification").arg(verified));
+          QStringList codes;
+          const auto by_code = health.value("codes").toMap(), confirmed = health.value("confirmedCodes").toMap();
+          for (auto it = by_code.begin(); it != by_code.end(); ++it)
+            codes << QStringLiteral("%1=%2 (%3 confirmados)").arg(it.key()).arg(it.value().toInt()).arg(confirmed.value(it.key()).toInt());
+          self->log(QStringLiteral("npc health: %1 audited in %2 ms (%3 worker calls); CONFIRMADO %4, SOSPECHOSO %5, SIN_ERROR_DETECTADO %6; "
+                                   "%7 exempt; %8 with FaceGen shapes checked; codes %9")
+                        .arg(rows.size()).arg(scan.value("elapsedMs").toLongLong()).arg(scan.value("rpcCalls").toInt())
+                        .arg(status.value("CONFIRMADO").toInt()).arg(status.value("SOSPECHOSO").toInt()).arg(status.value("SIN_ERROR_DETECTADO").toInt())
+                        .arg(health.value("exempt").toInt()).arg(health.value("faceGenParsed").toInt()).arg(codes.join(", ")));
+          self->check(scan.value("maxBlockMs").toDouble() < 60.0,
+                      QStringLiteral("longest UI-thread block %1 ms (%2) < 60 ms").arg(scan.value("maxBlockMs").toDouble(), 0, 'f', 1)
+                          .arg(scan.value("maxBlockWhere").toString()));
+          QFile out(QDir(self->work_dir).filePath("npc-health-scan.json"));
+          if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(scan)).toJson());
+          self->step();
+        };
+        self->after(500, *wait);
+      });
+    } else if (name == "npc-health-repair") {
+      // Opt-in. Health scan of the real profile, then the reversible wig repair exported into this run's folder
+      // (never MO2's mods folder): every decision has a reason, and each NPC override changes only DefaultOutfit.
+      steps.push_back([self] {
+        self->studio->scanNpcHealth();
+        auto wait = std::make_shared<std::function<void()>>();
+        auto started = std::make_shared<QElapsedTimer>();
+        started->start();
+        *wait = [self, wait, started] {
+          if (self->studio->appearance_scan().value("running").toBool() && started->elapsed() < 30 * 60 * 1000) { self->after(500, *wait); return; }
+          self->check(self->studio->appearance_scan().value("stage").toString() == "done", "health scan finished");
+          self->studio->exportNpcHealthRepair(QDir(self->work_dir).filePath("repair"));
+          auto exported = std::make_shared<std::function<void()>>();
+          *exported = [self, exported, started] {
+            const auto repair = self->studio->npc_health_repair();
+            if (repair.value("state").toString() == "exporting" && started->elapsed() < 35 * 60 * 1000) { self->after(500, *exported); return; }
+            const auto state = repair.value("state").toString();
+            const auto decisions = repair.value("decisions").toList();
+            int planned = 0, reasons = 0;
+            for (const auto& d : decisions) {
+              const auto m = d.toMap();
+              if (m.value("repair").toBool()) ++planned;
+              if (!m.value("reason").toString().isEmpty()) ++reasons;
+              self->log(QStringLiteral("  %1 %2 (%3): %4 -- %5").arg(m.value("repair").toBool() ? "REPARA" : "NO REPARA",
+                                                                         m.value("name").toString(), m.value("formKey").toString(),
+                                                                         m.value("removed").toStringList().join(", "), m.value("reason").toString()));
+            }
+            self->check(reasons == decisions.size(), QStringLiteral("%1 decisions, all with a reason").arg(decisions.size()));
+            self->check(state == (planned > 0 ? "exported" : "nothing"),
+                        QStringLiteral("repair state %1 with %2 NPC planned (%3)").arg(state).arg(planned).arg(repair.value("message").toString()));
+            const auto result = repair.value("result").toMap();
+            if (planned > 0) {
+              self->check(QFileInfo::exists(result.value("zipPath").toString()), "repair ZIP written: " + result.value("zipPath").toString());
+              int only_outfit = 0, overrides = 0;
+              for (const auto& d : result.value("semanticDiff").toList()) {
+                ++overrides;
+                QStringList fields;
+                for (const auto& c : d.toMap().value("changes").toList()) fields << c.toMap().value("field").toString();
+                if (fields == QStringList{"DefaultOutfit"}) ++only_outfit;
+                self->log(QStringLiteral("  diff %1: %2").arg(d.toMap().value("npc").toString(), fields.join(", ")));
+              }
+              self->check(overrides == planned && only_outfit == planned,
+                          QStringLiteral("%1 NPC overrides, %2 change only DefaultOutfit (readback)").arg(overrides).arg(only_outfit));
+            }
+            QFile out(QDir(self->work_dir).filePath("npc-health-repair.json"));
+            if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(repair)).toJson());
+            self->step();
+          };
+          self->after(500, *exported);
+        };
+        self->after(500, *wait);
+      });
     } else if (name == "appearance-scan") {
       // Control map of every unique NPC of the real profile: totals add up, flagged NPCs keep their
       // findings when opened one by one (where the facial measurement may only downgrade a mismatch),
@@ -5687,6 +5792,282 @@ struct Stress : std::enable_shared_from_this<Stress> {
         QFile out(QDir(self->work_dir).filePath("dress.json"));
         if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(*report).toJson());
         self->step();
+      });
+    } else if (name == "npc-fidelity") {
+      // NPC Fidelity Engine: for every NPC (SNS_STRESS_NPCS, default Serana) the fidelity report of the full character view — what the
+      // game would draw per piece against what this view draws, findings by category (data / compatibility / renderer) with their
+      // evidence, garment fit against the body, hidden skin left uncovered, and where every resource came from. Then a fast switch
+      // (Lydia, then the first NPC before Lydia finishes) must end with the first NPC's report, never Lydia's. Writes
+      // fidelity-<npc>.json and a capture per NPC. Not in "all".
+      QStringList npcs = {QStringLiteral("002B6C:Dawnguard.esm")};
+      if (qEnvironmentVariableIsSet("SNS_STRESS_NPCS")) npcs = qEnvironmentVariable("SNS_STRESS_NPCS").split(',', Qt::SkipEmptyParts);
+      // Waits for the fidelity report of `form_key`; with `armors`, for the report whose outfit pieces are exactly those.
+      const auto wait_report = [self](const QString& form_key, std::function<void()> next, QStringList armors = {}) {
+        auto started = std::make_shared<QElapsedTimer>();
+        started->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        for (auto& a : armors) a = a.trimmed().toLower();
+        armors.sort();
+        *poll = [self, poll, started, form_key, next, armors] {
+          const auto report = self->scene()->fidelity();
+          bool same_outfit = true;
+          if (!armors.isEmpty()) {
+            QStringList worn;
+            for (const auto& p : report.value("pieces").toList())
+              if (p.toMap().value("source").toString() == QLatin1String("outfit")) worn << p.toMap().value("armorFormKey").toString().toLower();
+            worn.sort();
+            same_outfit = worn == armors;
+          }
+          if (!report.isEmpty() && same_outfit && report.value("npcFormKey").toString().compare(form_key, Qt::CaseInsensitive) == 0) {
+            self->log(QStringLiteral("fidelity report of %1 ready %2 ms after the scene").arg(form_key).arg(started->elapsed()));
+            next();
+            return;
+          }
+          if (started->elapsed() > 300000) {
+            self->check(false, form_key + QStringLiteral(": fidelity report not ready after 300 s"));
+            next();
+            return;
+          }
+          self->after(250, *poll);
+        };
+        self->after(50, *poll);
+      };
+      for (const auto& form_key : npcs) {
+        steps.push_back([self, form_key] {
+          self->studio->selectNpc(form_key);
+          self->then_idle();
+        });
+        steps.push_back([self, form_key, wait_report] {
+          wait_report(form_key, [self, form_key] {
+            const auto report = self->scene()->fidelity();
+            const auto body = report.value("body").toMap();
+            const auto counts = report.value("counts").toMap();
+            const auto pieces = report.value("pieces").toList();
+            const auto findings = report.value("findings").toList();
+            int matching = 0;
+            for (const auto& p : pieces) matching += p.toMap().value("viewerMatchesGame").toBool() ? 1 : 0;
+            self->log(QStringLiteral("fidelity %1 (%2): body %3 «%4» @ %5; %6 pieces (%7 as in game); findings data %8 compatibility %9 renderer %10; "
+                                     "export blockers %11; analysis %12 ms (fit %13, exposure %14)")
+                          .arg(form_key, self->appearance()->npc_label(), body.value("source").toString(), body.value("mesh").toString(),
+                               body.value("provider").toString())
+                          .arg(pieces.size()).arg(matching).arg(counts.value("data").toInt()).arg(counts.value("compatibility").toInt())
+                          .arg(counts.value("renderer").toInt()).arg(report.value("exportBlockers").toList().size())
+                          .arg(report.value("analysisMs").toDouble(), 0, 'f', 0)
+                          .arg(report.value("fitMs").toDouble(), 0, 'f', 0).arg(report.value("exposureMs").toDouble(), 0, 'f', 0));
+            for (const auto& p : pieces) {
+              const auto m = p.toMap();
+              self->log(QStringLiteral("  piece %1 [%2] game=%3 viewer=%4 %5 drawn %6 hidden %7 findings %8")
+                            .arg(m.value("armorFormKey").toString(), m.value("name").toString(), m.value("game").toString(), m.value("viewer").toString(),
+                                 m.value("viewerMatchesGame").toBool() ? QStringLiteral("MATCH") : QStringLiteral("DIFFERS"))
+                            .arg(m.value("shapesDrawn").toInt()).arg(m.value("shapesHidden").toInt())
+                            .arg(m.value("findings").toStringList().join(',')));
+            }
+            bool findings_complete = true;
+            for (const auto& f : findings) {
+              const auto m = f.toMap();
+              findings_complete = findings_complete && !m.value("category").toString().isEmpty() && !m.value("confidence").toString().isEmpty() &&
+                                  !m.value("message").toString().isEmpty();
+              self->log(QStringLiteral("  finding %1/%2/%3 %4 [%5] %6 | %7 | %8")
+                            .arg(m.value("category").toString(), m.value("severity").toString(), m.value("confidence").toString(), m.value("code").toString(),
+                                 m.value("piece").toString().left(60), m.value("message").toString().left(220), m.value("evidence").toString().left(260),
+                                 m.value("subject").toString().right(90)));
+            }
+            for (const auto& f : report.value("fits").toList()) {
+              const auto m = f.toMap();
+              self->log(QStringLiteral("  fit %1 / %2 vs %3: %4 inside %5/%6 (%7 %) depth %8 gap %9")
+                            .arg(m.value("piece").toString().left(40), m.value("shape").toString(), m.value("bodyShape").toString(), m.value("verdict").toString())
+                            .arg(m.value("inside").toInt()).arg(m.value("nearBody").toInt()).arg(m.value("insideRatio").toDouble() * 100.0, 0, 'f', 1)
+                            .arg(m.value("maxDepth").toDouble(), 0, 'f', 2).arg(m.value("meanGap").toDouble(), 0, 'f', 2));
+            }
+            for (const auto& e : report.value("exposed").toList()) {
+              const auto m = e.toMap();
+              self->log(QStringLiteral("  hidden skin %1: %2 of %3 vertices exposed (%4 %), height %5..%6")
+                            .arg(m.value("piece").toString()).arg(m.value("exposed").toInt()).arg(m.value("vertices").toInt())
+                            .arg(m.value("exposedRatio").toDouble() * 100.0, 0, 'f', 1).arg(m.value("exposedMinZ").toDouble(), 0, 'f', 1)
+                            .arg(m.value("exposedMaxZ").toDouble(), 0, 'f', 1));
+            }
+            int meshes = 0, missing = 0;
+            for (const auto& r : report.value("resources").toList()) {
+              const auto m = r.toMap();
+              if (m.value("kind").toString() == QLatin1String("mesh")) ++meshes;
+              if (m.value("provider").toString() == QLatin1String("missing")) ++missing;
+            }
+            self->log(QStringLiteral("  resources: %1 entries, %2 meshes, %3 missing").arg(report.value("resources").toList().size()).arg(meshes).arg(missing));
+            self->check(!pieces.isEmpty(), form_key + QStringLiteral(": the report has a verdict per piece"));
+            self->check(meshes > 0, form_key + QStringLiteral(": the report traces the meshes to their MO2 providers"));
+            self->check(findings_complete, form_key + QStringLiteral(": every finding has a category, a confidence and a message"));
+            const QString stem = QString(form_key).replace(':', '_');
+            QFile out(QDir(self->work_dir).filePath(QStringLiteral("fidelity-%1.json").arg(stem)));
+            if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson());
+            self->window->grabWindow().save(QDir(self->work_dir).filePath(QStringLiteral("fidelity-%1.png").arg(stem)));
+            // The «Fidelidad» tab of the creator: its findings are listed and «Aislar» / «Ver todo» really change what the view draws.
+            QObject* tabs = nullptr;
+            for (auto* o : self->window->findChildren<QObject*>())
+              if (o->objectName() == QLatin1String("creatorRightTabs")) tabs = o;
+            if (tabs) tabs->setProperty("currentIndex", 6);
+            self->after(800, [self, stem] {
+              std::function<void(QQuickItem*, const QString&, QList<QQuickItem*>&)> collect = [&](QQuickItem* item, const QString& name,
+                                                                                                  QList<QQuickItem*>& out) {
+                for (auto* child : item->childItems()) {
+                  if (child->objectName() == name && child->isVisible()) out << child;
+                  collect(child, name, out);
+                }
+              };
+              QList<QQuickItem*> findings, isolate, restore;
+              collect(self->window->contentItem(), QStringLiteral("fidelityFinding"), findings);
+              collect(self->window->contentItem(), QStringLiteral("fidelityIsolateFinding"), isolate);
+              collect(self->window->contentItem(), QStringLiteral("fidelityRestore"), restore);
+              self->check(!findings.isEmpty(), QStringLiteral("the Fidelidad tab lists the findings (%1)").arg(findings.size()));
+              self->window->grabWindow().save(QDir(self->work_dir).filePath(QStringLiteral("fidelity-panel-%1.png").arg(stem)));
+              if (isolate.isEmpty() || restore.isEmpty()) {
+                self->check(false, QStringLiteral("the Fidelidad tab has «Aislar» and «Ver todo»"));
+                self->step();
+                return;
+              }
+              // Prefer a finding about a garment shape the game leaves out (the most telling one to look at), else the first one.
+              const auto row_of = [](QQuickItem* item) {
+                while (item && item->objectName() != QLatin1String("fidelityFinding")) item = item->parentItem();
+                return item;
+              };
+              QQuickItem* button = isolate.front();
+              for (auto* candidate : isolate) {
+                const auto* r = row_of(candidate);
+                if (r && r->property("modelData").toMap().value("code").toString() == QLatin1String("PartitionNotInAddonSlots")) button = candidate;
+              }
+              QQuickItem* row = row_of(button);
+              const auto ids = row ? row->property("modelData").toMap().value("partIds").toStringList() : QStringList{};
+              self->log(QStringLiteral("isolating finding %1 [%2]").arg(row ? row->property("modelData").toMap().value("code").toString() : QString(),
+                                                                         row ? row->property("modelData").toMap().value("piece").toString() : QString()));
+              QMetaObject::invokeMethod(button, "clicked");
+              self->after(400, [self, ids, stem, restore_button = QPointer<QQuickItem>(restore.front())] {
+                const auto visibility = self->scene()->visibility();
+                int shown = 0, wrong = 0;
+                for (auto it = visibility.begin(); it != visibility.end(); ++it) {
+                  const bool should = ids.contains(it.key());
+                  shown += it.value().toBool() ? 1 : 0;
+                  wrong += it.value().toBool() != should ? 1 : 0;
+                }
+                self->check(!ids.isEmpty() && wrong == 0,
+                            QStringLiteral("«Aislar» shows exactly the finding's parts (%1 shown, %2 wrong, parts %3)").arg(shown).arg(wrong).arg(ids.join(',')));
+                self->window->grabWindow().save(QDir(self->work_dir).filePath(QStringLiteral("fidelity-isolated-%1.png").arg(stem)));
+                if (restore_button) QMetaObject::invokeMethod(restore_button, "clicked");
+                self->after(400, [self] {
+                  const auto visibility = self->scene()->visibility();
+                  int wrong = 0;
+                  for (const auto& part : self->scene()->parts()) {
+                    const auto m = part.toMap();
+                    if (visibility.value(m.value("id").toString()).toBool() != m.value("shownByDefault").toBool()) ++wrong;
+                  }
+                  self->check(wrong == 0, QStringLiteral("«Ver todo» restores the game's visibility (%1 parts differ)").arg(wrong));
+                  self->step();
+                });
+              });
+            });
+          });
+        });
+      }
+      // Outfit variants on the first NPC (SNS_STRESS_FIDELITY_VARIANTS="label=ARMO,ARMO;label=ARMO,..."): each is worn through the
+      // outfit editor (draft only, nothing is written) and measured; the log compares the findings of the first variant with the others.
+      // Original against modified: e.g. a garment as published against the copy whose addon releases a slot.
+      struct Variant {
+        QString label;
+        QStringList armors;
+      };
+      std::vector<Variant> variants;
+      for (const auto& chunk : qEnvironmentVariable("SNS_STRESS_FIDELITY_VARIANTS").split(';', Qt::SkipEmptyParts)) {
+        const auto eq = chunk.indexOf('=');
+        if (eq <= 0) continue;
+        variants.push_back({chunk.left(eq).trimmed(), chunk.mid(eq + 1).split(',', Qt::SkipEmptyParts)});
+      }
+      auto variant_findings = std::make_shared<std::vector<std::pair<QString, QStringList>>>();
+      for (const auto& variant : variants) {
+        const QString target = npcs.value(0);
+        steps.push_back([self, target, variant] {
+          self->studio->selectNpc(target);
+          self->studio->outfit()->clearPieces();
+          for (const auto& k : variant.armors) self->studio->equipArmorByFormKey(k.trimmed());
+          auto clock = std::make_shared<QElapsedTimer>();
+          clock->start();
+          auto poll = std::make_shared<std::function<void()>>();
+          *poll = [self, variant, clock, poll] {
+            if (self->studio->outfit()->pieces().size() < variant.armors.size() && clock->elapsed() < 30000) {
+              self->after(200, *poll);
+              return;
+            }
+            self->check(self->studio->outfit()->pieces().size() == variant.armors.size(),
+                        QStringLiteral("variant %1: the draft wears its %2 pieces").arg(variant.label).arg(variant.armors.size()));
+            self->then_idle();
+          };
+          self->after(200, *poll);
+        });
+        steps.push_back([self, target, variant, wait_report, variant_findings] {
+          wait_report(target, [self, target, variant, variant_findings] {
+            const auto report = self->scene()->fidelity();
+            QStringList codes;
+            for (const auto& f : report.value("findings").toList()) {
+              const auto m = f.toMap();
+              if (m.value("category").toString() == QLatin1String("renderer")) continue;
+              codes << QStringLiteral("%1 [%2]").arg(m.value("code").toString(), m.value("piece").toString().left(50));
+              self->log(QStringLiteral("  variant %1 finding %2/%3/%4 %5 [%6] %7 | %8")
+                            .arg(variant.label, m.value("category").toString(), m.value("severity").toString(), m.value("confidence").toString(),
+                                 m.value("code").toString(), m.value("piece").toString().left(60), m.value("message").toString().left(200),
+                                 m.value("evidence").toString().left(220)));
+            }
+            for (const auto& pc : report.value("pieces").toList()) {
+              const auto m = pc.toMap();
+              self->log(QStringLiteral("  variant %1 piece [%2] game=%3 viewer=%4 %5").arg(variant.label, m.value("name").toString(),
+                            m.value("game").toString(), m.value("viewer").toString(),
+                            m.value("viewerMatchesGame").toBool() ? QStringLiteral("MATCH") : QStringLiteral("DIFFERS")));
+            }
+            codes.sort();
+            variant_findings->push_back({variant.label, codes});
+            const QString stem = QString(target).replace(':', '_') + "-" + variant.label;
+            QFile out(QDir(self->work_dir).filePath(QStringLiteral("fidelity-%1.json").arg(stem)));
+            if (out.open(QIODevice::WriteOnly)) out.write(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson());
+            self->window->grabWindow().save(QDir(self->work_dir).filePath(QStringLiteral("fidelity-%1.png").arg(stem)));
+            self->step();
+          }, variant.armors);
+        });
+      }
+      if (variants.size() > 1) {
+        steps.push_back([self, variant_findings] {
+          const auto& base = variant_findings->front();
+          for (std::size_t i = 1; i < variant_findings->size(); ++i) {
+            const auto& other = (*variant_findings)[i];
+            QStringList only_base, only_other;
+            for (const auto& c : base.second)
+              if (!other.second.contains(c)) only_base << c;
+            for (const auto& c : other.second)
+              if (!base.second.contains(c)) only_other << c;
+            self->log(QStringLiteral("variants %1 -> %2: gone %3 | new %4").arg(base.first, other.first,
+                          only_base.isEmpty() ? QStringLiteral("(none)") : only_base.join("; "),
+                          only_other.isEmpty() ? QStringLiteral("(none)") : only_other.join("; ")));
+          }
+          self->studio->outfit()->clearPieces();
+          self->then_idle();
+        });
+      }
+      // Fast switch: Lydia, then the first NPC 300 ms later. The cancelled build of Lydia must not leave its report behind.
+      const QString first = npcs.value(0);
+      const QString other = QStringLiteral("0A2C8E:Skyrim.esm");
+      steps.push_back([self, other, first] {
+        self->studio->selectNpc(other);
+        self->after(300, [self, first] {
+          self->studio->selectNpc(first);
+          self->then_idle();
+        });
+      });
+      steps.push_back([self, first, other, wait_report] {
+        wait_report(first, [self, first, other] {
+          const auto report = self->scene()->fidelity();
+          self->check(report.value("npcFormKey").toString().compare(first, Qt::CaseInsensitive) == 0,
+                      QStringLiteral("after the fast switch the report is the last NPC's (%1), not %2's").arg(first, other));
+          self->after(1500, [self, first] {  // a late report of the cancelled build would land here
+            self->check(self->scene()->fidelity().value("npcFormKey").toString().compare(first, Qt::CaseInsensitive) == 0,
+                        QStringLiteral("no stale report replaces %1's afterwards").arg(first));
+            self->step();
+          });
+        });
       });
     } else if (name == "outfit-diagnosis") {
       // SER-01..03: what the 3D view draws of each NPC's default outfit and why. For every NPC (SNS_STRESS_NPCS, default Serana and

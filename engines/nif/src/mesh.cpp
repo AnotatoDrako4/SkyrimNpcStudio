@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <set>
 #include <unordered_map>
 
 #include "sns/core/error.hpp"
@@ -141,6 +142,23 @@ std::vector<StringExtraData> string_extra_data(std::string_view bytes, std::stri
   if (auto* root = nif.GetRootNode()) collect({}, root->extraDataRefs);
   for (auto* shape : nif.GetShapes()) collect(shape->name.get(), shape->extraDataRefs);
   return out;
+}
+
+std::vector<std::string> texture_dependencies(std::string_view bytes, std::string_view label) {
+  nifly::NifFile nif;
+  load_nif(nif, bytes, label);
+  std::set<std::string> paths;
+  for (auto* shape : nif.GetShapes()) {
+    for (std::uint32_t slot = 0; slot < 9; ++slot) {
+      std::string raw;
+      nif.GetTextureSlot(shape, raw, slot);
+      const auto path = normalize_texture_path(raw);
+      if (path.empty()) continue;
+      if (!text::is_safe_relative_path(path)) throw Error(ErrorKind::Parse, std::string(label) + ": unsafe texture dependency");
+      paths.insert(path);
+    }
+  }
+  return {paths.begin(), paths.end()};
 }
 
 MeshFile load_mesh(std::string_view bytes, std::string_view label) {
@@ -306,6 +324,20 @@ MeshFile load_mesh(std::string_view bytes, std::string_view label) {
       std::vector<int> tri_parts;
       if (nif.GetShapePartitions(shape, parts, tri_parts)) {
         for (const auto& p : parts) s.partitions.push_back(p.partID);
+        // tri_parts follows shape->GetTriangles(), the list `indices` was built from: skip the same corrupt triangles.
+        if (tri_parts.size() == tris.size() && !parts.empty()) {
+          std::vector<std::uint16_t> per_triangle;
+          per_triangle.reserve(s.indices.size() / 3);
+          bool complete = true;
+          for (std::size_t k = 0; k < tris.size() && complete; ++k) {
+            const auto& t = tris[k];
+            if (t.p1 >= count || t.p2 >= count || t.p3 >= count) continue;
+            const int index = tri_parts[k];
+            if (index < 0 || static_cast<std::size_t>(index) >= parts.size()) complete = false;
+            else per_triangle.push_back(parts[static_cast<std::size_t>(index)].partID);
+          }
+          if (complete && per_triangle.size() * 3 == s.indices.size()) s.triangle_partitions = std::move(per_triangle);
+        }
       }
       if (const auto* ref = shape->SkinInstanceRef()) {
         if (const auto* skin = nif.GetHeader().GetBlock<nifly::NiSkinInstance>(*ref)) {

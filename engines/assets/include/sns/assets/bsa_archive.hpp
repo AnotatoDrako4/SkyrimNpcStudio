@@ -28,7 +28,7 @@ class BsaArchive {
   // Keys are Data-relative, lower-case, '\' separated ("meshes\actors\character\...\skeleton.nif").
   [[nodiscard]] bool contains(std::string_view data_path) const;
   // Decompressed file contents, or nullopt if the archive does not contain the path.
-  [[nodiscard]] std::optional<std::string> read(std::string_view data_path) const;
+  [[nodiscard]] std::optional<std::string> read(std::string_view data_path, std::uint64_t max_bytes = kMaxFileBytes) const;
   [[nodiscard]] std::vector<std::string> list() const;
 
  private:
@@ -39,7 +39,7 @@ class BsaArchive {
   };
 
   BsaArchive() = default;
-  std::string read_entry(const Entry& entry, std::string_view key) const;
+  std::string read_entry(const Entry& entry, std::string_view key, std::uint64_t max_bytes) const;
 
   std::filesystem::path path_;
   std::uint32_t version_ = 0;

@@ -10,17 +10,11 @@
 #include <filesystem>
 #include <fstream>
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 #include "diagnostics/crash_diagnostics.hpp"
+#include "stale_temp_folders.hpp"
+#ifdef _WIN32
+#include <psapi.h>
+#endif
 #include "sns/core/text.hpp"
 #include "sns/gltf/gltf_inspect.hpp"
 
@@ -168,17 +162,6 @@ void remove_below(const QString& root, const QString& folder) {
   if (!root.isEmpty() && !folder.isEmpty() && folder.startsWith(root + '/')) QDir(folder).removeRecursively();
 }
 
-#ifdef _WIN32
-bool process_alive(qint64 pid) {
-  const HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
-  if (!h) return GetLastError() == ERROR_ACCESS_DENIED;  // exists but belongs to someone else
-  DWORD code = 0;
-  const bool alive = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
-  CloseHandle(h);
-  return alive;
-}
-#endif
-
 }  // namespace
 
 struct ForgeSceneViewModel::Result {
@@ -188,20 +171,28 @@ struct ForgeSceneViewModel::Result {
   QString staged_folder;
   QString failure;        // exception or staging failure
   bool cancelled = false;
+  qint64 validate_ms = 0;  // worker thread: read + glTF validation
+  qint64 stage_ms = 0;     // worker thread: writing the validated bytes
 };
 
+namespace {
+// Working set of the studio in MiB (Windows), for the timings of a load.
+double working_set_mb() {
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS counters{};
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+    return static_cast<double>(counters.WorkingSetSize) / (1024.0 * 1024.0);
+#endif
+  return 0;
+}
+}  // namespace
+
 ForgeSceneViewModel::ForgeSceneViewModel(QObject* parent) : QObject(parent) {
+  parts_model_ = new ForgePartsModel(&parts_, this);
   pool_.setMaxThreadCount(1);
   const QDir temp = QDir::temp();
   root_ = temp.filePath(QStringLiteral("sns-forge-preview-%1").arg(QCoreApplication::applicationPid()));
-#ifdef _WIN32
-  // Staging folders of studios that ended without cleaning up (crash, kill).
-  for (const auto& name : temp.entryList({QStringLiteral("sns-forge-preview-*")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
-    bool ok = false;
-    const auto pid = name.section('-', -1).toLongLong(&ok);
-    if (ok && pid != QCoreApplication::applicationPid() && !process_alive(pid)) QDir(temp.filePath(name)).removeRecursively();
-  }
-#endif
+  remove_stale_temp_folders(QStringLiteral("sns-forge-preview-"));  // staging of studios that ended without cleaning up
 }
 
 ForgeSceneViewModel::~ForgeSceneViewModel() {
@@ -226,10 +217,20 @@ void ForgeSceneViewModel::set_state(const QString& state, const QString& message
 
 void ForgeSceneViewModel::clear_parts() {
   if (parts_.isEmpty() && selected_ == -1 && part_match_.isEmpty()) return;
+  const bool had_selection = selected_ != -1;
+  parts_model_->begin_reset();
   parts_.clear();
+  parts_model_->end_reset();
   selected_ = -1;
+  any_hidden_ = false;
+  any_shown_ = false;
+  isolated_ = -1;
   part_match_.clear();
   emit partsChanged();
+  if (had_selection) {
+    emit selectionChanged();
+    emit selectedPartInfoChanged();
+  }
 }
 
 void ForgeSceneViewModel::clear_source() {
@@ -254,6 +255,8 @@ void ForgeSceneViewModel::load(const QString& path_or_url) {
   path_ = next_path;
   inspection_.clear();
   rendered_.clear();
+  timings_.clear();
+  load_clock_.start();
   clear_source();
   remove_staging(staging_);
   staging_.clear();
@@ -275,9 +278,12 @@ void ForgeSceneViewModel::load(const QString& path_or_url) {
     auto result = std::make_shared<Result>();
     result->operation = op;
     diag::Operation diagnostics("forge.validate", diag::next_task_id(), path.toStdString());
+    QElapsedTimer clock;
+    clock.start();
     try {
       auto asset = gltf::load_and_inspect(std::filesystem::path(path.toStdWString()), preview_limits(),
                                           [cancel] { return cancel->load(); });
+      result->validate_ms = clock.restart();
       result->inspection = std::move(asset.inspection);
       result->cancelled = cancel->load();
       if (result->inspection.loadable() && !result->cancelled) {
@@ -298,6 +304,7 @@ void ForgeSceneViewModel::load(const QString& path_or_url) {
         for (const auto& [relative, bytes] : asset.resources) write(dir / text::path_from_utf8(relative), bytes);
         result->staged_folder = folder;
         result->staged_file = QString::fromStdWString((dir / main_name).wstring());
+        result->stage_ms = clock.elapsed();
       }
       diagnostics.succeed();
     } catch (const std::exception& e) {
@@ -338,21 +345,38 @@ void ForgeSceneViewModel::finish(const std::shared_ptr<Result>& r) {
     return;
   }
   staging_ = r->staged_folder;
+  timings_ = {{"validateMs", r->validate_ms}, {"stageMs", r->stage_ms},
+              {"fileBytes", static_cast<qulonglong>(r->inspection.file_bytes)}};
   set_state(QStringLiteral("loading"), tr("Cargando %1 en el visor…").arg(file_name()), details_of(r->inspection));
-  // A short delay lets the viewport paint the loading state: RuntimeLoader then imports the asset
-  // synchronously on the GUI thread.
+  // A short delay lets the viewport paint the loading state before the viewport's loader starts.
   const auto url = QUrl::fromLocalFile(r->staged_file);
   QTimer::singleShot(50, this, [this, op = r->operation, url] {
     if (op != operation_) return;
     source_ = url;
+    // The viewport's loader reacts to this signal inside the emit: whatever it does synchronously holds the GUI thread
+    // for this long (the whole import, with Qt's RuntimeLoader).
+    QElapsedTimer held;
+    held.start();
     emit sourceChanged();
+    timings_["sourceSwitchMs"] = held.elapsed();
+    if (!timings_.contains("uiBlockMs")) timings_["uiBlockMs"] = held.elapsed();
   });
+}
+
+void ForgeSceneViewModel::reportImportCost(const QUrl& loaded_source, double import_ms, double ui_block_ms) {
+  if (source_.isEmpty() || loaded_source != source_) return;
+  timings_["importMs"] = import_ms;
+  timings_["uiBlockMs"] = qMax(ui_block_ms, timings_.value("sourceSwitchMs").toDouble());
+  emit changed();
 }
 
 void ForgeSceneViewModel::reportLoaderStatus(const QUrl& loaded_source, int status, const QString& error_string) {
   if (source_.isEmpty() || loaded_source != source_) return;  // a report about an older asset
   if (status == 1 && state_ != QStringLiteral("loaded")) {
     diag::record("forge", ("preview #" + std::to_string(operation_) + " loaded by RuntimeLoader").c_str());
+    timings_["totalMs"] = load_clock_.elapsed();
+    timings_["workingSetMb"] = working_set_mb();
+    if (!timings_.contains("importMs")) timings_["importMs"] = timings_.value("sourceSwitchMs");  // synchronous import
     set_state(QStringLiteral("loaded"), {}, details_);
     emit frameRequested();  // on the validated bounds until the rendered ones arrive
   } else if (status == 2) {
@@ -435,31 +459,115 @@ void ForgeSceneViewModel::reportParts(const QUrl& loaded_source, const QVariantL
     }
     parts << part;
   }
+  if (!same_parts) parts_model_->begin_reset();
   parts_ = parts;
   refresh_visibility();
+  if (!same_parts) parts_model_->end_reset();
+  else if (!parts_.isEmpty()) parts_model_->rows_changed(0, static_cast<int>(parts_.size()) - 1);
   part_match_ = parts_.isEmpty() ? QString() : !by_order ? QStringLiteral("none") : consistent ? QStringLiteral("order") : QStringLiteral("order-unconfirmed");
+  const int previous_selection = selected_;
   if (!same_parts || selected_ >= parts_.size()) selected_ = -1;
   if (!same_parts) {
     diag::record("forge", QStringLiteral("preview #%1: %2 part(s), %3 glTF mesh node(s), match %4")
                               .arg(operation_).arg(parts_.size()).arg(nodes.size()).arg(part_match_).toStdString().c_str());
   }
   emit partsChanged();
+  if (selected_ != previous_selection) emit selectionChanged();
+  emit selectedPartInfoChanged();
 }
 
 void ForgeSceneViewModel::selectPart(int index) {
   const int selected = index >= 0 && index < parts_.size() ? index : -1;
   if (selected == selected_) return;
   selected_ = selected;
+  emit selectionChanged();
+  emit selectedPartInfoChanged();
+}
+
+QVariantMap ForgeSceneViewModel::partAt(int index) const {
+  return index >= 0 && index < parts_.size() ? parts_[index].toMap() : QVariantMap();
+}
+
+QVariantList ForgeSceneViewModel::partVisibility() const {
+  QVariantList out;
+  out.reserve(parts_.size());
+  for (const auto& p : parts_) out << p.toMap().value(QStringLiteral("visible"));
+  return out;
+}
+
+int ForgeSceneViewModel::findPart(const QString& name) const {
+  const auto target = name.trimmed().toLower();
+  if (target.isEmpty()) return -1;
+  for (qsizetype i = 0; i < parts_.size(); ++i) {
+    const auto p = parts_[i].toMap();
+    const auto label = p.value(QStringLiteral("label")).toString().toLower();
+    const auto node = p.value(QStringLiteral("nodeName")).toString().toLower();
+    const auto mesh = p.value(QStringLiteral("meshName")).toString().toLower();
+    if (label == target || node == target || mesh == target || label.contains(target) || (!label.isEmpty() && target.contains(label)))
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+std::vector<ForgeSceneViewModel::PartView> ForgeSceneViewModel::visibility_snapshot() const {
+  std::vector<PartView> out;
+  out.reserve(static_cast<std::size_t>(parts_.size()));
+  for (const auto& p : parts_) {
+    const auto m = p.toMap();
+    out.push_back({m.value(QStringLiteral("visible")).toBool(), m.value(QStringLiteral("shown")).toBool(),
+                   m.value(QStringLiteral("hiddenBy")).toString()});
+  }
+  return out;
+}
+
+void ForgeSceneViewModel::publish_visibility(const std::vector<PartView>& before) {
+  const auto after = visibility_snapshot();
+  const auto changed = [&](std::size_t i) { return i >= before.size() || !(before[i] == after[i]); };
+  int first = -1;
+  for (std::size_t i = 0; i <= after.size(); ++i) {
+    const bool differs = i < after.size() && changed(i);
+    if (differs && first < 0) first = static_cast<int>(i);
+    if (!differs && first >= 0) {
+      parts_model_->rows_changed(first, static_cast<int>(i) - 1);
+      first = -1;
+    }
+  }
+  if (selected_ >= 0 && static_cast<std::size_t>(selected_) < after.size() && changed(static_cast<std::size_t>(selected_)))
+    emit selectedPartInfoChanged();
+}
+
+void ForgeSceneViewModel::isolatePart(int index) {
+  if (index < 0 || index >= parts_.size()) return;
+  if (isolated_ == index) {
+    showAllParts();
+    return;
+  }
+  std::vector<char> keep(static_cast<std::size_t>(parts_.size()), 0);
+  // Parents always come before their children (reportParts), so this chain ends.
+  for (int a = index; a >= 0 && a < parts_.size() && !keep[static_cast<std::size_t>(a)];
+       a = parts_[a].toMap().value(QStringLiteral("parent")).toInt())
+    keep[static_cast<std::size_t>(a)] = 1;
+  const auto before = visibility_snapshot();
+  for (qsizetype i = 0; i < parts_.size(); ++i) {
+    auto part = parts_[i].toMap();
+    part.insert(QStringLiteral("visible"), keep[static_cast<std::size_t>(i)] != 0);
+    parts_[i] = part;
+  }
+  refresh_visibility();
+  publish_visibility(before);
   emit partsChanged();
+  selectPart(index);
 }
 
 void ForgeSceneViewModel::setPartVisible(int index, bool visible) {
   if (index < 0 || index >= parts_.size()) return;
   auto part = parts_[index].toMap();
   if (part.value(QStringLiteral("visible")).toBool() == visible) return;
+  const auto before = visibility_snapshot();
   part.insert(QStringLiteral("visible"), visible);
   parts_[index] = part;
   refresh_visibility();
+  publish_visibility(before);
   emit partsChanged();
 }
 
@@ -480,10 +588,36 @@ void ForgeSceneViewModel::refresh_visibility() {
     part.insert(QStringLiteral("shown"), part.value(QStringLiteral("visible")).toBool() && hidden_by.isEmpty());
     parts_[i] = part;
   }
+  any_shown_ = false;
+  for (const auto& p : parts_) any_shown_ = any_shown_ || p.toMap().value(QStringLiteral("shown")).toBool();
+  // isolatedPart: the deepest visible part when every visible part is on its ancestor chain and something is hidden.
+  any_hidden_ = false;
+  isolated_ = -1;
+  int visible_count = 0, deepest = -1, deepest_depth = -1;
+  std::vector<int> depth(static_cast<std::size_t>(parts_.size()), 0);
+  std::vector<int> parent_of(static_cast<std::size_t>(parts_.size()), -1);
+  std::vector<char> visible(static_cast<std::size_t>(parts_.size()), 0);
+  for (qsizetype i = 0; i < parts_.size(); ++i) {
+    const auto part = parts_[i].toMap();
+    const int parent = part.value(QStringLiteral("parent")).toInt();
+    const auto at = static_cast<std::size_t>(i);
+    parent_of[at] = parent >= 0 && parent < i ? parent : -1;
+    depth[at] = parent_of[at] >= 0 ? depth[static_cast<std::size_t>(parent_of[at])] + 1 : 0;
+    visible[at] = part.value(QStringLiteral("visible")).toBool() ? 1 : 0;
+    if (!visible[at]) { any_hidden_ = true; continue; }
+    ++visible_count;
+    if (depth[at] > deepest_depth) { deepest_depth = depth[at]; deepest = static_cast<int>(i); }
+  }
+  if (any_hidden_ && deepest >= 0) {
+    int on_chain = 0;
+    for (int a = deepest; a >= 0; a = parent_of[static_cast<std::size_t>(a)]) on_chain += visible[static_cast<std::size_t>(a)];
+    if (on_chain == visible_count) isolated_ = deepest;
+  }
 }
 
 void ForgeSceneViewModel::showAllParts() {
   bool any = false;
+  const auto before = visibility_snapshot();
   for (auto& p : parts_) {
     auto part = p.toMap();
     if (part.value(QStringLiteral("visible")).toBool()) continue;
@@ -493,6 +627,7 @@ void ForgeSceneViewModel::showAllParts() {
   }
   if (!any) return;
   refresh_visibility();
+  publish_visibility(before);
   emit partsChanged();
 }
 

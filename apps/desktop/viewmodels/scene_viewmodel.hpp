@@ -47,6 +47,9 @@ class SceneViewModel : public QObject {
   // {state: "none" | "ready", verdict, message, worst, worstRole, codes, caveats, head: {label, color}, pairs: [{role, label, color,
   // deltaE}]}. "none" while nothing is installed.
   Q_PROPERTY(QVariantMap skinMatch READ skin_match NOTIFY changed)
+  // NPC fidelity report (sns/rendering/fidelity.hpp) of the installed scene: game vs viewer per piece, findings by category
+  // (data / compatibility / renderer), garment fit, hidden skin exposure, resource ledger. Empty for portraits and piece views.
+  Q_PROPERTY(QVariantMap fidelity READ fidelity NOTIFY fidelityChanged)
   Q_PROPERTY(QVector3D center READ center NOTIFY changed)
   Q_PROPERTY(float radius READ radius NOTIFY changed)
   Q_PROPERTY(QQuick3DGeometry* skeleton READ skeleton NOTIFY changed)
@@ -75,6 +78,7 @@ class SceneViewModel : public QObject {
   QVariantList covered_body_diagnostics() const { return covered_body_diagnostics_; }
   QVariantList body_morphs() const { return body_morphs_; }
   QVariantMap body_morph_summary() const { return body_morph_summary_.isEmpty() ? QVariantMap{{"verdict", "none"}} : body_morph_summary_; }
+  QVariantMap fidelity() const { return fidelity_; }
   QVariantMap skin_match() const { return skin_match_.isEmpty() ? QVariantMap{{"state", "none"}} : skin_match_; }
   QVector3D center() const { return center_; }
   float radius() const { return radius_; }
@@ -104,6 +108,8 @@ class SceneViewModel : public QObject {
   Q_INVOKABLE QVariantMap selectedPart() const;
   // Every part back to its default visibility (shapes the game does not draw stay hidden).
   Q_INVOKABLE void restoreVisibility();
+  // Asks the 3D view to frame these parts (union of their bounds); an empty list frames the whole character. Emits frameRequested.
+  Q_INVOKABLE void frameParts(const QStringList& ids);
   Q_INVOKABLE QVariantMap explainPieceVisibility(const QString& armorFormKey) const;
   Q_INVOKABLE QVariantMap explainShapeVisibility(const QString& shapeId) const;
   // Preview-only armor list (FormKeys; [] = skin only); null follows the outfit editor again.
@@ -134,6 +140,8 @@ class SceneViewModel : public QObject {
   void poseChanged();
   void hairTintChanged();
   void activeChanged();
+  void fidelityChanged();
+  void frameRequested(QVector3D center, float radius);
   void ready();
  private:
   struct Prepared;
@@ -184,6 +192,7 @@ class SceneViewModel : public QObject {
   QVariantMap body_morph_summary_;
   QVariantMap stats_;
   QVariantMap skin_match_;  // see the skinMatch property; empty until a scene is installed
+  QVariantMap fidelity_;
   QVariantMap visibility_;
   QVector3D center_;
   float radius_ = 100;

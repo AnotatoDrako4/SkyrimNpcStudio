@@ -28,6 +28,7 @@ ScrollView {
             if (!comp.compatible) {
                 compatDialog.issues = comp.issues
                 compatDialog.pendingPath = path
+                compatDialog.canUnlock = Boolean(root.studio.appearance.faceCompatibility.canUnlockForModding)
                 compatDialog.open()
             } else {
                 root.studio.appearance.applyJslotPreset(path)
@@ -48,7 +49,9 @@ ScrollView {
         width: Theme.px(480)
         property var issues: []
         property string pendingPath: ""
+        property bool canUnlock: false
         standardButtons: Dialog.Ok | Dialog.Cancel
+        onAboutToShow: canUnlock = Boolean(root.studio.appearance.faceCompatibility.canUnlockForModding)
 
         ColumnLayout {
             spacing: Theme.sp(8)
@@ -83,13 +86,18 @@ ScrollView {
             }
 
             Text {
-                text: qsTr("¿Deseas aplicar el preset de todos modos?")
+                text: compatDialog.canUnlock
+                      ? qsTr("Este rostro está protegido en modo Conservación. Aceptar desbloqueará el modo Regeneración desde el registro y aplicará el preset.")
+                      : qsTr("¿Deseas aplicar el preset de todos modos?")
                 color: Theme.textDim
                 font.pixelSize: Theme.small
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
                 Layout.topMargin: Theme.sp(6)
             }
         }
         onAccepted: {
+            if (compatDialog.canUnlock) root.studio.appearance.unlockForModding()
             if (pendingPath.length > 0) root.studio.appearance.applyJslotPreset(pendingPath)
         }
     }
@@ -419,6 +427,13 @@ ScrollView {
                             font.pixelSize: Theme.small
                             wrapMode: Text.WordWrap
                             Layout.fillWidth: true
+                        }
+
+                        Button {
+                            visible: Boolean(root.studio.appearance.faceCompatibility.canUnlockForModding)
+                            text: qsTr("Desbloquear para aplicar donante")
+                            highlighted: true
+                            onClicked: root.studio.appearance.unlockForModding()
                         }
                     }
                 }

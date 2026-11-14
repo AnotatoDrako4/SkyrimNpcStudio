@@ -25,10 +25,11 @@ ScrollView {
     readonly property var activeEyes: getHeadPart("Eyes")
     readonly property var activeBrows: getHeadPart("Eyebrows")
     readonly property var activeBeard: getHeadPart("FacialHair")
+    readonly property var activeScar: getHeadPart("Scar")
 
-    readonly property bool isFemale: Boolean((root.studio.npc.summary || {}).female)
+    readonly property bool isFemale: Boolean(root.studio.appearance.female)
 
-    // Palette with 16 curated natural and fantasy Skyrim hair shades
+    // Curated Skyrim hair color palette (real RGB written to HCLF / HairTint)
     readonly property var hairPalette: [
         { name: qsTr("Negro Azabache"), color: "#111111" },
         { name: qsTr("Ébano Profundo"), color: "#1F1A17" },
@@ -48,7 +49,7 @@ ScrollView {
         { name: qsTr("Azul Mágico"), color: "#2980B9" }
     ]
 
-    // 12 curated Skyrim iris styles and tones
+    // Curated Skyrim iris styles and tones (filters real Eyes HeadPart records)
     readonly property var eyePresets: [
         { name: qsTr("Azul Nórdico"), color: "#4A90E2", query: "blue" },
         { name: qsTr("Azul Glaciar"), color: "#A8DADC", query: "ice" },
@@ -61,36 +62,16 @@ ScrollView {
         { name: qsTr("Violeta Dunmer"), color: "#7B2CBF", query: "violet" },
         { name: qsTr("Rojo Vampiro"), color: "#9D0208", query: "vampire" },
         { name: qsTr("Ojo Ciego"), color: "#D8D8D8", query: "blind" },
-        { name: qsTr("Negro Vacío"), color: "#1A1A1A", query: "black" }
+        { name: qsTr("Todos"), color: "#FFFFFF", query: "" }
     ]
-
-    // Hair secondary highlights / ombré tones
-    readonly property var ombrePresets: [
-        { name: qsTr("Sin mechas"), color: "#FFFFFF" },
-        { name: qsTr("Rubio Solar"), color: "#F5D77F" },
-        { name: qsTr("Cobrizo"), color: "#C86432" },
-        { name: qsTr("Oro Rosa"), color: "#E8A598" },
-        { name: qsTr("Ceniza Plata"), color: "#C0C0C0" },
-        { name: qsTr("Azul Glacial"), color: "#70A0D0" }
-    ]
-
-    property color selectedOmbreColor: "#FFFFFF"
-    property real ombreIntensity: 0.0
-    property real hairGlossiness: 0.35
-    property real hairRoughness: 0.70
-    property real eyeWetness: 0.85
-    property real pupilAperture: 0.50
-    property real eyeGlow: 0.0
-    property bool syncBrowsWithHair: true
 
     ColorDialog {
         id: customHairColorDialog
-        title: qsTr("Elegir color de cabello personalizado")
+        title: qsTr("Elegir color de cabello personalizado (HCLF / HairTint)")
         selectedColor: root.studio.appearance.hairColor
         onAccepted: root.studio.appearance.setHairColor(selectedColor)
     }
 
-    // Hair color edits need the analysed FaceGen and a HairTint shader (Hair Color Safe Mode).
     readonly property bool hairColorAllowed: !root.studio.appearance.analysing
         && !(root.studio.appearance.faceCompatibility.blocked || []).some(b => b.op === "hair-color")
     readonly property bool headPartsAllowed: !root.studio.appearance.analysing
@@ -100,16 +81,43 @@ ScrollView {
         width: root.availableWidth
         spacing: 12
 
-        // =========================================================================
-        // SUB-NAVIGATION SEGMENTADA (STITCH PARADIGM)
-        // =========================================================================
+        Rectangle {
+            visible: (!root.headPartsAllowed || !root.hairColorAllowed)
+                && Boolean(root.studio.appearance.faceCompatibility.canUnlockForModding)
+            Layout.fillWidth: true
+            implicitHeight: unlockHairRow.implicitHeight + 12
+            radius: Theme.radius
+            color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.12)
+            border.color: Theme.warn
+            border.width: 1
+
+            RowLayout {
+                id: unlockHairRow
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 8
+                Text {
+                    text: qsTr("La protección del FaceGen actual restringe cambios de piezas o cabello. Puedes desbloquear regenerando desde el registro.")
+                    color: Theme.text
+                    font.pixelSize: Theme.small
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                Button {
+                    text: qsTr("Desbloquear para modear")
+                    highlighted: true
+                    onClicked: root.studio.appearance.unlockForModding()
+                }
+            }
+        }
+
         SegmentedControl {
             Layout.fillWidth: true
             stretch: true
             model: [
-                { label: qsTr("Peinado & Cabello"), glyph: "tag", tip: qsTr("Estilos de peinado, tinte principal, mechas y brillo") },
-                { label: qsTr("Ojos & Mirada"), glyph: "eye", tip: qsTr("Piezas de ojos, presets de iris y reflejos") },
-                { label: qsTr("Cejas & Barba"), glyph: "person", tip: qsTr("Cejas, vello facial y sincronización de color") }
+                { label: qsTr("Peinado & Cabello"), glyph: "tag", tip: qsTr("Estilos de peinado reales en MO2, modo calvo y tinte HairTint") },
+                { label: qsTr("Ojos & Mirada"), glyph: "eye", tip: qsTr("Piezas HeadPart de ojos y variantes de iris") },
+                { label: qsTr("Cejas, Barba & Cicatrices"), glyph: "person", tip: qsTr("Cejas, vello facial y cicatrices reales del registro") }
             ]
             currentIndex: root.currentSubTab
             onActivated: index => root.currentSubTab = index
@@ -124,7 +132,6 @@ ScrollView {
             Layout.fillWidth: true
             spacing: 12
 
-            // Tarjeta de Peinado Activo
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: activeHairCol.implicitHeight + 14
@@ -153,22 +160,27 @@ ScrollView {
                         Item { Layout.fillWidth: true }
 
                         StatusBadge {
-                            text: root.activeHair ? (root.activeHair.plugin || qsTr("Mod")) : qsTr("Vanilla / Raza")
-                            tone: root.activeHair ? Theme.ok : Theme.textDim
+                            text: root.studio.appearance.intentionallyBald
+                                  ? qsTr("Calvo intencional")
+                                  : (root.activeHair ? (root.activeHair.plugin || qsTr("Mod")) : qsTr("Vanilla / Raza"))
+                            tone: root.studio.appearance.intentionallyBald ? Theme.warn : (root.activeHair ? Theme.ok : Theme.textDim)
                         }
 
                         Button {
-                            visible: Boolean(root.activeHair)
-                            text: "✕ " + qsTr("Quitar")
-                            Accessible.name: qsTr("Quitar peinado asignado")
+                            visible: Boolean(root.activeHair) || root.studio.appearance.intentionallyBald
+                            text: "↺ " + qsTr("Restaurar original")
+                            Accessible.name: qsTr("Restaurar peinado original del NPC")
                             implicitHeight: 22
+                            enabled: root.headPartsAllowed
                             onClicked: root.studio.appearance.removeHeadPart("Hair")
                         }
                     }
 
                     Text {
-                        text: root.activeHair ? (root.activeHair.name || root.activeHair.editorId || root.activeHair.formKey)
-                                              : qsTr("Peinado predeterminado de la raza del NPC")
+                        text: root.studio.appearance.intentionallyBald
+                              ? qsTr("NPC configurado sin cabello (Calvo intencionalmente)")
+                              : (root.activeHair ? (root.activeHair.name || root.activeHair.editorId || root.activeHair.formKey)
+                                                 : qsTr("Peinado predeterminado de la raza del NPC"))
                         color: Theme.text
                         font.bold: true
                         font.pixelSize: Theme.normal
@@ -177,24 +189,33 @@ ScrollView {
                     }
 
                     Text {
-                        visible: Boolean(root.activeHair && root.activeHair.meshPath)
-                        text: (root.activeHair && root.activeHair.meshPath) ? String(root.activeHair.meshPath) : ""
+                        visible: Boolean(root.activeHair && root.activeHair.meshPath) && !root.studio.appearance.intentionallyBald
+                        text: (root.activeHair && root.activeHair.meshPath)
+                              ? (String(root.activeHair.meshPath) + (root.activeHair.effectiveProvider ? " · MO2: " + root.activeHair.effectiveProvider : ""))
+                              : ""
                         color: Theme.textDim
                         font.pixelSize: Theme.micro
                         font.family: Theme.mono
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
                     }
+
+                    CheckBox {
+                        text: qsTr("NPC calvo intencionalmente (sin malla de cabello)")
+                        checked: root.studio.appearance.intentionallyBald
+                        enabled: root.headPartsAllowed
+                        onToggled: root.studio.appearance.setIntentionallyBald(checked)
+                    }
                 }
             }
 
-            // Chips de filtrado rápido por mods populares de cabello
+            // Chips de filtrado rápido por mods instalados
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 4
 
                 Text {
-                    text: qsTr("Filtro:")
+                    text: qsTr("Filtro rápido:")
                     color: Theme.textDim
                     font.pixelSize: Theme.micro
                 }
@@ -203,9 +224,10 @@ ScrollView {
                     model: [
                         { label: qsTr("Todos"), filter: "" },
                         { label: "KS Hairdos", filter: "KS Hairdo" },
+                        { label: "Apachii", filter: "Apachii" },
                         { label: "HG Hairdos", filter: "HG" },
-                        { label: "Vanilla", filter: "Skyrim.esm" },
-                        { label: "Apachii", filter: "Apachii" }
+                        { label: "SMP", filter: "SMP" },
+                        { label: "Vanilla", filter: "Skyrim.esm" }
                     ]
                     delegate: Button {
                         required property var modelData
@@ -220,9 +242,9 @@ ScrollView {
                 }
             }
 
-            // Selector de Color Principal de Cabello
+            // Selector de Color Principal de Cabello (HCLF / HairTint real)
             SectionHeader {
-                title: qsTr("Color de Cabello Principal")
+                title: qsTr("Color de Cabello (HCLF / Shader HairTint)")
                 detail: root.studio.appearance.hairColor.toString().toUpperCase()
             }
 
@@ -248,17 +270,25 @@ ScrollView {
                     border.width: 1
                 }
 
-                Text {
-                    text: root.studio.appearance.hairColor.toString().toUpperCase()
-                    color: Theme.text
-                    font.bold: true
-                    font.pixelSize: Theme.normal
+                ColumnLayout {
+                    spacing: 2
+                    Text {
+                        text: root.studio.appearance.hairColor.toString().toUpperCase()
+                        color: Theme.text
+                        font.bold: true
+                        font.pixelSize: Theme.normal
+                    }
+                    Text {
+                        text: qsTr("Se escribe directamente en el nodo BSValueNode / HairTint del FaceGen y en HCLF.")
+                        color: Theme.textDim
+                        font.pixelSize: Theme.micro
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
 
                 Button {
-                    text: qsTr("Selector libre…")
+                    text: qsTr("Selector RGB…")
                     Accessible.name: qsTr("Abrir selector libre de color de cabello")
                     enabled: root.hairColorAllowed
                     onClicked: customHairColorDialog.open()
@@ -275,8 +305,9 @@ ScrollView {
                 Repeater {
                     model: root.hairPalette
                     delegate: Button {
+                        required property var modelData
                         Layout.fillWidth: true
-                        implicitHeight: 34
+                        implicitHeight: 32
                         enabled: root.hairColorAllowed
                         Accessible.name: qsTr("Color de cabello %1").arg(modelData.name)
                         ToolTip.text: modelData.name + " (" + modelData.color + ")"
@@ -285,8 +316,8 @@ ScrollView {
                         contentItem: RowLayout {
                             spacing: 6
                             Rectangle {
-                                width: 16
-                                height: 16
+                                width: 14
+                                height: 14
                                 radius: 3
                                 color: modelData.color
                                 border.color: Theme.border
@@ -308,142 +339,9 @@ ScrollView {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
 
-            // Mechas secundarias / Ombré
             SectionHeader {
-                title: qsTr("Mechas Secundarias & Reflejos (Ombré)")
-                detail: Math.round(root.ombreIntensity * 100) + "%"
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Repeater {
-                    model: root.ombrePresets
-                    delegate: Button {
-                        required property var modelData
-                        implicitHeight: 26
-                        Layout.fillWidth: true
-                        Accessible.name: qsTr("Mecha %1").arg(modelData.name)
-                        ToolTip.text: modelData.name
-                        ToolTip.visible: hovered
-
-                        contentItem: RowLayout {
-                            spacing: 4
-                            Rectangle {
-                                width: 12
-                                height: 12
-                                radius: 2
-                                color: modelData.color
-                                border.color: Theme.border
-                                border.width: 1
-                            }
-                            Text {
-                                text: modelData.name
-                                color: Theme.text
-                                font.pixelSize: Theme.micro
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-                        }
-
-                        onClicked: {
-                            root.selectedOmbreColor = Qt.color(modelData.color)
-                            if (modelData.name === qsTr("Sin mechas")) root.ombreIntensity = 0.0
-                            else if (root.ombreIntensity === 0.0) root.ombreIntensity = 0.35
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Intensidad:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                }
-                Slider {
-                    Accessible.name: qsTr("Intensidad de mechas u ombré")
-                    Layout.fillWidth: true
-                    from: 0.0
-                    to: 1.0
-                    value: root.ombreIntensity
-                    onMoved: root.ombreIntensity = value
-                }
-                Text {
-                    text: Math.round(root.ombreIntensity * 100) + "%"
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
-
-            // Propiedades del Material / Shader de Cabello
-            SectionHeader {
-                title: qsTr("Propiedades del Shader de Cabello")
-                detail: qsTr("Especular & Rugosidad")
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Brillo:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    Layout.preferredWidth: 70
-                }
-                Slider {
-                    Accessible.name: qsTr("Brillo especular del cabello")
-                    Layout.fillWidth: true
-                    from: 0.05
-                    to: 1.0
-                    value: root.hairGlossiness
-                    onMoved: root.hairGlossiness = value
-                }
-                Text {
-                    text: root.hairGlossiness.toFixed(2)
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Rugosidad:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    Layout.preferredWidth: 70
-                }
-                Slider {
-                    Accessible.name: qsTr("Rugosidad del material de cabello")
-                    Layout.fillWidth: true
-                    from: 0.1
-                    to: 1.0
-                    value: root.hairRoughness
-                    onMoved: root.hairRoughness = value
-                }
-                Text {
-                    text: root.hairRoughness.toFixed(2)
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
-
-            // Catálogo dedicado de Peinados
-            SectionHeader {
-                title: qsTr("Catálogo de Estilos de Peinado")
-                detail: qsTr("Compatibles con Raza y Sexo")
+                title: qsTr("Catálogo de Estilos de Peinado Instalados")
+                detail: qsTr("Compatibles con Raza y Sexo · Requiere reconstrucción FaceGen")
             }
 
             HeadPartGallery {
@@ -465,7 +363,6 @@ ScrollView {
             Layout.fillWidth: true
             spacing: 12
 
-            // Tarjeta de Ojos Activos
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: activeEyesCol.implicitHeight + 14
@@ -500,9 +397,10 @@ ScrollView {
 
                         Button {
                             visible: Boolean(root.activeEyes)
-                            text: "✕ " + qsTr("Quitar")
-                            Accessible.name: qsTr("Quitar pieza de ojos asignada")
+                            text: "↺ " + qsTr("Restaurar")
+                            Accessible.name: qsTr("Restaurar pieza de ojos original")
                             implicitHeight: 22
+                            enabled: root.headPartsAllowed
                             onClicked: root.studio.appearance.removeHeadPart("Eyes")
                         }
                     }
@@ -529,40 +427,9 @@ ScrollView {
                 }
             }
 
-            // Explicación técnica de la mecánica de ojos en Skyrim
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: eyeNoticeRow.implicitHeight + 12
-                color: Qt.rgba(Theme.control.r, Theme.control.g, Theme.control.b, 0.4)
-                radius: Theme.radius
-                border.color: Theme.borderSubtle
-                border.width: 1
-
-                RowLayout {
-                    id: eyeNoticeRow
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    spacing: 8
-
-                    Text {
-                        text: "👁"
-                        font.pixelSize: Theme.large
-                    }
-
-                    Text {
-                        text: qsTr("En Skyrim, el color y textura de los ojos provienen de la pieza HeadPart «Eyes» (Eyes of Beauty, Improved Eyes, etc.). Elige una pieza de la lista o filtra por estilo.")
-                        color: Theme.textDim
-                        font.pixelSize: Theme.micro
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-            }
-
-            // Presets y Estilos de Iris Populares
             SectionHeader {
-                title: qsTr("Estilos & Tonalidades de Iris")
-                detail: qsTr("Filtro rápido de catálogo")
+                title: qsTr("Filtro Rápido por Tonalidad de Iris")
+                detail: qsTr("Filtra registros HeadPart «Eyes» reales")
             }
 
             GridLayout {
@@ -576,17 +443,15 @@ ScrollView {
                     delegate: Button {
                         required property var modelData
                         Layout.fillWidth: true
-                        implicitHeight: 32
-                        Accessible.name: qsTr("Estilo de iris %1").arg(modelData.name)
-                        ToolTip.text: qsTr("Filtrar ojos por estilo: %1").arg(modelData.name)
-                        ToolTip.visible: hovered
+                        implicitHeight: 30
+                        Accessible.name: qsTr("Filtrar ojos por %1").arg(modelData.name)
 
                         contentItem: RowLayout {
                             spacing: 6
                             Rectangle {
-                                width: 14
-                                height: 14
-                                radius: 7
+                                width: 12
+                                height: 12
+                                radius: 6
                                 color: modelData.color
                                 border.color: Theme.border
                                 border.width: 1
@@ -610,90 +475,6 @@ ScrollView {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
 
-            // Óptica y Reflejos Oculares
-            SectionHeader {
-                title: qsTr("Óptica Ocular & Refracción")
-                detail: qsTr("Humedad y Pupila")
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Humedad:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    Layout.preferredWidth: 70
-                }
-                Slider {
-                    Accessible.name: qsTr("Humedad y brillo corneal")
-                    Layout.fillWidth: true
-                    from: 0.1
-                    to: 1.0
-                    value: root.eyeWetness
-                    onMoved: root.eyeWetness = value
-                }
-                Text {
-                    text: root.eyeWetness.toFixed(2)
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Pupila:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    Layout.preferredWidth: 70
-                }
-                Slider {
-                    Accessible.name: qsTr("Apertura pupilar")
-                    Layout.fillWidth: true
-                    from: 0.1
-                    to: 1.0
-                    value: root.pupilAperture
-                    onMoved: root.pupilAperture = value
-                }
-                Text {
-                    text: root.pupilAperture.toFixed(2)
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: qsTr("Resplandor:")
-                    color: Theme.textDim
-                    font.pixelSize: Theme.small
-                    Layout.preferredWidth: 70
-                }
-                Slider {
-                    Accessible.name: qsTr("Resplandor ocular mágico")
-                    Layout.fillWidth: true
-                    from: 0.0
-                    to: 1.0
-                    value: root.eyeGlow
-                    onMoved: root.eyeGlow = value
-                }
-                Text {
-                    text: root.eyeGlow.toFixed(2)
-                    color: Theme.text
-                    font.pixelSize: Theme.micro
-                    Layout.preferredWidth: 32
-                }
-            }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
-
-            // Catálogo dedicado de Ojos
             SectionHeader {
                 title: qsTr("Catálogo de Piezas de Ojos")
                 detail: qsTr("Compatibles con Raza y Sexo")
@@ -711,78 +492,16 @@ ScrollView {
         }
 
         // =========================================================================
-        // SUBPESTAÑA 2: CEJAS & BARBA
+        // SUBPESTAÑA 2: CEJAS, BARBA & CICATRICES
         // =========================================================================
         ColumnLayout {
             visible: root.currentSubTab === 2
             Layout.fillWidth: true
             spacing: 12
 
-            // SECCIÓN: CEJAS
             SectionHeader {
-                title: qsTr("Cejas & Definición")
+                title: qsTr("Cejas (HeadPart Eyebrows)")
                 detail: root.activeBrows ? (root.activeBrows.editorId || root.activeBrows.formKey) : qsTr("Vanilla")
-            }
-
-            // Tarjeta de Cejas Activas
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: activeBrowsCol.implicitHeight + 14
-                color: Theme.panelAlt
-                radius: Theme.radius
-                border.color: Theme.borderSubtle
-                border.width: 1
-
-                ColumnLayout {
-                    id: activeBrowsCol
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 4
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Text {
-                            text: qsTr("CEJAS ACTUALES")
-                            color: Theme.accent
-                            font.bold: true
-                            font.pixelSize: Theme.micro
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        StatusBadge {
-                            text: root.activeBrows ? (root.activeBrows.plugin || qsTr("Mod")) : qsTr("Vanilla")
-                            tone: root.activeBrows ? Theme.ok : Theme.textDim
-                        }
-
-                        Button {
-                            visible: Boolean(root.activeBrows)
-                            text: "✕ " + qsTr("Quitar")
-                            Accessible.name: qsTr("Quitar cejas asignadas")
-                            implicitHeight: 22
-                            onClicked: root.studio.appearance.removeHeadPart("Eyebrows")
-                        }
-                    }
-
-                    Text {
-                        text: root.activeBrows ? (root.activeBrows.name || root.activeBrows.editorId || root.activeBrows.formKey)
-                                               : qsTr("Cejas predeterminadas de la raza")
-                        color: Theme.text
-                        font.bold: true
-                        font.pixelSize: Theme.normal
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-                }
-            }
-
-            CheckBox {
-                text: qsTr("Sincronizar color de cejas con el cabello")
-                Accessible.name: qsTr("Sincronizar color de cejas con el cabello")
-                checked: root.syncBrowsWithHair
-                onToggled: root.syncBrowsWithHair = checked
             }
 
             HeadPartGallery {
@@ -797,112 +516,15 @@ ScrollView {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
 
-            // SECCIÓN: BARBA Y VELLO FACIAL
             SectionHeader {
-                title: qsTr("Barba & Vello Facial")
-                detail: root.isFemale ? qsTr("No aplicable") : (root.activeBeard ? (root.activeBeard.editorId || root.activeBeard.formKey) : qsTr("Afeitado"))
+                title: qsTr("Barba & Vello Facial (HeadPart FacialHair)")
+                detail: root.isFemale ? qsTr("No aplicable en registro femenino") : (root.activeBeard ? (root.activeBeard.editorId || root.activeBeard.formKey) : qsTr("Afeitado"))
             }
 
-            // Notificación contextual para NPCs femeninos
-            Rectangle {
-                visible: root.isFemale
-                Layout.fillWidth: true
-                implicitHeight: femaleNoticeCol.implicitHeight + 14
-                color: Qt.rgba(Theme.control.r, Theme.control.g, Theme.control.b, 0.4)
-                radius: Theme.radius
-                border.color: Theme.borderSubtle
-                border.width: 1
-
-                ColumnLayout {
-                    id: femaleNoticeCol
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 4
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        StatusBadge {
-                            text: qsTr("NPC Femenino")
-                            tone: Theme.textDim
-                        }
-                        Text {
-                            text: qsTr("Vello facial no disponible")
-                            color: Theme.text
-                            font.bold: true
-                            font.pixelSize: Theme.small
-                        }
-                    }
-
-                    Text {
-                        text: qsTr("Las opciones de barba y vello facial están deshabilitadas automáticamente según las definiciones de raza y género del motor de Skyrim.")
-                        color: Theme.textDim
-                        font.pixelSize: Theme.micro
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-            }
-
-            // Opciones de Barba para NPCs masculinos
             ColumnLayout {
                 visible: !root.isFemale
                 Layout.fillWidth: true
                 spacing: 8
-
-                // Tarjeta de Barba Activa
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: activeBeardCol.implicitHeight + 14
-                    color: Theme.panelAlt
-                    radius: Theme.radius
-                    border.color: Theme.borderSubtle
-                    border.width: 1
-
-                    ColumnLayout {
-                        id: activeBeardCol
-                        anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 4
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Text {
-                                text: qsTr("BARBA ACTUAL")
-                                color: Theme.accent
-                                font.bold: true
-                                font.pixelSize: Theme.micro
-                            }
-
-                            Item { Layout.fillWidth: true }
-
-                            StatusBadge {
-                                text: root.activeBeard ? (root.activeBeard.plugin || qsTr("Mod")) : qsTr("Afeitado / Sin barba")
-                                tone: root.activeBeard ? Theme.ok : Theme.textDim
-                            }
-
-                            Button {
-                                visible: Boolean(root.activeBeard)
-                                text: "✕ " + qsTr("Quitar")
-                                Accessible.name: qsTr("Quitar barba asignada")
-                                implicitHeight: 22
-                                onClicked: root.studio.appearance.removeHeadPart("FacialHair")
-                            }
-                        }
-
-                        Text {
-                            text: root.activeBeard ? (root.activeBeard.name || root.activeBeard.editorId || root.activeBeard.formKey)
-                                                   : qsTr("Sin barba (afeitado limpio)")
-                            color: Theme.text
-                            font.bold: true
-                            font.pixelSize: Theme.normal
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
 
                 HeadPartGallery {
                     id: beardGallery
@@ -914,24 +536,27 @@ ScrollView {
                     showCategorySelector: false
                 }
             }
-        }
 
-        // =========================================================================
-        // ADVERTENCIA DE BLOQUEO Y DIAGNÓSTICO FACIAL (BASE ORIGINAL PRESERVADA)
-        // =========================================================================
-        Text {
-            visible: !root.headPartsAllowed
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            color: Theme.textDim
-            font.pixelSize: Theme.small
-            text: root.studio.appearance.analysing ? qsTr("Disponible cuando termine el análisis del FaceGen.")
-                                                   : qsTr("Bloqueado para esta cabeza: ver «Protección facial».")
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.borderSubtle }
+
+            SectionHeader {
+                title: qsTr("Cicatrices & Marcas (HeadPart Scar)")
+                detail: root.activeScar ? (root.activeScar.editorId || root.activeScar.formKey) : qsTr("Sin cicatriz")
+            }
+
+            HeadPartGallery {
+                id: scarGallery
+                Layout.fillWidth: true
+                studio: root.studio
+                allowed: root.headPartsAllowed
+                category: "Scar"
+                showHeader: false
+                showCategorySelector: false
+            }
         }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
-        // Diagnóstico colapsable de Protección Facial
         FaceProtectionCard {
             Layout.fillWidth: true
             studio: root.studio
